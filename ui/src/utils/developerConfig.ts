@@ -1,4 +1,7 @@
 import {
+  DEFAULT_WEB_SESSION_CODEX_CLIENT_NAME,
+  DEFAULT_WEB_SESSION_CODEX_CLIENT_TITLE,
+  DEFAULT_WEB_SESSION_CODEX_CLIENT_VERSION,
   DEFAULT_WEB_SESSION_CODEX_MODEL,
   DEFAULT_WEB_SESSION_CODEX_PERMISSION_LEVEL,
   DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT,
@@ -75,6 +78,18 @@ export function sanitizeDeveloperConfig(value?: Partial<DeveloperConfig> | null)
   return {
     enableTerminalScrollback: value?.enableTerminalScrollback ?? false,
     enableTerminalStateSnapshot: value?.enableTerminalStateSnapshot ?? false,
+    webSessionCodexClientName:
+      value?.webSessionCodexClientName === undefined
+        ? DEFAULT_WEB_SESSION_CODEX_CLIENT_NAME
+        : value.webSessionCodexClientName.trim(),
+    webSessionCodexClientTitle:
+      value?.webSessionCodexClientTitle === undefined
+        ? DEFAULT_WEB_SESSION_CODEX_CLIENT_TITLE
+        : value.webSessionCodexClientTitle.trim(),
+    webSessionCodexClientVersion:
+      value?.webSessionCodexClientVersion === undefined
+        ? DEFAULT_WEB_SESSION_CODEX_CLIENT_VERSION
+        : value.webSessionCodexClientVersion.trim(),
     webSessionCodexContextWindow: [0, 512000, 768000, 1000000].includes(
       value?.webSessionCodexContextWindow ?? 0
     )

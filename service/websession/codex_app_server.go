@@ -111,6 +111,49 @@ type codexAppServerClient struct {
 	mcpStatusMu        sync.Mutex
 }
 
+func (m *Manager) codexClientName() string {
+	if m != nil && m.cfg.CodexClientName != nil {
+		return strings.TrimSpace(m.cfg.CodexClientName())
+	}
+	return ""
+}
+
+func (m *Manager) codexClientTitle() string {
+	if m != nil && m.cfg.CodexClientTitle != nil {
+		return strings.TrimSpace(m.cfg.CodexClientTitle())
+	}
+	return ""
+}
+
+func (m *Manager) codexClientVersion() string {
+	if m != nil && m.cfg.CodexClientVersion != nil {
+		return strings.TrimSpace(m.cfg.CodexClientVersion())
+	}
+	return ""
+}
+
+// codexClientInfo builds the clientInfo object sent in the initialize handshake
+// with the Codex app-server, mirroring the fields Codex's protocol exposes.
+// Fields are only included when they have a value, so leaving the client
+// metadata blank omits individual fields; a fully blank config returns nil and
+// callers should not send a clientInfo object at all.
+func (m *Manager) codexClientInfo() map[string]any {
+	info := make(map[string]any)
+	if name := m.codexClientName(); name != "" {
+		info["name"] = name
+	}
+	if title := m.codexClientTitle(); title != "" {
+		info["title"] = title
+	}
+	if version := m.codexClientVersion(); version != "" {
+		info["version"] = version
+	}
+	if len(info) == 0 {
+		return nil
+	}
+	return info
+}
+
 type pendingServerRequestKind string
 
 const (
@@ -609,15 +652,15 @@ func (m *Manager) runCodexAppServerSession(
 		waitCh <- client.cmd.Wait()
 	}()
 
-	if _, err := client.request(ctx, "initialize", map[string]any{
-		"clientInfo": map[string]any{
-			"name":    "codekanban-web-session",
-			"version": "0.0.0",
-		},
+	initializeRequest := map[string]any{
 		"capabilities": map[string]any{
 			"experimentalApi": true,
 		},
-	}); err != nil {
+	}
+	if clientInfo := m.codexClientInfo(); clientInfo != nil {
+		initializeRequest["clientInfo"] = clientInfo
+	}
+	if _, err := client.request(ctx, "initialize", initializeRequest); err != nil {
 		run.resolveBootstrap(err)
 		m.waitAndFailCodexAppServer(session, run, client, waitCh, stderrDone, stderrBuffer, err)
 		return
@@ -637,10 +680,8 @@ func (m *Manager) runCodexAppServerSession(
 	}
 	supportsMultiAgentV2 = activeMultiAgentV2
 	if err := m.updateRuntimeState(ctx, session.ID, map[string]any{
-		"applied_context_window_setting":     session.ContextWindowSetting,
-		"codex_model_metadata_fallback":      false,
-		"session_context_window_tokens":      0,
-		"session_context_window_observed_at": nil,
+		"applied_context_window_setting": session.ContextWindowSetting,
+		"codex_model_metadata_fallback":  false,
 	}); err != nil {
 		run.resolveBootstrap(err)
 		m.waitAndFailCodexAppServer(session, run, client, waitCh, stderrDone, stderrBuffer, err)

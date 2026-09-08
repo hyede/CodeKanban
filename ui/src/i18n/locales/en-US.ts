@@ -1572,6 +1572,18 @@ export default {
     webSessionCodexDefaultModelOption: 'Default (GPT-5.6 Sol)',
     webSessionCodexDefaultModelTip:
       'Used for newly created Codex sessions. Choose a built-in model or enter a custom model name.',
+    webSessionCodexClientName: 'Codex Client Identifier',
+    webSessionCodexClientNamePlaceholder: 'For example: codekanban-web-session',
+    webSessionCodexClientNameTip:
+      'Sent to the Codex app-server as clientInfo.name to identify the request source; applies to newly started Codex sessions. Leave blank to omit clientInfo.name.',
+    webSessionCodexClientTitle: 'Codex Client Title',
+    webSessionCodexClientTitlePlaceholder: 'For example: Code Kanban Web Session',
+    webSessionCodexClientTitleTip:
+      'Sent to the Codex app-server as clientInfo.title for display purposes; applies to newly started Codex sessions. Leave blank to omit clientInfo.title.',
+    webSessionCodexClientVersion: 'Codex Client Version',
+    webSessionCodexClientVersionPlaceholder: 'For example: 0.0.0',
+    webSessionCodexClientVersionTip:
+      'Sent to the Codex app-server as clientInfo.version to identify the request source version; applies to newly started Codex sessions. Leave blank to omit clientInfo.version.',
     webSessionCodexDefaultReasoningEffort: 'Default Codex Reasoning Effort',
     webSessionCodexDefaultReasoningEffortOption: 'Default (Xhigh)',
     webSessionCodexModelDefaultReasoningEffort: 'Model Default',

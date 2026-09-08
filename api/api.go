@@ -107,6 +107,15 @@ func Init(ctx context.Context, cfg *utils.AppConfig, assets embed.FS, info *AppI
 		DefaultCodexModel: func() string {
 			return cfg.Developer.WebSessionCodexDefaultModel
 		},
+		CodexClientName: func() string {
+			return cfg.Developer.WebSessionCodexClientName
+		},
+		CodexClientTitle: func() string {
+			return cfg.Developer.WebSessionCodexClientTitle
+		},
+		CodexClientVersion: func() string {
+			return cfg.Developer.WebSessionCodexClientVersion
+		},
 		DefaultCodexContextWindow: func() int64 { return cfg.Developer.WebSessionCodexContextWindow },
 		DefaultCodexReasoningEffort: func() websession.ReasoningEffort {
 			return websession.ReasoningEffort(cfg.Developer.WebSessionCodexDefaultReasoningEffort)

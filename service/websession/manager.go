@@ -115,6 +115,9 @@ type Config struct {
 	PiPath                      string
 	PiRuntimeIdleTTL            time.Duration
 	DefaultCodexModel           func() string
+	CodexClientName             func() string
+	CodexClientTitle            func() string
+	CodexClientVersion          func() string
 	DefaultCodexContextWindow   func() int64
 	DefaultCodexReasoningEffort func() ReasoningEffort
 	DefaultCodexPermissionLevel func() string
@@ -2420,10 +2423,10 @@ func (m *Manager) UpdateModel(ctx context.Context, sessionID, modelName string) 
 		"updated_at": time.Now(),
 	}
 	if !sameCodexModel(record.Model, normalized) {
-		updates["applied_context_window_setting"] = nil
+		// The fallback warning belongs to the model that produced it. Keep the
+		// session's window and settings, but re-evaluate this warning on the
+		// next run with the newly selected model.
 		updates["codex_model_metadata_fallback"] = false
-		updates["session_context_window_tokens"] = 0
-		updates["session_context_window_observed_at"] = nil
 	}
 	return m.updateFields(ctx, sessionID, updates)
 }

@@ -2054,6 +2054,39 @@ function mergeSessionAttentionState(
   };
 }
 
+function mergeSessionContextWindowHistory(
+  current: WebSessionSummary | null | undefined,
+  incoming: WebSessionSummary
+): WebSessionSummary {
+  if (!current || current.id !== incoming.id) {
+    return incoming;
+  }
+
+  const currentWindow = Number(current.contextWindowTokens);
+  const incomingWindow = Number(incoming.contextWindowTokens);
+  if (
+    !Number.isFinite(currentWindow) ||
+    currentWindow <= 0 ||
+    (Number.isFinite(incomingWindow) && incomingWindow > 0)
+  ) {
+    return incoming;
+  }
+
+  // Session summaries can be refreshed while the native process has not
+  // reported its window yet. Keep the last valid value for the same session
+  // and agent across model changes so a transient unavailable snapshot cannot
+  // erase the current session history.
+  const sameAgent = current.agent === incoming.agent;
+  if (!sameAgent) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    contextWindowTokens: current.contextWindowTokens,
+    contextWindowSource: current.contextWindowSource,
+  };
+}
+
 export const useWebSessionStore = defineStore('web-session', () => {
   const sessionsByProject = ref<Record<string, WebSessionSummary[]>>({});
   const archivedSessionsById = ref<Record<string, WebSessionSummary>>({});
@@ -3857,7 +3890,10 @@ export const useWebSessionStore = defineStore('web-session', () => {
     }
   ) {
     const previous = archivedSessionsById.value[summary.id];
-    const nextSummary = mergeSessionAttentionState(previous, summary);
+    const nextSummary = mergeSessionAttentionState(
+      previous,
+      mergeSessionContextWindowHistory(previous, summary)
+    );
     archivedSessionsById.value = {
       ...archivedSessionsById.value,
       [summary.id]: {
@@ -4018,7 +4054,10 @@ export const useWebSessionStore = defineStore('web-session', () => {
     const next = [...current];
     const index = next.findIndex(item => item.id === incomingSummary.id);
     if (index >= 0) {
-      const nextSummary = mergeSessionAttentionState(next[index], incomingSummary);
+      const nextSummary = mergeSessionAttentionState(
+        next[index],
+        mergeSessionContextWindowHistory(next[index], incomingSummary)
+      );
       next.splice(index, 1, {
         ...next[index],
         ...nextSummary,

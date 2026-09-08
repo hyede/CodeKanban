@@ -148,6 +148,9 @@ export interface DeveloperConfig {
   $schema?: string;
   enableTerminalScrollback: boolean;
   enableTerminalStateSnapshot: boolean;
+  webSessionCodexClientName: string;
+  webSessionCodexClientTitle: string;
+  webSessionCodexClientVersion: string;
   webSessionCodexDefaultModel: string;
   webSessionCodexDefaultPermissionLevel: string;
   webSessionCodexDefaultReasoningEffort: string;
@@ -2781,6 +2784,9 @@ declare global {
        *     $schema?: string
        *     enableTerminalScrollback: boolean
        *     enableTerminalStateSnapshot: boolean
+       *     webSessionCodexClientName: string
+       *     webSessionCodexClientTitle: string
+       *     webSessionCodexClientVersion: string
        *     webSessionCodexDefaultModel: string
        *     webSessionCodexDefaultPermissionLevel: string
        *     webSessionCodexDefaultReasoningEffort: string
@@ -2809,6 +2815,9 @@ declare global {
        *   $schema?: string
        *   enableTerminalScrollback: boolean
        *   enableTerminalStateSnapshot: boolean
+       *   webSessionCodexClientName: string
+       *   webSessionCodexClientTitle: string
+       *   webSessionCodexClientVersion: string
        *   webSessionCodexDefaultModel: string
        *   webSessionCodexDefaultPermissionLevel: string
        *   webSessionCodexDefaultReasoningEffort: string

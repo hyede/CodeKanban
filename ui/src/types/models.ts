@@ -268,6 +268,9 @@ export interface WebSessionAutoRetryDefaultsConfig {
 export interface DeveloperConfig {
   enableTerminalScrollback: boolean;
   enableTerminalStateSnapshot: boolean;
+  webSessionCodexClientName: string;
+  webSessionCodexClientTitle: string;
+  webSessionCodexClientVersion: string;
   webSessionCodexDefaultModel: string;
   webSessionCodexContextWindow?: number;
   webSessionCodexDefaultReasoningEffort: WebSessionCodexDefaultReasoningEffort;

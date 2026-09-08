@@ -511,6 +511,22 @@ func (store *ConfigDatabase) loadRuntimeConfig(config *AppConfig) error {
 			return fmt.Errorf("decode runtime setting %s: %w", key, err)
 		}
 	}
+	// Runtime settings written before the client metadata fields were added do
+	// not contain those keys. Keep their historical defaults while preserving
+	// an explicitly stored empty string as the opt-out value.
+	var developerPayload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(values[runtimeSettingDeveloper]), &developerPayload); err != nil {
+		return fmt.Errorf("decode runtime setting %s metadata: %w", runtimeSettingDeveloper, err)
+	}
+	if _, exists := developerPayload["webSessionCodexClientName"]; !exists {
+		developer.WebSessionCodexClientName = DefaultWebSessionCodexClientName
+	}
+	if _, exists := developerPayload["webSessionCodexClientTitle"]; !exists {
+		developer.WebSessionCodexClientTitle = DefaultWebSessionCodexClientTitle
+	}
+	if _, exists := developerPayload["webSessionCodexClientVersion"]; !exists {
+		developer.WebSessionCodexClientVersion = DefaultWebSessionCodexClientVersion
+	}
 	if strings.TrimSpace(credentials.FrontendSalt) == "" || strings.TrimSpace(credentials.TokenSecret) == "" {
 		return fmt.Errorf("runtime authentication credentials are incomplete")
 	}

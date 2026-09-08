@@ -172,8 +172,6 @@ func (m *Manager) syncSessionFromLogSource(
 		"latest_token_count_output_tokens":       0,
 		"latest_token_count_total_tokens":        0,
 		"latest_token_count_updated_at":          nil,
-		"session_context_window_tokens":          0,
-		"session_context_window_observed_at":     nil,
 	}
 	applyCodexDeepHistoryStatsUpdates(updates, parseResult.Stats)
 	if force {

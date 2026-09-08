@@ -2568,7 +2568,7 @@ func TestManagerListSessionsDoesNotUseContextWindowFromDifferentConfiguredModel(
 	}
 }
 
-func TestUpdateModelClearsObservedContextWindow(t *testing.T) {
+func TestUpdateModelPreservesObservedContextWindow(t *testing.T) {
 	cleanup := initTestDB(t)
 	defer cleanup()
 
@@ -2576,6 +2576,8 @@ func TestUpdateModelClearsObservedContextWindow(t *testing.T) {
 	session := seedWebSession(t, project.ID, "Codex", 1000)
 	observedAt := time.Now()
 	if err := model.GetDB().Model(session).Updates(map[string]any{
+		"applied_context_window_setting":     int64(512000),
+		"context_window_setting":             int64(768000),
 		"session_context_window_tokens":      int64(353400),
 		"session_context_window_observed_at": observedAt,
 	}).Error; err != nil {
@@ -2593,11 +2595,17 @@ func TestUpdateModelClearsObservedContextWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSession returned error: %v", err)
 	}
-	if record.SessionContextWindowTokens != 0 {
-		t.Fatalf("expected observed context window to be cleared, got %d", record.SessionContextWindowTokens)
+	if record.SessionContextWindowTokens != 353400 {
+		t.Fatalf("expected observed context window to be preserved, got %d", record.SessionContextWindowTokens)
 	}
-	if record.SessionContextWindowObservedAt != nil {
-		t.Fatalf("expected observed context timestamp to be cleared, got %v", record.SessionContextWindowObservedAt)
+	if record.ContextWindowSetting != 768000 {
+		t.Fatalf("expected context window setting to be preserved, got %d", record.ContextWindowSetting)
+	}
+	if record.AppliedContextWindowSetting == nil || *record.AppliedContextWindowSetting != 512000 {
+		t.Fatalf("expected applied context window setting to be preserved, got %v", record.AppliedContextWindowSetting)
+	}
+	if record.SessionContextWindowObservedAt == nil || !record.SessionContextWindowObservedAt.Equal(observedAt) {
+		t.Fatalf("expected observed context timestamp to be preserved, got %v", record.SessionContextWindowObservedAt)
 	}
 }
 

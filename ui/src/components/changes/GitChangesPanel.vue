@@ -507,6 +507,7 @@ function pushMobilePreviewHistoryEntry() {
       ? { ...window.history.state, [MOBILE_PREVIEW_HISTORY_STATE_KEY]: true }
       : { [MOBILE_PREVIEW_HISTORY_STATE_KEY]: true };
   window.history.pushState(nextState, '', window.location.href);
+  mobilePreviewClosingFromHistory.value = false;
   mobilePreviewHistoryActive.value = true;
 }
 
@@ -827,8 +828,11 @@ watch(
       return;
     }
     if (mobilePreviewHistoryActive.value && typeof window !== 'undefined') {
-      window.history.back();
-      return;
+      if (window.history.state?.[MOBILE_PREVIEW_HISTORY_STATE_KEY]) {
+        window.history.back();
+        return;
+      }
+      // 标记的历史记录已被消费（失步），此时后退会误跳到上一条真实路由
     }
     mobilePreviewHistoryActive.value = false;
   }

@@ -16,6 +16,81 @@ type codexThreadTestRequest struct {
 	Params map[string]any  `json:"params"`
 }
 
+func TestCodexClientNameUsesConfiguredValue(t *testing.T) {
+	manager := &Manager{cfg: Config{CodexClientName: func() string { return "  custom-client  " }}}
+	if got := manager.codexClientName(); got != "custom-client" {
+		t.Fatalf("codexClientName() = %q, want custom-client", got)
+	}
+
+	manager.cfg.CodexClientName = func() string { return " " }
+	if got := manager.codexClientName(); got != "" {
+		t.Fatalf("codexClientName() blank = %q, want empty (omit)", got)
+	}
+
+	manager.cfg.CodexClientName = nil
+	if got := manager.codexClientName(); got != "" {
+		t.Fatalf("codexClientName() unset = %q, want empty (omit)", got)
+	}
+}
+
+func TestCodexClientInfoOmitsBlankFields(t *testing.T) {
+	manager := &Manager{cfg: Config{
+		CodexClientName:    func() string { return "my-client" },
+		CodexClientTitle:   func() string { return "" },
+		CodexClientVersion: func() string { return "1.2.3" },
+	}}
+	got := manager.codexClientInfo()
+	want := map[string]any{"name": "my-client", "version": "1.2.3"}
+	if len(got) != len(want) || got["name"] != want["name"] || got["version"] != want["version"] {
+		t.Fatalf("codexClientInfo() = %#v, want %#v", got, want)
+	}
+}
+
+func TestCodexClientInfoAllBlankReturnsNil(t *testing.T) {
+	manager := &Manager{cfg: Config{
+		CodexClientName:    func() string { return " " },
+		CodexClientTitle:   func() string { return "" },
+		CodexClientVersion: func() string { return "   " },
+	}}
+	if got := manager.codexClientInfo(); got != nil {
+		t.Fatalf("codexClientInfo() = %#v, want nil", got)
+	}
+}
+
+func TestCodexClientTitleAndVersionUseConfiguredValue(t *testing.T) {
+	manager := &Manager{cfg: Config{
+		CodexClientTitle:   func() string { return "  Custom Title  " },
+		CodexClientVersion: func() string { return "  1.2.3  " },
+	}}
+	if got := manager.codexClientTitle(); got != "Custom Title" {
+		t.Fatalf("codexClientTitle() = %q, want Custom Title", got)
+	}
+	if got := manager.codexClientVersion(); got != "1.2.3" {
+		t.Fatalf("codexClientVersion() = %q, want 1.2.3", got)
+	}
+
+	manager.cfg.CodexClientTitle = func() string { return " " }
+	manager.cfg.CodexClientVersion = func() string { return " " }
+	if got := manager.codexClientTitle(); got != "" {
+		t.Fatalf("codexClientTitle() blank = %q, want empty (omit)", got)
+	}
+	if got := manager.codexClientVersion(); got != "" {
+		t.Fatalf("codexClientVersion() blank = %q, want empty (omit)", got)
+	}
+}
+
+func TestCodexClientInfoIncludesNameTitleAndVersion(t *testing.T) {
+	manager := &Manager{cfg: Config{
+		CodexClientName:    func() string { return "custom" },
+		CodexClientTitle:   func() string { return "Custom Title" },
+		CodexClientVersion: func() string { return "1.2.3" },
+	}}
+	info := manager.codexClientInfo()
+	if info["name"] != "custom" || info["title"] != "Custom Title" || info["version"] != "1.2.3" {
+		t.Fatalf("codexClientInfo() = %#v, want name/title/version populated", info)
+	}
+}
+
 func newCodexThreadTestClient(
 	t *testing.T,
 	handler func(codexThreadTestRequest) map[string]any,

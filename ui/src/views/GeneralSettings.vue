@@ -673,6 +673,48 @@
                     </n-space>
                   </n-form-item>
                   <n-form-item
+                    :label="t('settings.webSessionCodexClientName')"
+                    data-search-key="webSessionCodexClientName"
+                  >
+                    <n-space vertical size="small" style="width: 100%">
+                      <n-input
+                        v-model:value="developerForm.webSessionCodexClientName"
+                        :placeholder="t('settings.webSessionCodexClientNamePlaceholder')"
+                        :disabled="developerLoading"
+                        style="max-width: 420px"
+                      />
+                      <span class="form-tip">{{ t('settings.webSessionCodexClientNameTip') }}</span>
+                    </n-space>
+                  </n-form-item>
+                  <n-form-item
+                    :label="t('settings.webSessionCodexClientTitle')"
+                    data-search-key="webSessionCodexClientTitle"
+                  >
+                    <n-space vertical size="small" style="width: 100%">
+                      <n-input
+                        v-model:value="developerForm.webSessionCodexClientTitle"
+                        :placeholder="t('settings.webSessionCodexClientTitlePlaceholder')"
+                        :disabled="developerLoading"
+                        style="max-width: 420px"
+                      />
+                      <span class="form-tip">{{ t('settings.webSessionCodexClientTitleTip') }}</span>
+                    </n-space>
+                  </n-form-item>
+                  <n-form-item
+                    :label="t('settings.webSessionCodexClientVersion')"
+                    data-search-key="webSessionCodexClientVersion"
+                  >
+                    <n-space vertical size="small" style="width: 100%">
+                      <n-input
+                        v-model:value="developerForm.webSessionCodexClientVersion"
+                        :placeholder="t('settings.webSessionCodexClientVersionPlaceholder')"
+                        :disabled="developerLoading"
+                        style="max-width: 420px"
+                      />
+                      <span class="form-tip">{{ t('settings.webSessionCodexClientVersionTip') }}</span>
+                    </n-space>
+                  </n-form-item>
+                  <n-form-item
                     :label="t('webSession.contextWindowSetting')"
                     data-search-key="webSessionCodexContextWindow"
                   >
@@ -2778,6 +2820,11 @@ const developerSessionDirty = computed(() => {
   return (
     developerForm.webSessionCodexDefaultModel !==
       developerOriginal.value.webSessionCodexDefaultModel ||
+    developerForm.webSessionCodexClientName !== developerOriginal.value.webSessionCodexClientName ||
+    developerForm.webSessionCodexClientTitle !==
+      developerOriginal.value.webSessionCodexClientTitle ||
+    developerForm.webSessionCodexClientVersion !==
+      developerOriginal.value.webSessionCodexClientVersion ||
     developerForm.webSessionCodexContextWindow !==
       developerOriginal.value.webSessionCodexContextWindow ||
     developerForm.webSessionCodexDefaultReasoningEffort !==
@@ -4236,6 +4283,12 @@ const allSettingsCards = computed<SettingsCardDefinition[]>(() => {
         t('settings.webSessionAutoRetryDispatchPendingOnFailure'),
         t('settings.webSessionQuickInputPinned'),
         t('settings.webSessionCodexDefaultModel'),
+        t('settings.webSessionCodexClientName'),
+        t('settings.webSessionCodexClientNameTip'),
+        t('settings.webSessionCodexClientTitle'),
+        t('settings.webSessionCodexClientTitleTip'),
+        t('settings.webSessionCodexClientVersion'),
+        t('settings.webSessionCodexClientVersionTip'),
         t('webSession.contextWindowSetting'),
         t('settings.webSessionCodexDefaultReasoningEffort'),
         t('settings.webSessionCodexDefaultPermissionLevel'),

@@ -1495,6 +1495,18 @@ export default {
     webSessionCodexDefaultModelOption: '默认（GPT-5.6 Sol）',
     webSessionCodexDefaultModelTip:
       '用于之后新建的 Codex 会话。可选择内置模型，也可直接输入自定义模型名称。',
+    webSessionCodexClientName: 'Codex 客户端标识',
+    webSessionCodexClientNamePlaceholder: '例如：codekanban-web-session',
+    webSessionCodexClientNameTip:
+      '发送给 Codex app-server 的 clientInfo.name，用于标识请求来源；仅对之后新启动的 Codex 会话生效。留空则不发送 clientInfo.name。',
+    webSessionCodexClientTitle: 'Codex 客户端标题',
+    webSessionCodexClientTitlePlaceholder: '例如：Code Kanban Web Session',
+    webSessionCodexClientTitleTip:
+      '发送给 Codex app-server 的 clientInfo.title，用于标题；仅对之后新启动的 Codex 会话生效。留空则不发送 clientInfo.title。',
+    webSessionCodexClientVersion: 'Codex 客户端版本',
+    webSessionCodexClientVersionPlaceholder: '例如：0.0.0',
+    webSessionCodexClientVersionTip:
+      '发送给 Codex app-server 的 clientInfo.version，用于标识请求来源版本；仅对之后新启动的 Codex 会话生效。留空则不发送 clientInfo.version。',
     webSessionCodexDefaultReasoningEffort: 'Codex 默认推理强度',
     webSessionCodexDefaultReasoningEffortOption: '默认（Xhigh）',
     webSessionCodexModelDefaultReasoningEffort: '模型默认',

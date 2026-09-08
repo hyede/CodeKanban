@@ -1019,8 +1019,9 @@ func applyPiContextUsageUpdates(
 	observedAt time.Time,
 ) {
 	if contextUsage == nil || contextUsage.Tokens == nil || contextUsage.ContextWindow <= 0 {
-		updates["session_context_window_tokens"] = 0
-		updates["session_context_window_observed_at"] = nil
+		// A status refresh can omit contextUsage while the native session is
+		// still usable. Keep the last valid window recorded for this session;
+		// only a newer positive observation should replace it.
 		if includeLatest {
 			updates["latest_token_count_input_tokens"] = 0
 			updates["latest_token_count_cached_input_tokens"] = 0

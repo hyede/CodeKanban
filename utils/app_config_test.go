@@ -91,6 +91,17 @@ func TestNormalizeWebSessionQuickInputConfigEmpty(t *testing.T) {
 
 func TestNormalizeDeveloperConfigDefaultsActiveCallTimeout(t *testing.T) {
 	got := NormalizeDeveloperConfig(DeveloperConfig{})
+	// Client metadata stay blank so an explicitly cleared field keeps opting
+	// out; defaults come from key-existence backfill in the config store.
+	if got.WebSessionCodexClientName != "" {
+		t.Fatalf("expected blank Codex client name opt-out, got %q", got.WebSessionCodexClientName)
+	}
+	if got.WebSessionCodexClientTitle != "" {
+		t.Fatalf("expected blank Codex client title opt-out, got %q", got.WebSessionCodexClientTitle)
+	}
+	if got.WebSessionCodexClientVersion != "" {
+		t.Fatalf("expected blank Codex client version opt-out, got %q", got.WebSessionCodexClientVersion)
+	}
 	if got.WebSessionCodexDefaultModel != WebSessionCodexDefaultSetting {
 		t.Fatalf("expected Codex model sentinel %q, got %q", WebSessionCodexDefaultSetting, got.WebSessionCodexDefaultModel)
 	}
@@ -156,11 +167,23 @@ func TestNormalizeWebSessionAutoRetryDefaultsConfig(t *testing.T) {
 
 func TestNormalizeDeveloperConfigPreservesCustomCodexDefaults(t *testing.T) {
 	got := NormalizeDeveloperConfig(DeveloperConfig{
+		WebSessionCodexClientName:             "  custom-client  ",
+		WebSessionCodexClientTitle:            "  Custom Title  ",
+		WebSessionCodexClientVersion:          "  1.2.3  ",
 		WebSessionCodexDefaultModel:           "  custom-codex-model  ",
 		WebSessionCodexDefaultReasoningEffort: " HIGH ",
 		WebSessionCodexDefaultPermissionLevel: " YOLO ",
 		WebSessionCodexDefaultSyncMode:        " DEEP ",
 	})
+	if got.WebSessionCodexClientName != "custom-client" {
+		t.Fatalf("expected trimmed custom client name, got %q", got.WebSessionCodexClientName)
+	}
+	if got.WebSessionCodexClientTitle != "Custom Title" {
+		t.Fatalf("expected trimmed custom client title, got %q", got.WebSessionCodexClientTitle)
+	}
+	if got.WebSessionCodexClientVersion != "1.2.3" {
+		t.Fatalf("expected trimmed custom client version, got %q", got.WebSessionCodexClientVersion)
+	}
 	if got.WebSessionCodexDefaultModel != "custom-codex-model" {
 		t.Fatalf("expected trimmed custom model, got %q", got.WebSessionCodexDefaultModel)
 	}
@@ -262,6 +285,7 @@ func TestEffectiveWebSessionActiveCallTimeoutSecondsUsesDefaultTier(t *testing.T
 
 func TestMergeDeveloperConfigPreservesNestedTimeoutConfigForLegacyPayloads(t *testing.T) {
 	current := NormalizeDeveloperConfig(DeveloperConfig{
+		WebSessionCodexClientName:             "custom-client",
 		WebSessionCodexDefaultModel:           "custom-model",
 		WebSessionCodexDefaultReasoningEffort: "medium",
 		WebSessionCodexDefaultPermissionLevel: "yolo",
@@ -290,6 +314,15 @@ func TestMergeDeveloperConfigPreservesNestedTimeoutConfigForLegacyPayloads(t *te
 
 	if !merged.EnableTerminalScrollback {
 		t.Fatalf("expected top-level developer config fields to update, got %#v", merged)
+	}
+	// Client metadata pass through verbatim so an explicitly cleared field can
+	// opt out of sending it; payloads written before these fields existed are
+	// backfilled by key existence in the config store instead.
+	if merged.WebSessionCodexClientName != "" {
+		t.Fatalf("expected client metadata to pass through for opt-out, got %q", merged.WebSessionCodexClientName)
+	}
+	if merged.WebSessionCodexClientTitle != "" || merged.WebSessionCodexClientVersion != "" {
+		t.Fatalf("expected client metadata to pass through for opt-out, got title %q version %q", merged.WebSessionCodexClientTitle, merged.WebSessionCodexClientVersion)
 	}
 	if merged.WebSessionActiveCallTimeout != current.WebSessionActiveCallTimeout {
 		t.Fatalf("expected nested timeout config to be preserved, got %#v", merged.WebSessionActiveCallTimeout)

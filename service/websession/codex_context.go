@@ -550,7 +550,7 @@ func (m *Manager) probeCodexModelCatalog() (models []CodexModelInfo, probeErr er
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), codexModelCatalogTimeout)
 	defer cancel()
-	models, err := loadCodexModelCatalog(ctx, m.cfg.CodexPath)
+	models, err := loadCodexModelCatalog(ctx, m.cfg.CodexPath, m.codexClientInfo())
 	if err != nil {
 		return []CodexModelInfo{}, err
 	}
@@ -569,7 +569,11 @@ func cloneCodexModelCatalog(models []CodexModelInfo) []CodexModelInfo {
 	return cloned
 }
 
-func loadCodexModelCatalog(ctx context.Context, codexPath string) ([]CodexModelInfo, error) {
+func loadCodexModelCatalog(
+	ctx context.Context,
+	codexPath string,
+	clientInfo map[string]any,
+) ([]CodexModelInfo, error) {
 	client, stderr, err := startCodexAppServer(ctx, codexPath, "")
 	if err != nil {
 		return nil, err
@@ -579,15 +583,15 @@ func loadCodexModelCatalog(ctx context.Context, codexPath string) ([]CodexModelI
 	}()
 	defer stopCodexAppServerProbe(client)
 
-	if _, err := client.request(ctx, "initialize", map[string]any{
-		"clientInfo": map[string]any{
-			"name":    "codekanban-runtime-config",
-			"version": "0.0.0",
-		},
+	initializeRequest := map[string]any{
 		"capabilities": map[string]any{
 			"experimentalApi": true,
 		},
-	}); err != nil {
+	}
+	if clientInfo != nil {
+		initializeRequest["clientInfo"] = clientInfo
+	}
+	if _, err := client.request(ctx, "initialize", initializeRequest); err != nil {
 		return nil, err
 	}
 

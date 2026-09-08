@@ -2,6 +2,7 @@ package websession
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -40,6 +41,13 @@ func firstSentence(value string) string {
 	}
 
 	for index, r := range value {
+		// Keep periods inside versions, filenames, and other tokens intact.
+		if r == '.' && index+1 < len(value) {
+			next, _ := utf8.DecodeRuneInString(value[index+1:])
+			if !unicode.IsSpace(next) {
+				continue
+			}
+		}
 		if isSentenceBoundary(r) {
 			return strings.TrimSpace(value[:index+utf8.RuneLen(r)])
 		}

@@ -42,6 +42,9 @@ describe('settingsBackup helpers', () => {
             developer: {
               enableTerminalScrollback: false,
               enableTerminalStateSnapshot: true,
+              webSessionCodexClientName: 'codekanban-web-session',
+              webSessionCodexClientTitle: 'Code Kanban Web Session',
+              webSessionCodexClientVersion: '0.0.0',
               webSessionCodexDefaultModel: 'default',
               webSessionCodexDefaultReasoningEffort: 'default',
               webSessionCodexDefaultPermissionLevel: 'default',

@@ -70,6 +70,9 @@ type TerminalShellConfig struct {
 type DeveloperConfig struct {
 	EnableTerminalScrollback              bool                              `json:"enableTerminalScrollback" yaml:"enableTerminalScrollback"`
 	EnableTerminalStateSnapshot           bool                              `json:"enableTerminalStateSnapshot" yaml:"enableTerminalStateSnapshot"`
+	WebSessionCodexClientName             string                            `json:"webSessionCodexClientName" yaml:"webSessionCodexClientName"`
+	WebSessionCodexClientTitle            string                            `json:"webSessionCodexClientTitle" yaml:"webSessionCodexClientTitle"`
+	WebSessionCodexClientVersion          string                            `json:"webSessionCodexClientVersion" yaml:"webSessionCodexClientVersion"`
 	WebSessionCodexDefaultModel           string                            `json:"webSessionCodexDefaultModel" yaml:"webSessionCodexDefaultModel"`
 	WebSessionCodexContextWindow          int64                             `json:"webSessionCodexContextWindow" yaml:"webSessionCodexContextWindow"`
 	WebSessionCodexDefaultReasoningEffort string                            `json:"webSessionCodexDefaultReasoningEffort" yaml:"webSessionCodexDefaultReasoningEffort"`
@@ -133,6 +136,9 @@ const (
 	MaxPageTitleRunes                     = 64
 	WebSessionQuickInputRecentLimit       = 30
 	DefaultWebSessionCodexModel           = "gpt-5.6-sol"
+	DefaultWebSessionCodexClientName      = "codekanban-web-session"
+	DefaultWebSessionCodexClientTitle     = "Code Kanban Web Session"
+	DefaultWebSessionCodexClientVersion   = "0.0.0"
 	DefaultWebSessionCodexReasoningEffort = "xhigh"
 	DefaultWebSessionCodexPermissionLevel = "elevated"
 	DefaultWebSessionCodexSyncMode        = "fast"
@@ -441,6 +447,9 @@ func ReadConfig() *AppConfig {
 		Developer: DeveloperConfig{
 			EnableTerminalScrollback:              false,
 			EnableTerminalStateSnapshot:           runtime.GOOS != "windows",
+			WebSessionCodexClientName:             DefaultWebSessionCodexClientName,
+			WebSessionCodexClientTitle:            DefaultWebSessionCodexClientTitle,
+			WebSessionCodexClientVersion:          DefaultWebSessionCodexClientVersion,
 			WebSessionCodexDefaultModel:           WebSessionCodexDefaultSetting,
 			WebSessionCodexDefaultReasoningEffort: WebSessionCodexDefaultSetting,
 			WebSessionCodexDefaultPermissionLevel: WebSessionCodexDefaultSetting,
@@ -556,6 +565,12 @@ func NormalizeWebSessionQuickInputConfig(config WebSessionQuickInputConfig) WebS
 }
 
 func NormalizeDeveloperConfig(config DeveloperConfig) DeveloperConfig {
+	// Client metadata keep an explicitly stored empty string as the opt-out
+	// value; defaults for payloads written before these fields existed are
+	// backfilled by key existence in the config store, not here.
+	config.WebSessionCodexClientName = strings.TrimSpace(config.WebSessionCodexClientName)
+	config.WebSessionCodexClientTitle = strings.TrimSpace(config.WebSessionCodexClientTitle)
+	config.WebSessionCodexClientVersion = strings.TrimSpace(config.WebSessionCodexClientVersion)
 	if !ValidCodexContextWindow(config.WebSessionCodexContextWindow) {
 		config.WebSessionCodexContextWindow = 0
 	}
@@ -615,6 +630,9 @@ func NormalizeWebSessionAutoRetryDefaultsConfig(config WebSessionAutoRetryDefaul
 }
 
 func MergeDeveloperConfig(current DeveloperConfig, incoming DeveloperConfig) DeveloperConfig {
+	// Client metadata pass through verbatim: the settings UI always sends the
+	// full payload, and an explicitly cleared field is the opt-out signal, so
+	// preserving the previous value here would make clearing impossible.
 	if strings.TrimSpace(incoming.WebSessionCodexDefaultModel) == "" {
 		incoming.WebSessionCodexDefaultModel = current.WebSessionCodexDefaultModel
 	}
