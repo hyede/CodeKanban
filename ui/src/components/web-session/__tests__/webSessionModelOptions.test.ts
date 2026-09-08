@@ -12,8 +12,11 @@ import {
   defaultPermissionLevelForAgent,
   defaultReasoningEffortForAgent,
   filterPiModelOptionGroups,
+  rememberCustomModel,
   rememberPiFrequentModel,
+  removeCustomModel,
   resolveCodexReasoningEfforts,
+  resolveCustomModelOptions,
   resolvePiModelOptionGroups,
   resolvePiModelOptions,
   resolvePiPrimaryModelOptions,
@@ -315,6 +318,32 @@ describe('webSessionModelOptions', () => {
       'provider/three',
       'provider/one',
     ]);
+  });
+
+  it('remembers custom models at the front without duplicates', () => {
+    expect(rememberCustomModel(['glm-5.3', 'gpt-oss'], 'glm-5.3')).toEqual(['glm-5.3', 'gpt-oss']);
+    expect(rememberCustomModel(['glm-5.3'], ' new-model ')).toEqual(['new-model', 'glm-5.3']);
+    expect(rememberCustomModel([], '   ')).toEqual([]);
+    expect(
+      rememberCustomModel(
+        Array.from({ length: 20 }, (_, index) => `model-${index}`),
+        'model-new'
+      )
+    ).toEqual(['model-new', ...Array.from({ length: 19 }, (_, index) => `model-${index}`)]);
+  });
+
+  it('removes custom models while ignoring blank or missing entries', () => {
+    expect(removeCustomModel(['glm-5.3', 'gpt-oss'], ' glm-5.3 ')).toEqual(['gpt-oss']);
+    expect(removeCustomModel(['glm-5.3'], 'missing')).toEqual(['glm-5.3']);
+    expect(removeCustomModel(['glm-5.3'], '')).toEqual(['glm-5.3']);
+    expect(removeCustomModel(undefined as unknown as string[], 'glm-5.3')).toEqual([]);
+  });
+
+  it('maps stored custom models to options and skips reserved or duplicate values', () => {
+    expect(resolveCustomModelOptions(['glm-5.3', ' opus ', 'glm-5.3', ''], ['opus'])).toEqual([
+      { label: 'glm-5.3', value: 'glm-5.3' },
+    ]);
+    expect(resolveCustomModelOptions(undefined as unknown as string[])).toEqual([]);
   });
 
   it('falls back per current Codex model without exposing unsupported efforts', () => {

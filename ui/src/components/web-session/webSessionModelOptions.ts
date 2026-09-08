@@ -33,6 +33,7 @@ export type WebSessionModelOptionGroup = {
 
 export const CUSTOM_MODEL_VALUE = '__custom_model__';
 export const MORE_MODELS_VALUE = '__more_models__';
+export const CUSTOM_MODEL_STORAGE_LIMIT = 20;
 export const PI_FREQUENT_MODEL_LIMIT = 6;
 
 export type PiModelMenuCloseSource = 'show-change' | 'pointer-leave';
@@ -165,6 +166,54 @@ export function rememberPiFrequentModel(
       .map(value => String(value || '').trim())
       .filter(value => value && value !== normalizedValue),
   ].slice(0, normalizedLimit);
+}
+
+export function rememberCustomModel(
+  values: string[],
+  modelValue: string,
+  limit = CUSTOM_MODEL_STORAGE_LIMIT
+) {
+  const normalizedValue = modelValue.trim();
+  const normalizedLimit = Math.max(0, Math.floor(limit));
+  if (!normalizedValue || normalizedLimit === 0) {
+    return [];
+  }
+  const currentValues = Array.isArray(values) ? values : [];
+  return [
+    normalizedValue,
+    ...currentValues
+      .map(value => String(value || '').trim())
+      .filter(value => value && value !== normalizedValue),
+  ].slice(0, normalizedLimit);
+}
+
+export function removeCustomModel(values: string[], modelValue: string) {
+  const normalizedValue = modelValue.trim();
+  const currentValues = Array.isArray(values) ? values : [];
+  if (!normalizedValue) {
+    return [...currentValues];
+  }
+  return currentValues
+    .map(value => String(value || '').trim())
+    .filter(value => value && value !== normalizedValue);
+}
+
+export function resolveCustomModelOptions(
+  values: string[],
+  reservedValues: string[] = []
+): WebSessionModelOption[] {
+  const reserved = new Set(Array.isArray(reservedValues) ? reservedValues : []);
+  const seen = new Set<string>();
+  const options: WebSessionModelOption[] = [];
+  for (const rawValue of Array.isArray(values) ? values : []) {
+    const normalizedValue = String(rawValue || '').trim();
+    if (!normalizedValue || reserved.has(normalizedValue) || seen.has(normalizedValue)) {
+      continue;
+    }
+    seen.add(normalizedValue);
+    options.push({ label: normalizedValue, value: normalizedValue });
+  }
+  return options;
 }
 
 export function resolvePiModelOptionGroups(

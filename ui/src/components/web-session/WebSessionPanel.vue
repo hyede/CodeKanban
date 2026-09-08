@@ -3393,6 +3393,7 @@ import {
 } from '@vueuse/core';
 import { storeToRefs } from 'pinia';
 import {
+  NButton,
   NCheckbox,
   NIcon,
   NInput,
@@ -3560,8 +3561,11 @@ import {
   defaultPermissionLevelForAgent as resolveDefaultPermissionLevelForAgent,
   defaultReasoningEffortForAgent as resolveDefaultReasoningEffortForAgent,
   filterPiModelOptionGroups,
+  rememberCustomModel,
   rememberPiFrequentModel,
+  removeCustomModel,
   resolveCodexReasoningEfforts,
+  resolveCustomModelOptions,
   shouldSuppressPiModelMenuClose,
   resolvePiModelOptionGroups,
   resolvePiModelOptions,
@@ -10759,6 +10763,11 @@ const piModelSearchInputRef = ref<InstanceType<typeof NInput> | null>(null);
 const piModelSearchFocused = ref(false);
 const piModelSearchComposing = ref(false);
 const piFrequentModelValues = useStorage<string[]>('codekanban-web-session-pi-frequent-models', []);
+type WebSessionCustomModelAgent = Extract<WebSessionAgent, 'claude' | 'codex'>;
+const customModelValuesByAgent = useStorage<Partial<Record<WebSessionCustomModelAgent, string[]>>>(
+  'codekanban-web-session-custom-models',
+  {}
+);
 type ComposerHoverSelector = 'model' | 'reasoning';
 const COMPOSER_SELECTOR_HOVER_CLOSE_DELAY = 120;
 const composerSelectorHoverCloseTimers: Record<ComposerHoverSelector, number | null> = {
@@ -11218,11 +11227,55 @@ const piPrimaryModelOptions = computed(() =>
   resolvePiPrimaryModelOptions(runtimeConfig.value?.piModels ?? [], piFrequentModelValues.value)
 );
 
+function customModelsForAgent(agent: WebSessionCustomModelAgent) {
+  const values = customModelValuesByAgent.value[agent];
+  return Array.isArray(values) ? values : [];
+}
+
+function setCustomModelsForAgent(agent: WebSessionCustomModelAgent, values: string[]) {
+  customModelValuesByAgent.value = { ...customModelValuesByAgent.value, [agent]: values };
+}
+
+function builtinModelValuesForAgent(agent: WebSessionAgent) {
+  if (agent === 'claude') {
+    return CLAUDE_MODEL_OPTIONS.map(option => option.value);
+  }
+  if (agent === 'codex') {
+    return CODEX_MODEL_OPTIONS.map(option => option.value);
+  }
+  return resolvePiModelOptions(runtimeConfig.value?.piModels ?? []).map(option => option.value);
+}
+
+function rememberCustomModelForAgent(agent: WebSessionCustomModelAgent, model: string) {
+  const normalizedModel = model.trim();
+  if (!normalizedModel || builtinModelValuesForAgent(agent).includes(normalizedModel)) {
+    return;
+  }
+  setCustomModelsForAgent(
+    agent,
+    rememberCustomModel(customModelsForAgent(agent), normalizedModel)
+  );
+}
+
+const customModelOptions = computed(() => {
+  const agent = selectedAgent.value;
+  if (agent !== 'claude' && agent !== 'codex') {
+    return [];
+  }
+  return resolveCustomModelOptions(
+    customModelsForAgent(agent),
+    builtinModelValuesForAgent(agent)
+  );
+});
+
 const modelOptions = computed(() => {
   const activeModel = currentSession.value?.model ?? draftModel.value;
   if (selectedAgent.value === 'claude') {
     return [
-      ...withCurrentModelOption(CLAUDE_MODEL_OPTIONS, activeModel),
+      ...withCurrentModelOption(
+        [...CLAUDE_MODEL_OPTIONS, ...customModelOptions.value],
+        activeModel
+      ),
       { label: t('webSession.customModel'), value: CUSTOM_MODEL_VALUE },
     ];
   }
@@ -11239,12 +11292,18 @@ const modelOptions = computed(() => {
   }
   if (!showAdditionalCodexModels.value) {
     return [
-      ...withCurrentModelOption(CODEX_PRIMARY_MODEL_OPTIONS, activeModel),
+      ...withCurrentModelOption(
+        [...CODEX_PRIMARY_MODEL_OPTIONS, ...customModelOptions.value],
+        activeModel
+      ),
       { label: t('webSession.customModel'), value: CUSTOM_MODEL_VALUE },
       { label: t('webSession.moreModels'), value: MORE_MODELS_VALUE },
     ];
   }
-  const primaryOptions = withCurrentModelOption(CODEX_PRIMARY_MODEL_OPTIONS, activeModel);
+  const primaryOptions = withCurrentModelOption(
+    [...CODEX_PRIMARY_MODEL_OPTIONS, ...customModelOptions.value],
+    activeModel
+  );
   const additionalOptions = CODEX_ADDITIONAL_MODEL_OPTIONS.filter(
     option => !primaryOptions.some(primary => primary.value === option.value)
   );
@@ -11557,20 +11616,106 @@ function setWorkflowMode(mode: 'default' | 'plan') {
     });
 }
 
+function openCustomModelManageDialog(agent: WebSessionCustomModelAgent) {
+  dialog.create({
+    title: t('webSession.customModelManageTitle'),
+    content: () => {
+      const models = customModelsForAgent(agent);
+      if (!models.length) {
+        return h(
+          'div',
+          {
+            style: 'padding:2px 0 4px;color:var(--n-text-color-3);font-size:13px;line-height:1.5;',
+          },
+          t('webSession.customModelManageEmpty')
+        );
+      }
+      return h(
+        'div',
+        {
+          style:
+            'display:flex;flex-direction:column;gap:2px;min-width:240px;max-height:320px;overflow-y:auto;',
+        },
+        models.map(model =>
+          h(
+            'div',
+            { key: model, style: 'display:flex;align-items:center;gap:8px;padding:1px 0;' },
+            [
+              h(
+                'span',
+                {
+                  style:
+                    'flex:1 1 auto;min-width:0;overflow-wrap:anywhere;font-size:13px;line-height:1.6;',
+                },
+                model
+              ),
+              h(
+                NButton,
+                {
+                  size: 'tiny',
+                  quaternary: true,
+                  type: 'error',
+                  title: t('webSession.customModelDelete'),
+                  'aria-label': `${t('webSession.customModelDelete')} ${model}`,
+                  onClick: () => {
+                    setCustomModelsForAgent(
+                      agent,
+                      removeCustomModel(customModelsForAgent(agent), model)
+                    );
+                  },
+                },
+                { icon: () => h(NIcon, { size: 14 }, { default: () => h(TrashOutline) }) }
+              ),
+            ]
+          )
+        )
+      );
+    },
+    showIcon: false,
+    closeOnEsc: true,
+  });
+}
+
 function openCustomModelDialog() {
   const inputValue = ref((currentSession.value?.model ?? draftModel.value).trim());
+  const selectedAgentValue = selectedAgent.value;
+  const customModelAgent: WebSessionCustomModelAgent | null =
+    selectedAgentValue === 'claude' || selectedAgentValue === 'codex' ? selectedAgentValue : null;
   dialog.create({
     title: t('webSession.customModelTitle'),
     content: () =>
-      h(NInput, {
-        value: inputValue.value,
-        'onUpdate:value': (value: string) => {
-          inputValue.value = value;
-        },
-        maxlength: 128,
-        autofocus: true,
-        placeholder: t('webSession.customModelPlaceholder'),
-      }),
+      h('div', { style: 'display:flex;flex-direction:column;gap:10px;' }, [
+        h(NInput, {
+          value: inputValue.value,
+          'onUpdate:value': (value: string) => {
+            inputValue.value = value;
+          },
+          maxlength: 128,
+          autofocus: true,
+          placeholder: t('webSession.customModelPlaceholder'),
+        }),
+        customModelAgent
+          ? h(
+              'div',
+              { style: 'display:flex;justify-content:flex-end;' },
+              h(
+                NButton,
+                {
+                  size: 'tiny',
+                  text: true,
+                  type: 'primary',
+                  onClick: () => {
+                    openCustomModelManageDialog(customModelAgent);
+                  },
+                },
+                {
+                  default: () =>
+                    `${t('webSession.customModelManage')} (${customModelsForAgent(customModelAgent).length})`,
+                }
+              )
+            )
+          : null,
+      ]),
     positiveText: t('common.save'),
     negativeText: t('common.cancel'),
     showIcon: false,
@@ -11581,6 +11726,9 @@ function openCustomModelDialog() {
       if (!nextModel) {
         message.warning(t('webSession.customModelEmpty'));
         return false;
+      }
+      if (customModelAgent) {
+        rememberCustomModelForAgent(customModelAgent, nextModel);
       }
       const currentEffort = currentSession.value?.reasoningEffort ?? draftReasoningEffort.value;
       const nextEffort =
