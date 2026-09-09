@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -28,6 +29,40 @@ import (
 
 type captureWSConn struct {
 	frames []wireFrame
+}
+
+func TestForceTerminateRunKillsProcessBeforeCancellingContext(t *testing.T) {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd.exe", "/c", "ping 127.0.0.1 -n 30 >NUL")
+	} else {
+		cmd = exec.Command("sh", "-c", "sleep 30")
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start test process: %v", err)
+	}
+
+	var cancelCalled atomic.Bool
+	run := &activeRun{
+		cmd: cmd,
+		cancel: func() {
+			cancelCalled.Store(true)
+		},
+	}
+	forceTerminateRun(run, true)
+
+	waitErr := make(chan error, 1)
+	go func() {
+		waitErr <- cmd.Wait()
+	}()
+	select {
+	case <-waitErr:
+	case <-time.After(3 * time.Second):
+		t.Fatal("force termination did not stop the process")
+	}
+	if !cancelCalled.Load() {
+		t.Fatal("expected run context cancellation after process termination")
+	}
 }
 
 func (c *captureWSConn) ReadMessage() (messageType int, p []byte, err error) {

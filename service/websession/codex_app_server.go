@@ -957,30 +957,8 @@ drainLoop:
 	}
 	stopAndDrainRollout()
 
-	if ctx.Err() != nil {
-		abortPayload := activeCallTimeoutAbortPayload(session, run.abortEventPayload())
-		now := time.Now()
-		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-			ID:        utils.NewID(),
-			Seq:       0,
-			Type:      "run_abort",
-			RunID:     run.runID,
-			Timestamp: now,
-			Payload:   abortPayload,
-		})
-		_ = m.updateRuntimeState(
-			context.Background(),
-			session.ID,
-			applyAssistantStateUpdates(map[string]any{
-				"status":                     string(StatusIdle),
-				"updated_at":                 now,
-				"auto_retry_attempt":         0,
-				"auto_retry_next_at":         nil,
-				"auto_retry_last_error_code": nil,
-			}, AssistantStateNone, now),
-		)
-		m.cancelAutoRetryTimer(session.ID)
-		m.broadcastSessionSummary(context.Background(), session.ID)
+	if ctx.Err() != nil || run.abortRequestedSnapshot() {
+		m.finishAbortedRun(session.ID, session, run)
 		return
 	}
 

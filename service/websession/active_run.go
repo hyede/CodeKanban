@@ -39,6 +39,7 @@ type activeRun struct {
 	done                      chan struct{}
 	mu                        sync.Mutex
 	forceTerminateRequested   bool
+	abortRequested            bool
 	stdin                     io.WriteCloser
 	recentRuntimeLines        []string
 	pendingApproval           string
@@ -210,6 +211,15 @@ func (r *activeRun) command() *exec.Cmd {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.cmd
+}
+
+func (r *activeRun) abortRequestedSnapshot() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.abortRequested
 }
 
 func (r *activeRun) setCodexAppServer(client *codexAppServerClient) {

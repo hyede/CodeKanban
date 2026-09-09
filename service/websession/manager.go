@@ -3264,6 +3264,30 @@ func (m *Manager) stopRunForFreshContext(sessionID string, timeout time.Duration
 	}
 }
 
+// forceTerminateRun kills the runtime process tree before cancelling its
+// context. On Windows, Claude is commonly launched through cmd.exe; cancelling
+// the context first can kill that wrapper before taskkill gets a chance to
+// terminate the real Claude child process.
+func forceTerminateRun(run *activeRun, cancel bool) {
+	if run == nil {
+		return
+	}
+
+	run.mu.Lock()
+	if cancel {
+		run.abortRequested = true
+	}
+	cmd := run.cmd
+	run.mu.Unlock()
+	killCmdTree(cmd)
+	if cancel && run.cancel != nil {
+		run.cancel()
+	}
+	// The context cancellation and process termination race. A second pass
+	// covers a process that was still starting when the first pass ran.
+	killCmdTree(run.command())
+}
+
 func (m *Manager) AbortSession(sessionID string) error {
 	m.mu.RLock()
 	run, ok := m.runs[sessionID]
@@ -3271,10 +3295,7 @@ func (m *Manager) AbortSession(sessionID string) error {
 	if !ok {
 		return nil
 	}
-	if run.cancel != nil {
-		run.cancel()
-	}
-	killCmdTree(run.command())
+	forceTerminateRun(run, true)
 	return nil
 }
 
@@ -4851,30 +4872,8 @@ func (m *Manager) runSession(ctx context.Context, run *activeRun, session tables
 
 	waitErr := cmd.Wait()
 	<-stderrDone
-	if ctx.Err() != nil {
-		abortPayload := activeCallTimeoutAbortPayload(session, run.abortEventPayload())
-		now := time.Now()
-		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-			ID:        utils.NewID(),
-			Seq:       0,
-			Type:      "run_abort",
-			RunID:     run.runID,
-			Timestamp: now,
-			Payload:   abortPayload,
-		})
-		_ = m.updateRuntimeState(
-			context.Background(),
-			session.ID,
-			applyAssistantStateUpdates(map[string]any{
-				"status":                     string(StatusIdle),
-				"updated_at":                 now,
-				"auto_retry_attempt":         0,
-				"auto_retry_next_at":         nil,
-				"auto_retry_last_error_code": nil,
-			}, AssistantStateNone, now),
-		)
-		m.cancelAutoRetryTimer(session.ID)
-		m.broadcastSessionSummary(context.Background(), session.ID)
+	if ctx.Err() != nil || run.abortRequestedSnapshot() {
+		m.finishAbortedRun(session.ID, session, run)
 		return
 	}
 
@@ -4951,7 +4950,7 @@ func (m *Manager) logRunCompletion(
 	}
 	result := "success"
 	errorCode := run.observationFailureCode()
-	if ctx != nil && ctx.Err() != nil {
+	if (ctx != nil && ctx.Err() != nil) || run.abortRequestedSnapshot() {
 		result = "canceled"
 		errorCode = ""
 	} else if errorCode != "" {
@@ -5020,28 +5019,8 @@ func (m *Manager) runClaudeResumeSession(ctx context.Context, run *activeRun, se
 
 	waitErr := cmd.Wait()
 	<-stderrDone
-	if ctx.Err() != nil {
-		now := time.Now()
-		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-			ID:        utils.NewID(),
-			Seq:       0,
-			Type:      "run_abort",
-			RunID:     run.runID,
-			Timestamp: now,
-		})
-		_ = m.updateRuntimeState(
-			context.Background(),
-			session.ID,
-			applyAssistantStateUpdates(map[string]any{
-				"status":                     string(StatusIdle),
-				"updated_at":                 now,
-				"auto_retry_attempt":         0,
-				"auto_retry_next_at":         nil,
-				"auto_retry_last_error_code": nil,
-			}, AssistantStateNone, now),
-		)
-		m.cancelAutoRetryTimer(session.ID)
-		m.broadcastSessionSummary(context.Background(), session.ID)
+	if ctx.Err() != nil || run.abortRequestedSnapshot() {
+		m.finishAbortedRun(session.ID, session, run)
 		return
 	}
 	if waitErr != nil {
@@ -5110,6 +5089,39 @@ func (m *Manager) handleRunFailure(sessionID string, session tables.WebSessionTa
 	m.handleRunFailureWithCode(sessionID, session, run, "", err)
 }
 
+func (m *Manager) finishAbortedRun(sessionID string, session tables.WebSessionTable, run *activeRun) {
+	if run == nil {
+		return
+	}
+	abortPayload := activeCallTimeoutAbortPayload(session, run.abortEventPayload())
+	run.resetActiveCallTracking()
+	if normalizeAgent(Agent(session.Agent)) == AgentPi {
+		_ = m.closePendingPiDialog(session, run, "Pi extension input was canceled because the run was aborted")
+	}
+	now := time.Now()
+	_, _ = m.appendAndBroadcast(context.Background(), sessionID, session, Event{
+		ID:        utils.NewID(),
+		Seq:       0,
+		Type:      "run_abort",
+		RunID:     run.runID,
+		Timestamp: now,
+		Payload:   abortPayload,
+	})
+	_ = m.updateRuntimeState(
+		context.Background(),
+		sessionID,
+		applyAssistantStateUpdates(map[string]any{
+			"status":                     string(StatusIdle),
+			"updated_at":                 now,
+			"auto_retry_attempt":         0,
+			"auto_retry_next_at":         nil,
+			"auto_retry_last_error_code": nil,
+		}, AssistantStateNone, now),
+	)
+	m.cancelAutoRetryTimer(sessionID)
+	m.broadcastSessionSummary(context.Background(), sessionID)
+}
+
 func (m *Manager) handleRunFailureWithCode(
 	sessionID string,
 	session tables.WebSessionTable,
@@ -5117,6 +5129,10 @@ func (m *Manager) handleRunFailureWithCode(
 	code string,
 	err error,
 ) {
+	if run != nil && run.abortRequestedSnapshot() {
+		m.finishAbortedRun(sessionID, session, run)
+		return
+	}
 	if run != nil {
 		run.resetActiveCallTracking()
 		if normalizeAgent(Agent(session.Agent)) == AgentPi {
@@ -7032,7 +7048,6 @@ func (m *Manager) terminateCodexAppServerRun(run *activeRun, cancelActive bool) 
 	run.mu.Lock()
 	alreadyRequested := run.forceTerminateRequested
 	run.forceTerminateRequested = true
-	cancel := run.cancel
 	cmd := run.cmd
 	client := run.app
 	run.mu.Unlock()
@@ -7041,13 +7056,10 @@ func (m *Manager) terminateCodexAppServerRun(run *activeRun, cancelActive bool) 
 	if cmd != nil && cmd.Process != nil {
 		pid = cmd.Process.Pid
 	}
-	if cancelActive && cancel != nil {
-		cancel()
-	}
+	forceTerminateRun(run, cancelActive)
 	if client != nil {
 		_ = client.closeStdin()
 	}
-	killCmdTree(cmd)
 	if client != nil {
 		client.closeTransport()
 	}

@@ -1239,10 +1239,7 @@ func (m *Manager) abortRunForRedirect(sessionID, pendingID string, expectedRun *
 		return
 	}
 
-	if expectedRun.cancel != nil {
-		expectedRun.cancel()
-	}
-	killCmdTree(expectedRun.command())
+	forceTerminateRun(expectedRun, true)
 	if m.logger != nil {
 		m.logger.Debug("interrupted active session for redirect pending input",
 			zap.String("sessionId", sessionID),
