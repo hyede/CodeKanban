@@ -56,6 +56,7 @@ export type ComposerPasteSegment =
   | {
       type: 'text';
       value: string;
+      structural?: boolean;
     }
   | {
       type: 'image';
@@ -282,16 +283,16 @@ function getImageSource(node: Node) {
     .find(Boolean);
 }
 
-function appendText(segments: ComposerPasteSegment[], value: string) {
+function appendText(segments: ComposerPasteSegment[], value: string, structural = false) {
   if (!value) {
     return;
   }
   const previous = segments[segments.length - 1];
-  if (previous?.type === 'text') {
+  if (previous?.type === 'text' && previous.structural === structural) {
     previous.value += value;
     return;
   }
-  segments.push({ type: 'text', value });
+  segments.push({ type: 'text', value, ...(structural ? { structural: true } : {}) });
 }
 
 function appendImage(segments: ComposerPasteSegment[], images: File[], file: File) {
@@ -384,7 +385,7 @@ function walkHtmlNode(
 
   const isBlock = BLOCK_TAGS.has(tagName);
   if (isBlock) {
-    appendText(segments, '\n');
+    appendText(segments, '\n', true);
   }
   for (const child of Array.from(node.childNodes)) {
     walkHtmlNode(child, segments, images, remoteImages, unavailableImages, pendingFiles);
@@ -393,18 +394,12 @@ function walkHtmlNode(
     appendText(segments, '\t');
   }
   if (isBlock) {
-    appendText(segments, '\n');
+    appendText(segments, '\n', true);
   }
 }
 
-function normalizeRenderedPaste(value: string) {
-  return value
-    .replace(/\u00a0/g, ' ')
-    .replace(/\r\n?/g, '\n')
-    .replace(/[\t\f\v ]+/g, ' ')
-    .replace(/ *\n */g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+function normalizePasteLineBreaks(value: string) {
+  return value.replace(/\r\n?/g, '\n');
 }
 
 export function buildWebSessionComposerPastePlan(
@@ -420,7 +415,7 @@ export function buildWebSessionComposerPastePlan(
   const unavailableImages: string[] = [];
   let foundHtmlImage = false;
 
-  const html = String(input.html || '').trim();
+  const html = String(input.html || '');
   if (html && (input.parseHtml || typeof DOMParser !== 'undefined')) {
     try {
       const preparedHtml = exposeOfficeImageFallbacks(html);
@@ -481,22 +476,59 @@ export function renderWebSessionComposerPastePlan(
   remoteImageReplacements: string[] = [],
   unavailableImageReplacements: string[] = []
 ) {
-  const rendered = plan.segments
-    .map(segment => {
-      if (segment.type === 'text') {
-        return segment.value;
-      }
-      const replacement =
-        segment.type === 'image'
-          ? imageReplacements[segment.imageIndex] || plan.failureMarker
-          : segment.type === 'remote-image'
-            ? remoteImageReplacements[segment.remoteImageIndex] ||
-              plan.remoteImages[segment.remoteImageIndex] ||
-              plan.failureMarker
-            : unavailableImageReplacements[segment.unavailableImageIndex] || plan.failureMarker;
-      return ` ${replacement} `;
-    })
-    .join('');
+  const rendered: string[] = [];
+  let pendingStructuralBreaks = 0;
+  let previousWasImage = false;
 
-  return normalizeRenderedPaste(rendered);
+  const flushStructuralBreaks = () => {
+    if (pendingStructuralBreaks <= 0 || rendered.length === 0) {
+      pendingStructuralBreaks = 0;
+      return;
+    }
+    rendered.push('\n'.repeat(Math.min(pendingStructuralBreaks, 2)));
+    pendingStructuralBreaks = 0;
+  };
+
+  for (const segment of plan.segments) {
+    if (segment.type === 'text') {
+      if (segment.structural) {
+        pendingStructuralBreaks += (segment.value.match(/\n/g) || []).length;
+        continue;
+      }
+
+      const value = normalizePasteLineBreaks(segment.value);
+      if (!value) {
+        continue;
+      }
+      flushStructuralBreaks();
+      if (
+        previousWasImage &&
+        rendered.length > 0 &&
+        !/^\s/.test(value) &&
+        !/\s$/.test(rendered[rendered.length - 1] || '')
+      ) {
+        rendered.push(' ');
+      }
+      rendered.push(value);
+      previousWasImage = false;
+      continue;
+    }
+
+    flushStructuralBreaks();
+    const replacement =
+      segment.type === 'image'
+        ? imageReplacements[segment.imageIndex] || plan.failureMarker
+        : segment.type === 'remote-image'
+          ? remoteImageReplacements[segment.remoteImageIndex] ||
+            plan.remoteImages[segment.remoteImageIndex] ||
+            plan.failureMarker
+          : unavailableImageReplacements[segment.unavailableImageIndex] || plan.failureMarker;
+    if (rendered.length > 0 && !/\s$/.test(rendered[rendered.length - 1] || '')) {
+      rendered.push(' ');
+    }
+    rendered.push(replacement);
+    previousWasImage = true;
+  }
+
+  return rendered.join('');
 }
