@@ -61,6 +61,15 @@ func DBMigrate(autoMigrate bool) {
 		)
 	}
 
+	if backfilledRows, err := backfillScheduledInputContextWindowSnapshots(); err != nil {
+		logger.Error("scheduled input context window snapshots backfill failed", zap.Error(err))
+		panic(err)
+	} else if backfilledRows > 0 {
+		logger.Info("scheduled input context window snapshots backfilled",
+			zap.Int64("rowCount", backfilledRows),
+		)
+	}
+
 	logger.Info("database migration finished")
 }
 
@@ -79,6 +88,32 @@ func backfillWebSessionItemCommandGroupIDs() (int64, error) {
 			ELSE ''
 		END
 		WHERE command_group_id IS NULL
+	`)
+	return result.RowsAffected, result.Error
+}
+
+func backfillScheduledInputContextWindowSnapshots() (int64, error) {
+	if db == nil {
+		return 0, ErrDBNotInitialized
+	}
+
+	result := db.Exec(`
+		UPDATE web_session_scheduled_inputs
+		SET context_window_setting_snapshot = (
+			SELECT CASE
+				WHEN web_sessions.agent = 'codex' THEN web_sessions.context_window_setting
+				ELSE NULL
+			END
+			FROM web_sessions
+			WHERE web_sessions.id = web_session_scheduled_inputs.web_session_id
+		)
+		WHERE context_window_setting_snapshot IS NULL
+		  AND EXISTS (
+			SELECT 1
+			FROM web_sessions
+			WHERE web_sessions.id = web_session_scheduled_inputs.web_session_id
+			  AND web_sessions.agent = 'codex'
+		  )
 	`)
 	return result.RowsAffected, result.Error
 }

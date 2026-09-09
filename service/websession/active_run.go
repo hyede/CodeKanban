@@ -19,6 +19,7 @@ type activeRun struct {
 	projectID                 string
 	agent                     Agent
 	backend                   SessionBackend
+	contextWindowSetting      int64
 	runID                     string
 	fromAutoRetry             bool
 	hiddenBootstrap           bool

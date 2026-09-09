@@ -74,21 +74,23 @@ func clonePendingInput(item PendingInput) PendingInput {
 		value := *item.ReadyAt
 		readyAt = &value
 	}
+	contextWindowSetting := cloneOptionalInt64(item.contextWindowSetting)
 	return PendingInput{
-		ID:                strings.TrimSpace(item.ID),
-		Mode:              normalizePendingInputMode(item.Mode),
-		Text:              item.Text,
-		AttachmentIDs:     append([]string(nil), item.AttachmentIDs...),
-		ReadyAt:           readyAt,
-		Paused:            item.Paused,
-		NativeQueued:      item.NativeQueued,
-		Status:            normalizePendingInputStatus(item.Status),
-		AttemptCount:      item.AttemptCount,
-		LastError:         strings.TrimSpace(item.LastError),
-		LastErrorCode:     strings.TrimSpace(item.LastErrorCode),
-		CreatedAt:         item.CreatedAt,
-		codexMessageID:    strings.TrimSpace(item.codexMessageID),
-		codexSteerReceipt: cloneCodexSteerReceipt(item.codexSteerReceipt),
+		ID:                   strings.TrimSpace(item.ID),
+		Mode:                 normalizePendingInputMode(item.Mode),
+		Text:                 item.Text,
+		AttachmentIDs:        append([]string(nil), item.AttachmentIDs...),
+		ReadyAt:              readyAt,
+		Paused:               item.Paused,
+		NativeQueued:         item.NativeQueued,
+		Status:               normalizePendingInputStatus(item.Status),
+		AttemptCount:         item.AttemptCount,
+		LastError:            strings.TrimSpace(item.LastError),
+		LastErrorCode:        strings.TrimSpace(item.LastErrorCode),
+		CreatedAt:            item.CreatedAt,
+		contextWindowSetting: contextWindowSetting,
+		codexMessageID:       strings.TrimSpace(item.codexMessageID),
+		codexSteerReceipt:    cloneCodexSteerReceipt(item.codexSteerReceipt),
 	}
 }
 
@@ -370,6 +372,25 @@ func (m *Manager) queuePendingInput(
 	)
 }
 
+func (m *Manager) queuePendingInputWithContextWindow(
+	sessionID string,
+	text string,
+	attachmentIDs []string,
+	mode PendingInputMode,
+	pendingID string,
+	contextWindowSetting *int64,
+) (PendingInput, error) {
+	return m.queuePendingInputWithReadyAtAndContextWindow(
+		sessionID,
+		text,
+		attachmentIDs,
+		mode,
+		pendingID,
+		nil,
+		contextWindowSetting,
+	)
+}
+
 func (m *Manager) queuePendingInputWithReadyAt(
 	sessionID string,
 	text string,
@@ -377,6 +398,26 @@ func (m *Manager) queuePendingInputWithReadyAt(
 	mode PendingInputMode,
 	pendingID string,
 	readyAt *time.Time,
+) (PendingInput, error) {
+	return m.queuePendingInputWithReadyAtAndContextWindow(
+		sessionID,
+		text,
+		attachmentIDs,
+		mode,
+		pendingID,
+		readyAt,
+		nil,
+	)
+}
+
+func (m *Manager) queuePendingInputWithReadyAtAndContextWindow(
+	sessionID string,
+	text string,
+	attachmentIDs []string,
+	mode PendingInputMode,
+	pendingID string,
+	readyAt *time.Time,
+	contextWindowSetting *int64,
 ) (PendingInput, error) {
 	normalizedMode := normalizePendingInputMode(mode)
 	if normalizedMode == "" {
@@ -388,11 +429,12 @@ func (m *Manager) queuePendingInputWithReadyAt(
 	}
 	sanitizedAttachmentIDs := sanitizePendingAttachmentIDs(attachmentIDs)
 	item := PendingInput{
-		ID:            normalizedPendingID,
-		Mode:          normalizedMode,
-		Text:          strings.TrimSpace(text),
-		AttachmentIDs: sanitizedAttachmentIDs,
-		CreatedAt:     time.Now(),
+		ID:                   normalizedPendingID,
+		Mode:                 normalizedMode,
+		Text:                 strings.TrimSpace(text),
+		AttachmentIDs:        sanitizedAttachmentIDs,
+		CreatedAt:            time.Now(),
+		contextWindowSetting: cloneOptionalInt64(contextWindowSetting),
 	}
 	if readyAt != nil {
 		value := *readyAt
@@ -446,7 +488,12 @@ func (m *Manager) sendMessageWithModeResult(
 	attachmentIDs []string,
 	mode PendingInputMode,
 	pendingID string,
+	contextWindowSettings ...*int64,
 ) (sendMessageModeResult, error) {
+	var contextWindowSetting *int64
+	if len(contextWindowSettings) > 0 {
+		contextWindowSetting = contextWindowSettings[0]
+	}
 	normalizedMode := normalizePendingInputMode(mode)
 	record, err := m.GetSession(ctx, sessionID)
 	if err != nil {
@@ -463,35 +510,41 @@ func (m *Manager) sendMessageWithModeResult(
 		run := m.runs[sessionID]
 		m.mu.RUnlock()
 		if run != nil {
-			_, err := m.queuePendingInput(
+			_, err := m.queuePendingInputWithContextWindow(
 				sessionID,
 				text,
 				attachmentIDs,
 				normalizedMode,
 				pendingID,
+				contextWindowSetting,
 			)
 			return sendMessageModeResult{Pending: true}, err
 		}
 	}
 	if normalizedMode != "" && (m.hasActiveRun(sessionID) || autoRetryDefersPending(record)) {
-		_, err := m.queuePendingInput(
+		_, err := m.queuePendingInputWithContextWindow(
 			sessionID,
 			text,
 			attachmentIDs,
 			normalizedMode,
 			pendingID,
+			contextWindowSetting,
 		)
 		return sendMessageModeResult{Pending: true}, err
 	}
 
-	err = m.sendMessageInternal(ctx, sessionID, text, attachmentIDs, sendMessageOptions{updateAutoTitle: true})
+	err = m.sendMessageInternal(ctx, sessionID, text, attachmentIDs, sendMessageOptions{
+		updateAutoTitle:      true,
+		contextWindowSetting: contextWindowSetting,
+	})
 	if normalizedMode != "" && err != nil && strings.Contains(strings.ToLower(err.Error()), "already running") {
-		_, queueErr := m.queuePendingInput(
+		_, queueErr := m.queuePendingInputWithContextWindow(
 			sessionID,
 			text,
 			attachmentIDs,
 			normalizedMode,
 			pendingID,
+			contextWindowSetting,
 		)
 		return sendMessageModeResult{Pending: true}, queueErr
 	}
@@ -506,7 +559,28 @@ func (m *Manager) sendMessageWithMode(
 	mode PendingInputMode,
 	pendingID string,
 ) error {
-	_, err := m.sendMessageWithModeResult(ctx, sessionID, text, attachmentIDs, mode, pendingID)
+	_, err := m.sendMessageWithModeResult(ctx, sessionID, text, attachmentIDs, mode, pendingID, nil)
+	return err
+}
+
+func (m *Manager) sendMessageWithModeAndContextWindow(
+	ctx context.Context,
+	sessionID string,
+	text string,
+	attachmentIDs []string,
+	mode PendingInputMode,
+	pendingID string,
+	contextWindowSetting *int64,
+) error {
+	_, err := m.sendMessageWithModeResult(
+		ctx,
+		sessionID,
+		text,
+		attachmentIDs,
+		mode,
+		pendingID,
+		contextWindowSetting,
+	)
 	return err
 }
 
@@ -1189,8 +1263,9 @@ func (m *Manager) runPendingProcessor(sessionID string) {
 		m.broadcastPendingInputs(sessionID)
 
 		if err := m.sendMessageInternal(ctx, sessionID, next.Text, next.AttachmentIDs, sendMessageOptions{
-			updateAutoTitle: true,
-			userMessageID:   next.ID,
+			updateAutoTitle:      true,
+			userMessageID:        next.ID,
+			contextWindowSetting: next.contextWindowSetting,
 		}); err != nil {
 			m.prependPendingInput(sessionID, next)
 			m.broadcastPendingInputs(sessionID)

@@ -87,6 +87,79 @@ func TestScheduleInputIncludesScheduledInputsInSnapshot(t *testing.T) {
 	}
 }
 
+func TestScheduledInputLocksContextWindowSnapshot(t *testing.T) {
+	cleanup := initTestDB(t)
+	defer cleanup()
+
+	project := seedProject(t)
+	manager, err := NewManager(Config{
+		DataDir:   t.TempDir(),
+		CodexPath: writeFakeCodexAppServerCLI(t, "basic"),
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+	ctx := context.Background()
+	created, err := manager.CreateSession(ctx, CreateParams{
+		ProjectID:            project.ID,
+		Agent:                AgentCodex,
+		ContextWindowSetting: ptr(int64(512000)),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession returned error: %v", err)
+	}
+
+	item, err := manager.ScheduleInput(ctx, created.ID, "Locked window", nil, ScheduledInputModeSend, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ScheduleInput returned error: %v", err)
+	}
+	manager.cancelScheduledInputTimer(item.ID)
+	if item.ContextWindowSettingSnapshot == nil || *item.ContextWindowSettingSnapshot != 512000 {
+		t.Fatalf("expected a 512000 context window snapshot, got %#v", item.ContextWindowSettingSnapshot)
+	}
+
+	if _, err := manager.UpdateContextWindowSetting(ctx, created.ID, 768000); err != nil {
+		t.Fatalf("UpdateContextWindowSetting returned error: %v", err)
+	}
+	if err := manager.DispatchScheduledInputNow(ctx, created.ID, item.ID); err != nil {
+		t.Fatalf("DispatchScheduledInputNow returned error: %v", err)
+	}
+	waitForSessionToSettle(t, manager, created.ID)
+	record, err := manager.GetSession(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetSession returned error: %v", err)
+	}
+	if record.ContextWindowSetting != 768000 {
+		t.Fatalf("expected live context window setting 768000, got %d", record.ContextWindowSetting)
+	}
+	if record.AppliedContextWindowSetting == nil || *record.AppliedContextWindowSetting != 512000 {
+		t.Fatalf("expected scheduled run to apply locked 512000 setting, got %#v", record.AppliedContextWindowSetting)
+	}
+
+	updated, err := manager.ScheduleInput(ctx, created.ID, "Refresh snapshot", nil, ScheduledInputModeSend, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ScheduleInput (refresh) returned error: %v", err)
+	}
+	manager.cancelScheduledInputTimer(updated.ID)
+	if updated.ContextWindowSettingSnapshot == nil || *updated.ContextWindowSettingSnapshot != 768000 {
+		t.Fatalf("expected new schedule to snapshot 768000, got %#v", updated.ContextWindowSettingSnapshot)
+	}
+	if _, err := manager.UpdateContextWindowSetting(ctx, created.ID, 1000000); err != nil {
+		t.Fatalf("UpdateContextWindowSetting (before reschedule) returned error: %v", err)
+	}
+	newTime := time.Now().Add(2 * time.Hour)
+	rescheduled, err := manager.UpdateScheduledInput(ctx, created.ID, updated.ID, scheduledInputUpdate{
+		ScheduledFor: newTime,
+	})
+	if err != nil {
+		t.Fatalf("UpdateScheduledInput returned error: %v", err)
+	}
+	defer manager.cancelScheduledInputTimer(rescheduled.ID)
+	if rescheduled.ContextWindowSettingSnapshot == nil || *rescheduled.ContextWindowSettingSnapshot != 768000 {
+		t.Fatalf("expected edited schedule to retain original locked 768000 setting, got %#v", rescheduled.ContextWindowSettingSnapshot)
+	}
+}
+
 func TestScheduledInputDispatchesAtDueTime(t *testing.T) {
 	cleanup := initTestDB(t)
 	defer cleanup()

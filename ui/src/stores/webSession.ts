@@ -169,6 +169,7 @@ type WireScheduledInput = {
   dst?: string;
   a?: 'message' | 'execute_plan' | string;
   tid?: string;
+  cws?: number | null;
   m?: 'send' | 'interrupt' | 'redirect' | 'queue' | string;
   epm?: boolean;
   st?: 'scheduled' | 'failed' | 'expired' | 'dispatched' | 'canceled' | string;
@@ -638,6 +639,7 @@ export interface WebSessionScheduledInput {
     | 'missing';
   action: 'message' | 'execute_plan';
   targetId: string;
+  contextWindowSettingSnapshot?: number | null;
   mode: 'send' | 'interrupt' | 'queue';
   exitPlanMode: boolean;
   status: 'scheduled' | 'failed' | 'expired';
@@ -3411,6 +3413,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
     dependencyStatus?: string;
     action?: 'message' | 'execute_plan' | string;
     targetId?: string;
+    contextWindowSettingSnapshot?: number | null;
     mode?: 'send' | 'interrupt' | 'redirect' | 'queue' | string;
     exitPlanMode?: boolean;
     status?: 'scheduled' | 'failed' | 'expired' | 'dispatched' | 'canceled' | string;
@@ -3506,6 +3509,11 @@ export const useWebSessionStore = defineStore('web-session', () => {
       typeof item.canceledAt === 'number'
         ? item.canceledAt
         : Date.parse(typeof item.canceledAt === 'string' ? item.canceledAt : '');
+    const contextWindowSettingSnapshot =
+      typeof item.contextWindowSettingSnapshot === 'number' &&
+      Number.isFinite(item.contextWindowSettingSnapshot)
+        ? item.contextWindowSettingSnapshot
+        : undefined;
     return {
       id,
       dependsOnId,
@@ -3533,6 +3541,9 @@ export const useWebSessionStore = defineStore('web-session', () => {
           : Date.now(),
       sentAt: Number.isFinite(sentAt) ? sentAt : null,
       canceledAt: Number.isFinite(canceledAt) ? canceledAt : null,
+      ...(contextWindowSettingSnapshot !== undefined
+        ? { contextWindowSettingSnapshot }
+        : {}),
     };
   }
 
@@ -5582,6 +5593,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
                     dependencyStatus: item.dst,
                     action: item.a,
                     targetId: item.tid,
+                    contextWindowSettingSnapshot: item.cws,
                     mode: item.m,
                     exitPlanMode: item.epm,
                     status: item.st,
@@ -7475,6 +7487,8 @@ export const useWebSessionStore = defineStore('web-session', () => {
         typeof payload?.dst === 'string' ? payload.dst : options.dependsOnId ? 'waiting' : 'none',
       action: typeof payload?.a === 'string' ? payload.a : 'message',
       targetId: typeof payload?.tid === 'string' ? payload.tid : '',
+      contextWindowSettingSnapshot:
+        typeof payload?.cws === 'number' ? payload.cws : null,
       mode: typeof payload?.m === 'string' ? payload.m : '',
       exitPlanMode: typeof payload?.epm === 'boolean' ? payload.epm : options.exitPlanMode === true,
       status: typeof payload?.st === 'string' ? payload.st : '',
@@ -7548,6 +7562,8 @@ export const useWebSessionStore = defineStore('web-session', () => {
         typeof payload?.dst === 'string' ? payload.dst : options.dependsOnId ? 'waiting' : 'none',
       action: typeof payload?.a === 'string' ? payload.a : 'execute_plan',
       targetId: typeof payload?.tid === 'string' ? payload.tid : target.planItemId,
+      contextWindowSettingSnapshot:
+        typeof payload?.cws === 'number' ? payload.cws : null,
       mode: typeof payload?.m === 'string' ? payload.m : 'send',
       status: typeof payload?.st === 'string' ? payload.st : '',
       lastError: typeof payload?.err === 'string' ? payload.err : '',
@@ -7629,6 +7645,10 @@ export const useWebSessionStore = defineStore('web-session', () => {
             : current.dependencyStatus,
       action: typeof payload?.a === 'string' ? payload.a : current.action,
       targetId: typeof payload?.tid === 'string' ? payload.tid : current.targetId,
+      contextWindowSettingSnapshot:
+        typeof payload?.cws === 'number'
+          ? payload.cws
+          : (current.contextWindowSettingSnapshot ?? null),
       mode: typeof payload?.m === 'string' ? payload.m : (update.mode ?? current.mode),
       exitPlanMode:
         typeof payload?.epm === 'boolean'

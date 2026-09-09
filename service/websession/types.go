@@ -512,31 +512,33 @@ type PendingInput struct {
 	LastErrorCode string             `json:"lastErrorCode,omitempty"`
 	CreatedAt     time.Time          `json:"createdAt"`
 
-	codexMessageID    string
-	codexSteerReceipt *codexSteerReceipt
+	contextWindowSetting *int64
+	codexMessageID       string
+	codexSteerReceipt    *codexSteerReceipt
 }
 
 type ScheduledInput struct {
-	ID               string                         `json:"id"`
-	DependsOnID      string                         `json:"dependsOnId,omitempty"`
-	DependencyStatus ScheduledInputDependencyStatus `json:"dependencyStatus"`
-	Action           ScheduledInputAction           `json:"action"`
-	TargetID         string                         `json:"targetId,omitempty"`
-	Mode             ScheduledInputMode             `json:"mode"`
-	ExitPlanMode     bool                           `json:"exitPlanMode,omitempty"`
-	Text             string                         `json:"text"`
-	AttachmentIDs    []string                       `json:"attachmentIds"`
-	ScheduleKind     ScheduledInputScheduleKind     `json:"scheduleKind"`
-	ScheduledFor     *time.Time                     `json:"scheduledFor"`
-	IdleSince        *time.Time                     `json:"idleSince,omitempty"`
-	BlockingReasons  []ScheduledInputBlockingReason `json:"blockingReasons"`
-	ConditionError   string                         `json:"conditionError,omitempty"`
-	Status           ScheduledInputStatus           `json:"status"`
-	LastError        string                         `json:"lastError,omitempty"`
-	CreatedAt        time.Time                      `json:"createdAt"`
-	UpdatedAt        time.Time                      `json:"updatedAt"`
-	SentAt           *time.Time                     `json:"sentAt,omitempty"`
-	CanceledAt       *time.Time                     `json:"canceledAt,omitempty"`
+	ID                           string                         `json:"id"`
+	DependsOnID                  string                         `json:"dependsOnId,omitempty"`
+	DependencyStatus             ScheduledInputDependencyStatus `json:"dependencyStatus"`
+	Action                       ScheduledInputAction           `json:"action"`
+	TargetID                     string                         `json:"targetId,omitempty"`
+	ContextWindowSettingSnapshot *int64                         `json:"contextWindowSettingSnapshot,omitempty"`
+	Mode                         ScheduledInputMode             `json:"mode"`
+	ExitPlanMode                 bool                           `json:"exitPlanMode,omitempty"`
+	Text                         string                         `json:"text"`
+	AttachmentIDs                []string                       `json:"attachmentIds"`
+	ScheduleKind                 ScheduledInputScheduleKind     `json:"scheduleKind"`
+	ScheduledFor                 *time.Time                     `json:"scheduledFor"`
+	IdleSince                    *time.Time                     `json:"idleSince,omitempty"`
+	BlockingReasons              []ScheduledInputBlockingReason `json:"blockingReasons"`
+	ConditionError               string                         `json:"conditionError,omitempty"`
+	Status                       ScheduledInputStatus           `json:"status"`
+	LastError                    string                         `json:"lastError,omitempty"`
+	CreatedAt                    time.Time                      `json:"createdAt"`
+	UpdatedAt                    time.Time                      `json:"updatedAt"`
+	SentAt                       *time.Time                     `json:"sentAt,omitempty"`
+	CanceledAt                   *time.Time                     `json:"canceledAt,omitempty"`
 }
 
 type PendingUserInput struct {

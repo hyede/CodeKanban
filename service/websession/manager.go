@@ -4233,6 +4233,7 @@ func (m *Manager) handleSendCommand(ctx context.Context, client *client, frame w
 		payload.Attachments,
 		PendingInputMode(payload.Mode),
 		payload.PendingID,
+		nil,
 	)
 	if err != nil {
 		if errors.Is(err, ErrCodexRunDrainTimeout) {
@@ -4330,7 +4331,8 @@ func (m *Manager) CompactSession(ctx context.Context, sessionID string) error {
 	runCtx, cancel := context.WithCancel(context.Background())
 	run := &activeRun{
 		sessionID: sessionID, projectID: record.ProjectID, agent: AgentPi, backend: SessionBackendPiRPC,
-		runID: runID, cancel: cancel, done: make(chan struct{}), piCompaction: true,
+		contextWindowSetting: record.ContextWindowSetting,
+		runID:                runID, cancel: cancel, done: make(chan struct{}), piCompaction: true,
 	}
 	m.mu.Lock()
 	delete(m.codexTerminationRequests, sessionID)
@@ -4428,6 +4430,7 @@ func (m *Manager) startHiddenSessionRun(
 		projectID:              record.ProjectID,
 		agent:                  Agent(record.Agent),
 		backend:                effectiveSessionBackend(record),
+		contextWindowSetting:   record.ContextWindowSetting,
 		runID:                  runID,
 		cancel:                 cancel,
 		done:                   make(chan struct{}),
@@ -4525,6 +4528,15 @@ func (m *Manager) sendMessageInternal(
 		}
 		record = refreshed
 	}
+	if options.contextWindowSetting != nil {
+		if normalizeAgent(Agent(record.Agent)) != AgentCodex {
+			return fmt.Errorf("context window setting is only supported for Codex")
+		}
+		if !validContextWindowSetting(*options.contextWindowSetting) {
+			return fmt.Errorf("invalid context window setting")
+		}
+		record.ContextWindowSetting = *options.contextWindowSetting
+	}
 
 	defaultAutoRetryUpdates := map[string]any(nil)
 	if !options.fromAutoRetry {
@@ -4620,14 +4632,15 @@ func (m *Manager) sendMessageInternal(
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	run := &activeRun{
-		sessionID:     sessionID,
-		projectID:     record.ProjectID,
-		agent:         Agent(record.Agent),
-		backend:       effectiveSessionBackend(record),
-		runID:         runID,
-		fromAutoRetry: options.fromAutoRetry,
-		cancel:        cancel,
-		done:          make(chan struct{}),
+		sessionID:            sessionID,
+		projectID:            record.ProjectID,
+		agent:                Agent(record.Agent),
+		backend:              effectiveSessionBackend(record),
+		contextWindowSetting: record.ContextWindowSetting,
+		runID:                runID,
+		fromAutoRetry:        options.fromAutoRetry,
+		cancel:               cancel,
+		done:                 make(chan struct{}),
 	}
 
 	m.mu.Lock()
@@ -4643,11 +4656,12 @@ func (m *Manager) sendMessageInternal(
 }
 
 type sendMessageOptions struct {
-	fromAutoRetry      bool
-	continueWorkTiming bool
-	updateAutoTitle    bool
-	userMessageID      string
-	freshCodexContext  bool
+	fromAutoRetry        bool
+	continueWorkTiming   bool
+	updateAutoTitle      bool
+	userMessageID        string
+	freshCodexContext    bool
+	contextWindowSetting *int64
 }
 
 func (m *Manager) resetCodexContextForFreshSend(ctx context.Context, record tables.WebSessionTable) error {

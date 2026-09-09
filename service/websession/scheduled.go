@@ -280,6 +280,22 @@ func marshalScheduledMessagePayload(payload scheduledMessagePayload) string {
 	return string(encoded)
 }
 
+func scheduledContextWindowSnapshot(session tables.WebSessionTable) *int64 {
+	if normalizeAgent(Agent(session.Agent)) != AgentCodex {
+		return nil
+	}
+	value := session.ContextWindowSetting
+	return &value
+}
+
+func cloneOptionalInt64(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
 func mapScheduledInputRecord(record tables.WebSessionScheduledInputTable) ScheduledInput {
 	scheduleKind := normalizeScheduledInputScheduleKind(ScheduledInputScheduleKind(record.ScheduleKind))
 	dependencyStatus := ScheduledInputDependencyNone
@@ -293,26 +309,27 @@ func mapScheduledInputRecord(record tables.WebSessionScheduledInputTable) Schedu
 		scheduledFor = &value
 	}
 	return ScheduledInput{
-		ID:               strings.TrimSpace(record.ID),
-		DependsOnID:      strings.TrimSpace(record.DependsOnID),
-		DependencyStatus: dependencyStatus,
-		Action:           normalizeScheduledInputAction(ScheduledInputAction(record.Action)),
-		TargetID:         strings.TrimSpace(record.TargetID),
-		Mode:             normalizeScheduledInputMode(ScheduledInputMode(record.Mode)),
-		ExitPlanMode:     messagePayload.ExitPlanMode,
-		Text:             record.Text,
-		AttachmentIDs:    parseScheduledInputAttachmentIDs(record.AttachmentIDsJSON),
-		ScheduleKind:     scheduleKind,
-		ScheduledFor:     scheduledFor,
-		IdleSince:        record.IdleSince,
-		BlockingReasons:  parseScheduledInputBlockingReasons(record.BlockingReasons),
-		ConditionError:   strings.TrimSpace(record.ConditionError),
-		Status:           normalizeScheduledInputStatus(ScheduledInputStatus(record.Status)),
-		LastError:        strings.TrimSpace(record.LastError),
-		CreatedAt:        record.CreatedAt,
-		UpdatedAt:        record.UpdatedAt,
-		SentAt:           record.SentAt,
-		CanceledAt:       record.CanceledAt,
+		ID:                           strings.TrimSpace(record.ID),
+		DependsOnID:                  strings.TrimSpace(record.DependsOnID),
+		DependencyStatus:             dependencyStatus,
+		Action:                       normalizeScheduledInputAction(ScheduledInputAction(record.Action)),
+		TargetID:                     strings.TrimSpace(record.TargetID),
+		ContextWindowSettingSnapshot: cloneOptionalInt64(record.ContextWindowSettingSnapshot),
+		Mode:                         normalizeScheduledInputMode(ScheduledInputMode(record.Mode)),
+		ExitPlanMode:                 messagePayload.ExitPlanMode,
+		Text:                         record.Text,
+		AttachmentIDs:                parseScheduledInputAttachmentIDs(record.AttachmentIDsJSON),
+		ScheduleKind:                 scheduleKind,
+		ScheduledFor:                 scheduledFor,
+		IdleSince:                    record.IdleSince,
+		BlockingReasons:              parseScheduledInputBlockingReasons(record.BlockingReasons),
+		ConditionError:               strings.TrimSpace(record.ConditionError),
+		Status:                       normalizeScheduledInputStatus(ScheduledInputStatus(record.Status)),
+		LastError:                    strings.TrimSpace(record.LastError),
+		CreatedAt:                    record.CreatedAt,
+		UpdatedAt:                    record.UpdatedAt,
+		SentAt:                       record.SentAt,
+		CanceledAt:                   record.CanceledAt,
 	}
 }
 
@@ -657,9 +674,10 @@ func (m *Manager) scheduleInput(
 		scheduledForValue = time.Now()
 	}
 	item := tables.WebSessionScheduledInputTable{
-		WebSessionID: record.ID,
-		DependsOnID:  strings.TrimSpace(dependsOnID),
-		Action:       string(ScheduledInputActionMessage),
+		WebSessionID:                 record.ID,
+		DependsOnID:                  strings.TrimSpace(dependsOnID),
+		Action:                       string(ScheduledInputActionMessage),
+		ContextWindowSettingSnapshot: scheduledContextWindowSnapshot(record),
 		PayloadJSON: marshalScheduledMessagePayload(scheduledMessagePayload{
 			ExitPlanMode: exitPlanMode,
 		}),
@@ -952,18 +970,19 @@ func (m *Manager) schedulePlanExecution(
 		scheduledForValue = time.Now()
 	}
 	item := tables.WebSessionScheduledInputTable{
-		WebSessionID:      session.ID,
-		DependsOnID:       strings.TrimSpace(dependsOnID),
-		Action:            string(ScheduledInputActionExecutePlan),
-		TargetID:          strings.TrimSpace(targetID),
-		PayloadJSON:       marshalScheduledPlanExecutionPayload(payload),
-		Mode:              string(ScheduledInputModeSend),
-		Text:              "Implement the plan.",
-		AttachmentIDsJSON: "[]",
-		ScheduleKind:      string(normalizedScheduleKind),
-		ScheduledFor:      scheduledForValue,
-		BlockingReasons:   "[]",
-		Status:            string(ScheduledInputStatusScheduled),
+		WebSessionID:                 session.ID,
+		DependsOnID:                  strings.TrimSpace(dependsOnID),
+		Action:                       string(ScheduledInputActionExecutePlan),
+		TargetID:                     strings.TrimSpace(targetID),
+		ContextWindowSettingSnapshot: scheduledContextWindowSnapshot(session),
+		PayloadJSON:                  marshalScheduledPlanExecutionPayload(payload),
+		Mode:                         string(ScheduledInputModeSend),
+		Text:                         "Implement the plan.",
+		AttachmentIDsJSON:            "[]",
+		ScheduleKind:                 string(normalizedScheduleKind),
+		ScheduledFor:                 scheduledForValue,
+		BlockingReasons:              "[]",
+		Status:                       string(ScheduledInputStatusScheduled),
 	}
 	item.Init()
 	normalizedDependencyID, err := validateScheduledInputDependency(
@@ -1076,6 +1095,11 @@ func (m *Manager) UpdateScheduledInput(
 			"canceled_at":           nil,
 			"updated_at":            time.Now(),
 		}
+		contextWindowSnapshot := record.ContextWindowSettingSnapshot
+		if contextWindowSnapshot == nil {
+			contextWindowSnapshot = scheduledContextWindowSnapshot(session)
+		}
+		updates["context_window_setting_snapshot"] = contextWindowSnapshot
 		switch action {
 		case ScheduledInputActionMessage:
 			normalizedText := strings.TrimSpace(record.Text)
@@ -1963,6 +1987,7 @@ func (m *Manager) dispatchScheduledInputRecord(
 			record.Text,
 			attachmentIDs,
 			exitPlanModeApplied,
+			record.ContextWindowSettingSnapshot,
 		)
 	default:
 		err = errInvalidScheduledInputAction
@@ -2090,7 +2115,9 @@ func (m *Manager) dispatchScheduledPlanExecution(
 			payload.QuestionID: {payload.ExecuteOptionLabel},
 		})
 	}
-	return m.sendMessageInternal(ctx, session.ID, "Implement the plan.", nil, sendMessageOptions{})
+	return m.sendMessageInternal(ctx, session.ID, "Implement the plan.", nil, sendMessageOptions{
+		contextWindowSetting: cloneOptionalInt64(record.ContextWindowSettingSnapshot),
+	})
 }
 
 func shouldCancelScheduledInputDispatchError(err error) bool {
@@ -2111,30 +2138,52 @@ func (m *Manager) dispatchScheduledInput(
 	text string,
 	attachmentIDs []string,
 	preventSteer bool,
+	contextWindowSettings ...*int64,
 ) error {
+	var contextWindowSetting *int64
+	if len(contextWindowSettings) > 0 {
+		contextWindowSetting = contextWindowSettings[0]
+	}
 	switch normalizeScheduledInputMode(mode) {
 	case ScheduledInputModeSend:
 		if m.hasActiveRun(sessionID) {
-			if preventSteer {
-				return m.sendMessageWithMode(ctx, sessionID, text, attachmentIDs, PendingInputModeQueue, "")
+			// A steer cannot change the context window of an already-started thread.
+			if preventSteer || !m.activeCodexRunUsesContextWindow(sessionID, contextWindowSetting) {
+				return m.sendMessageWithModeAndContextWindow(ctx, sessionID, text, attachmentIDs, PendingInputModeQueue, "", contextWindowSetting)
 			}
-			return m.sendMessageWithMode(ctx, sessionID, text, attachmentIDs, PendingInputModeRedirect, "")
+			return m.sendMessageWithModeAndContextWindow(ctx, sessionID, text, attachmentIDs, PendingInputModeRedirect, "", contextWindowSetting)
 		}
-		err := m.sendMessageInternal(ctx, sessionID, text, attachmentIDs, sendMessageOptions{updateAutoTitle: true})
+		err := m.sendMessageInternal(ctx, sessionID, text, attachmentIDs, sendMessageOptions{
+			updateAutoTitle:      true,
+			contextWindowSetting: contextWindowSetting,
+		})
 		if err != nil && strings.Contains(strings.ToLower(err.Error()), "already running") {
-			if preventSteer {
-				return m.sendMessageWithMode(ctx, sessionID, text, attachmentIDs, PendingInputModeQueue, "")
+			if preventSteer || !m.activeCodexRunUsesContextWindow(sessionID, contextWindowSetting) {
+				return m.sendMessageWithModeAndContextWindow(ctx, sessionID, text, attachmentIDs, PendingInputModeQueue, "", contextWindowSetting)
 			}
-			return m.sendMessageWithMode(ctx, sessionID, text, attachmentIDs, PendingInputModeRedirect, "")
+			return m.sendMessageWithModeAndContextWindow(ctx, sessionID, text, attachmentIDs, PendingInputModeRedirect, "", contextWindowSetting)
 		}
 		return err
 	case ScheduledInputModeInterrupt:
-		return m.sendMessageAfterInterrupt(ctx, sessionID, text, attachmentIDs)
+		return m.sendMessageAfterInterrupt(ctx, sessionID, text, attachmentIDs, contextWindowSetting)
 	case ScheduledInputModeQueue:
-		return m.sendMessageWithMode(ctx, sessionID, text, attachmentIDs, PendingInputModeQueue, "")
+		return m.sendMessageWithModeAndContextWindow(ctx, sessionID, text, attachmentIDs, PendingInputModeQueue, "", contextWindowSetting)
 	default:
 		return errInvalidScheduledInputMode
 	}
+}
+
+func (m *Manager) activeCodexRunUsesContextWindow(sessionID string, contextWindowSetting *int64) bool {
+	if contextWindowSetting == nil {
+		return true
+	}
+	m.mu.RLock()
+	run := m.runs[sessionID]
+	m.mu.RUnlock()
+	if run == nil || normalizeAgent(run.agent) != AgentCodex || run.backend != SessionBackendCodexAppServer {
+		return true
+	}
+	return run.contextWindowSetting == *contextWindowSetting
 }
 
 func (m *Manager) sendMessageAfterInterrupt(
@@ -2142,18 +2191,29 @@ func (m *Manager) sendMessageAfterInterrupt(
 	sessionID string,
 	text string,
 	attachmentIDs []string,
+	contextWindowSettings ...*int64,
 ) error {
+	var contextWindowSetting *int64
+	if len(contextWindowSettings) > 0 {
+		contextWindowSetting = contextWindowSettings[0]
+	}
 	if err := m.stopRunIfActive(sessionID, 5*time.Second); err != nil {
 		return err
 	}
-	err := m.sendMessageInternal(ctx, sessionID, text, attachmentIDs, sendMessageOptions{updateAutoTitle: true})
+	err := m.sendMessageInternal(ctx, sessionID, text, attachmentIDs, sendMessageOptions{
+		updateAutoTitle:      true,
+		contextWindowSetting: contextWindowSetting,
+	})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "already running") {
 		return err
 	}
 	if err := m.stopRunIfActive(sessionID, 5*time.Second); err != nil {
 		return err
 	}
-	return m.sendMessageInternal(ctx, sessionID, text, attachmentIDs, sendMessageOptions{updateAutoTitle: true})
+	return m.sendMessageInternal(ctx, sessionID, text, attachmentIDs, sendMessageOptions{
+		updateAutoTitle:      true,
+		contextWindowSetting: contextWindowSetting,
+	})
 }
 
 func (m *Manager) markScheduledInputDispatched(ctx context.Context, inputID string) error {

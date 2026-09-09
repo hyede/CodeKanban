@@ -312,6 +312,7 @@ export type WebSessionScheduledInputRecord = {
     | string;
   action?: 'message' | 'execute_plan' | string;
   targetId?: string;
+  contextWindowSettingSnapshot?: number | null;
   mode?: 'send' | 'interrupt' | 'redirect' | 'queue' | string;
   exitPlanMode?: boolean;
   status?: 'scheduled' | 'failed' | 'expired' | 'dispatched' | 'canceled' | string;
