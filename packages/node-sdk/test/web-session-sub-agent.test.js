@@ -18,7 +18,8 @@ function sampleWireSession() {
     pl: "elevated",
     ttl: "Delegate work",
     cwd: "/repo/demo",
-    st: "running",
+      st: "running",
+      act: true,
     unr: false,
     act: 1785067200000,
     ca: 1785067200000,
@@ -132,6 +133,7 @@ test("analysis excludes the native root and does not count reusable idle threads
       {
         threadId: "thread-working",
         status: "running",
+        active: true,
         currentTurnId: "turn-working",
       },
       {
@@ -152,4 +154,32 @@ test("analysis excludes the native root and does not count reusable idle threads
     state.activeSubAgents.map((agent) => agent.threadId),
     ["thread-working"],
   );
+});
+
+test("analysis preserves started agents without a child turn id and aggregates usage", () => {
+  const state = analyzeWebSession({
+    session: {
+      nativeSessionId: "thread-root",
+      usage: { inputTokens: 10, cachedInputTokens: 2, outputTokens: 3, cost: 0.5 },
+    },
+    subAgents: [
+      {
+        threadId: "thread-started",
+        status: "running",
+        active: true,
+        inputTokens: 100,
+        cachedInputTokens: 20,
+        outputTokens: 30,
+      },
+    ],
+  });
+
+  assert.deepEqual(state.activeSubAgents.map((agent) => agent.threadId), ["thread-started"]);
+  assert.deepEqual(state.sessionUsage, {
+    inputTokens: 110,
+    cachedInputTokens: 22,
+    outputTokens: 33,
+    totalTokens: 143,
+    cost: 0.5,
+  });
 });

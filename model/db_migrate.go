@@ -61,6 +61,15 @@ func DBMigrate(autoMigrate bool) {
 		)
 	}
 
+	if backfilledRows, err := backfillWebSessionSubAgentActive(); err != nil {
+		logger.Error("web session sub-agent active state backfill failed", zap.Error(err))
+		panic(err)
+	} else if backfilledRows > 0 {
+		logger.Info("web session sub-agent active states backfilled",
+			zap.Int64("rowCount", backfilledRows),
+		)
+	}
+
 	if backfilledRows, err := backfillScheduledInputContextWindowSnapshots(); err != nil {
 		logger.Error("scheduled input context window snapshots backfill failed", zap.Error(err))
 		panic(err)
@@ -71,6 +80,22 @@ func DBMigrate(autoMigrate bool) {
 	}
 
 	logger.Info("database migration finished")
+}
+
+func backfillWebSessionSubAgentActive() (int64, error) {
+	if db == nil {
+		return 0, ErrDBNotInitialized
+	}
+	result := db.Exec(`
+		UPDATE web_session_sub_agents
+		SET is_active = CASE
+			WHEN status IN ('pending_init', 'running') THEN 1
+			ELSE 0
+		END
+		WHERE is_active = 0
+		  AND status IN ('pending_init', 'running')
+	`)
+	return result.RowsAffected, result.Error
 }
 
 func backfillWebSessionItemCommandGroupIDs() (int64, error) {

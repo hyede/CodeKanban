@@ -5235,6 +5235,37 @@ func TestCodexV2SubAgentActivityUpdatesRegistryAndHistory(t *testing.T) {
 	}
 
 	_, err = manager.handleCodexAppServerMessage(*session, run, nil, rootScope, codexAppServerIncoming{
+		Method: "thread/tokenUsage/updated",
+		Params: func() json.RawMessage {
+			encoded, marshalErr := json.Marshal(map[string]any{
+				"threadId": "thread_child",
+				"turnId":   "turn_child",
+				"tokenUsage": map[string]any{
+					"total": map[string]any{
+						"input_tokens": 100, "cached_input_tokens": 20,
+						"output_tokens": 30, "total_tokens": 130,
+					},
+				},
+			})
+			if marshalErr != nil {
+				t.Fatalf("marshal child token usage: %v", marshalErr)
+			}
+			return encoded
+		}(),
+	})
+	if err != nil {
+		t.Fatalf("handle child token usage: %v", err)
+	}
+	agents, err = manager.sessionSubAgents(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("sessionSubAgents after child token usage: %v", err)
+	}
+	if len(agents) != 1 || !agents[0].Active || agents[0].InputTokens != 100 ||
+		agents[0].CachedInputTokens != 20 || agents[0].OutputTokens != 30 || agents[0].TotalTokens != 130 {
+		t.Fatalf("expected child usage and active state to be retained, got %#v", agents)
+	}
+
+	_, err = manager.handleCodexAppServerMessage(*session, run, nil, rootScope, codexAppServerIncoming{
 		Method: "item/completed",
 		Params: params("interrupted"),
 	})

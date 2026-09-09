@@ -139,6 +139,51 @@ func TestApplySubAgentPayloadClearsCompletedTurnWithoutEndingThread(t *testing.T
 	}
 }
 
+func TestApplySubAgentPayloadPreservesStartedActivityWithoutTurnIDAndUsage(t *testing.T) {
+	row := tables.WebSessionSubAgentTable{ThreadID: "thread-child", Status: string(WebSessionSubAgentPendingInit)}
+	eventTime := time.Date(2026, 9, 10, 1, 0, 0, 0, time.UTC)
+	applySubAgentPayload(&row, map[string]any{
+		"status": string(WebSessionSubAgentRunning),
+		"active": true,
+		"usage": map[string]any{
+			"input_tokens":        100,
+			"cached_input_tokens": 25,
+			"output_tokens":       40,
+			"total_tokens":        140,
+		},
+	}, Event{Timestamp: eventTime})
+	if !row.IsActive || row.Status != string(WebSessionSubAgentRunning) {
+		t.Fatalf("started activity without child turn must remain active, got %#v", row)
+	}
+	if row.InputTokens != 100 || row.CachedInputTokens != 25 || row.OutputTokens != 40 || row.TotalTokens != 140 {
+		t.Fatalf("unexpected child usage snapshot, got %#v", row)
+	}
+}
+
+func TestInteractedSubAgentActivityDoesNotReviveTerminalState(t *testing.T) {
+	running := tables.WebSessionSubAgentTable{
+		ThreadID: "thread-running",
+		Status:   string(WebSessionSubAgentRunning),
+		IsActive: true,
+	}
+	applySubAgentPayload(&running, map[string]any{"path": "review/atlas"}, Event{Timestamp: time.Now()})
+	if !running.IsActive || running.Status != string(WebSessionSubAgentRunning) {
+		t.Fatalf("interacted activity must preserve running state, got %#v", running)
+	}
+
+	endedAt := time.Date(2026, 9, 10, 1, 0, 0, 0, time.UTC)
+	row := tables.WebSessionSubAgentTable{
+		ThreadID: "thread-child",
+		Status:   string(WebSessionSubAgentCompleted),
+		IsActive: false,
+		EndedAt:  &endedAt,
+	}
+	applySubAgentPayload(&row, map[string]any{"active": false}, Event{Timestamp: endedAt.Add(time.Minute)})
+	if row.Status != string(WebSessionSubAgentCompleted) || row.IsActive || row.EndedAt == nil {
+		t.Fatalf("interacted activity must not revive terminal agent, got %#v", row)
+	}
+}
+
 func TestSessionSubAgentsFiltersNativeRootAndSelfParent(t *testing.T) {
 	cleanup := initTestDB(t)
 	defer cleanup()

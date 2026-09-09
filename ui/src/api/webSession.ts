@@ -355,7 +355,12 @@ export type WebSessionSubAgentRecord = {
     | 'shutdown'
     | 'not_found'
     | string;
+  active?: boolean;
   summary?: string;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
   currentTurnId?: string | null;
   latestItemId?: string | null;
   latestOrderIndex?: number;

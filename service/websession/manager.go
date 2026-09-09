@@ -8094,6 +8094,7 @@ func (m *Manager) recoverInterruptedSessions(ctx context.Context) error {
 			}).
 			Updates(map[string]any{
 				"status":           string(WebSessionSubAgentInterrupted),
+				"is_active":        false,
 				"current_turn_id":  nil,
 				"ended_at":         now,
 				"last_activity_at": now,

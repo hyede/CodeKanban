@@ -146,6 +146,15 @@
               tokens
             </span>
           </div>
+          <div v-if="sessionUsageWithSubAgents" class="context-usage-stat">
+            <span class="context-usage-stat__label">
+              {{ t('webSession.contextUsageSessionTotal') }}
+            </span>
+            <span class="context-usage-total-value">
+              {{ formatWebSessionTokenCount(sessionUsageWithSubAgents.totalTokens) }}
+              tokens
+            </span>
+          </div>
         </div>
 
         <div class="context-usage-divider"></div>
@@ -5631,6 +5640,26 @@ const subAgentByThreadId = computed(
   () => new Map(knownSubAgents.value.map(agent => [agent.id, agent] as const))
 );
 const hasKnownSubAgents = computed(() => knownSubAgents.value.length > 0);
+const sessionUsageWithSubAgents = computed(() => {
+  const rootUsage = currentRealSession.value?.usage;
+  if (!rootUsage) {
+    return null;
+  }
+  const usage = {
+    inputTokens: Math.max(0, Number(rootUsage.inputTokens || 0)),
+    cachedInputTokens: Math.max(0, Number(rootUsage.cachedInputTokens || 0)),
+    outputTokens: Math.max(0, Number(rootUsage.outputTokens || 0)),
+  };
+  for (const agent of knownSubAgents.value) {
+    usage.inputTokens += Math.max(0, Number(agent.inputTokens || 0));
+    usage.cachedInputTokens += Math.max(0, Number(agent.cachedInputTokens || 0));
+    usage.outputTokens += Math.max(0, Number(agent.outputTokens || 0));
+  }
+  return {
+    ...usage,
+    totalTokens: usage.inputTokens + usage.outputTokens,
+  };
+});
 
 function subAgentStatusLabel(status: WebSessionSubAgentStatus) {
   return t(`webSession.subAgentStatus.${status}`);

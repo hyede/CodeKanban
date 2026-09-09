@@ -636,19 +636,24 @@ const (
 )
 
 type WebSessionSubAgent struct {
-	ThreadID         string                   `json:"threadId"`
-	ParentThreadID   *string                  `json:"parentThreadId,omitempty"`
-	Path             string                   `json:"path,omitempty"`
-	Nickname         string                   `json:"nickname,omitempty"`
-	Role             string                   `json:"role,omitempty"`
-	Status           WebSessionSubAgentStatus `json:"status"`
-	Summary          string                   `json:"summary,omitempty"`
-	CurrentTurnID    *string                  `json:"currentTurnId,omitempty"`
-	LatestItemID     *string                  `json:"latestItemId,omitempty"`
-	LatestOrderIndex int64                    `json:"latestOrderIndex,omitempty"`
-	StartedAt        *time.Time               `json:"startedAt,omitempty"`
-	LastActivityAt   *time.Time               `json:"lastActivityAt,omitempty"`
-	EndedAt          *time.Time               `json:"endedAt,omitempty"`
+	ThreadID          string                   `json:"threadId"`
+	ParentThreadID    *string                  `json:"parentThreadId,omitempty"`
+	Path              string                   `json:"path,omitempty"`
+	Nickname          string                   `json:"nickname,omitempty"`
+	Role              string                   `json:"role,omitempty"`
+	Status            WebSessionSubAgentStatus `json:"status"`
+	Active            bool                     `json:"active"`
+	Summary           string                   `json:"summary,omitempty"`
+	InputTokens       int64                    `json:"inputTokens,omitempty"`
+	CachedInputTokens int64                    `json:"cachedInputTokens,omitempty"`
+	OutputTokens      int64                    `json:"outputTokens,omitempty"`
+	TotalTokens       int64                    `json:"totalTokens,omitempty"`
+	CurrentTurnID     *string                  `json:"currentTurnId,omitempty"`
+	LatestItemID      *string                  `json:"latestItemId,omitempty"`
+	LatestOrderIndex  int64                    `json:"latestOrderIndex,omitempty"`
+	StartedAt         *time.Time               `json:"startedAt,omitempty"`
+	LastActivityAt    *time.Time               `json:"lastActivityAt,omitempty"`
+	EndedAt           *time.Time               `json:"endedAt,omitempty"`
 }
 
 type ImportResult struct {

@@ -92,19 +92,24 @@ func mapWebSessionSubAgentRow(row tables.WebSessionSubAgentTable) WebSessionSubA
 		parentThreadID = nil
 	}
 	return WebSessionSubAgent{
-		ThreadID:         row.ThreadID,
-		ParentThreadID:   parentThreadID,
-		Path:             row.AgentPath,
-		Nickname:         row.Nickname,
-		Role:             row.Role,
-		Status:           normalizeWebSessionSubAgentStatus(row.Status),
-		Summary:          row.Summary,
-		CurrentTurnID:    row.CurrentTurnID,
-		LatestItemID:     row.LatestItemID,
-		LatestOrderIndex: row.LatestOrderIndex,
-		StartedAt:        row.StartedAt,
-		LastActivityAt:   row.LastActivityAt,
-		EndedAt:          row.EndedAt,
+		ThreadID:          row.ThreadID,
+		ParentThreadID:    parentThreadID,
+		Path:              row.AgentPath,
+		Nickname:          row.Nickname,
+		Role:              row.Role,
+		Status:            normalizeWebSessionSubAgentStatus(row.Status),
+		Active:            row.IsActive,
+		Summary:           row.Summary,
+		InputTokens:       row.InputTokens,
+		CachedInputTokens: row.CachedInputTokens,
+		OutputTokens:      row.OutputTokens,
+		TotalTokens:       row.TotalTokens,
+		CurrentTurnID:     row.CurrentTurnID,
+		LatestItemID:      row.LatestItemID,
+		LatestOrderIndex:  row.LatestOrderIndex,
+		StartedAt:         row.StartedAt,
+		LastActivityAt:    row.LastActivityAt,
+		EndedAt:           row.EndedAt,
 	}
 }
 
@@ -163,6 +168,22 @@ func applySubAgentPayload(row *tables.WebSessionSubAgentTable, payload map[strin
 	if value := strings.TrimSpace(stringValue(payload["summary"])); value != "" {
 		row.Summary = value
 	}
+	if value, ok := payload["active"].(bool); ok {
+		row.IsActive = value
+	}
+	usage := decodeRawObject(payload["usage"])
+	if value, ok := codexInt64Field(usage, "input_tokens", "inputTokens", "in"); ok {
+		row.InputTokens = value
+	}
+	if value, ok := codexInt64Field(usage, "cached_input_tokens", "cachedInputTokens", "cin"); ok {
+		row.CachedInputTokens = value
+	}
+	if value, ok := codexInt64Field(usage, "output_tokens", "outputTokens", "out"); ok {
+		row.OutputTokens = value
+	}
+	if value, ok := codexInt64Field(usage, "total_tokens", "totalTokens", "total"); ok {
+		row.TotalTokens = value
+	}
 	if value := strings.TrimSpace(stringValue(payload["latestItemId"])); value != "" {
 		row.LatestItemID = ptr(value)
 	}
@@ -180,9 +201,13 @@ func applySubAgentPayload(row *tables.WebSessionSubAgentTable, payload map[strin
 	if status != "" {
 		row.Status = string(status)
 		if webSessionSubAgentIsTerminal(status) {
+			row.IsActive = false
 			endedAt := event.Timestamp
 			row.EndedAt = &endedAt
+		} else if status == WebSessionSubAgentIdle {
+			row.IsActive = false
 		} else {
+			row.IsActive = true
 			row.EndedAt = nil
 		}
 	} else {
@@ -347,7 +372,12 @@ func (m *Manager) replaceSessionSubAgents(
 			} else if row.Status == "" {
 				row.Status = string(WebSessionSubAgentPendingInit)
 			}
+			row.IsActive = agent.Active
 			row.Summary = strings.TrimSpace(agent.Summary)
+			row.InputTokens = maxInt64(0, agent.InputTokens)
+			row.CachedInputTokens = maxInt64(0, agent.CachedInputTokens)
+			row.OutputTokens = maxInt64(0, agent.OutputTokens)
+			row.TotalTokens = maxInt64(0, agent.TotalTokens)
 			row.CurrentTurnID = agent.CurrentTurnID
 			row.LatestItemID = agent.LatestItemID
 			row.LatestOrderIndex = agent.LatestOrderIndex
@@ -405,6 +435,7 @@ func webSessionSubAgentFromThread(
 		Nickname:       strings.TrimSpace(summary.Nickname),
 		Role:           strings.TrimSpace(summary.Role),
 		Status:         status,
+		Active:         webSessionSubAgentIsActive(status),
 		StartedAt:      summary.CreatedAt,
 		LastActivityAt: summary.UpdatedAt,
 	}

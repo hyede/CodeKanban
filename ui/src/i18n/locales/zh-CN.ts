@@ -969,6 +969,7 @@ export default {
     contextUsageCompactLabel: '压缩线',
     contextUsageCumulativeNonCached: '累计非缓存消耗',
     contextUsageTotalUsage: '总消耗（含缓存）',
+    contextUsageSessionTotal: '会话总消耗（含 Sub Agent）',
     contextUsageCurrentMarker: '当前',
     contextUsageWindowMarker: '上限',
     contextUsageShowExact: '显示精确值',

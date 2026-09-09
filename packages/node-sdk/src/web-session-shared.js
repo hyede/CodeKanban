@@ -427,14 +427,37 @@ export function normalizeWebSessionSubAgent(value) {
   const currentTurnId =
     trimmedString(value?.ctid ?? value?.currentTurnId) || null;
   const rawStatus = trimmedString(value?.st ?? value?.status) || "pending_init";
+  const hasExplicitActive =
+    typeof value?.act === "boolean" || typeof value?.active === "boolean";
+  const active = hasExplicitActive
+    ? Boolean(value?.act ?? value?.active)
+    : rawStatus === "pending_init" || (rawStatus === "running" && Boolean(currentTurnId));
+  const usageFields =
+    value?.uin != null ||
+    value?.inputTokens != null ||
+    value?.ucin != null ||
+    value?.cachedInputTokens != null ||
+    value?.uout != null ||
+    value?.outputTokens != null ||
+    value?.utot != null ||
+    value?.totalTokens != null
+      ? {
+          inputTokens: numberValue(value?.uin ?? value?.inputTokens, 0),
+          cachedInputTokens: numberValue(value?.ucin ?? value?.cachedInputTokens, 0),
+          outputTokens: numberValue(value?.uout ?? value?.outputTokens, 0),
+          totalTokens: numberValue(value?.utot ?? value?.totalTokens, 0),
+        }
+      : {};
   return {
     threadId,
     parentThreadId: trimmedString(value?.ptid ?? value?.parentThreadId) || null,
     path: trimmedString(value?.p ?? value?.path),
     nickname: trimmedString(value?.nn ?? value?.nickname),
     role: trimmedString(value?.rl ?? value?.role),
-    status: rawStatus === "running" && !currentTurnId ? "idle" : rawStatus,
+    status: rawStatus === "running" && !hasExplicitActive && !currentTurnId ? "idle" : rawStatus,
+    ...(hasExplicitActive ? { active } : {}),
     summary: trimmedString(value?.sm ?? value?.summary),
+    ...usageFields,
     currentTurnId,
     latestItemId: trimmedString(value?.liid ?? value?.latestItemId) || null,
     latestOrderIndex: numberValue(value?.loi ?? value?.latestOrderIndex, 0),
@@ -798,6 +821,24 @@ export function analyzeWebSession(snapshot) {
     session?.assistantState === "waiting_plan_approval",
   );
   const lastAssistantMessage = findLastAssistantMessage(items);
+  const sessionUsage = {
+    inputTokens: numberValue(session?.usage?.inputTokens, 0),
+    cachedInputTokens: numberValue(session?.usage?.cachedInputTokens, 0),
+    outputTokens: numberValue(session?.usage?.outputTokens, 0),
+    totalTokens:
+      numberValue(session?.usage?.inputTokens, 0) +
+      numberValue(session?.usage?.outputTokens, 0),
+    cost: numberValue(session?.usage?.cost, 0),
+  };
+  for (const agent of subAgents) {
+    sessionUsage.inputTokens += numberValue(agent.inputTokens, 0);
+    sessionUsage.cachedInputTokens += numberValue(agent.cachedInputTokens, 0);
+    sessionUsage.outputTokens += numberValue(agent.outputTokens, 0);
+    sessionUsage.totalTokens +=
+      agent.totalTokens > 0
+        ? numberValue(agent.totalTokens, 0)
+        : numberValue(agent.inputTokens, 0) + numberValue(agent.outputTokens, 0);
+  }
 
   let phase = "idle";
   if (session?.assistantState === "waiting_input") {
@@ -868,12 +909,15 @@ export function analyzeWebSession(snapshot) {
     subAgents,
     activeSubAgents: subAgents.filter(
       (agent) =>
-        agent.status === "pending_init" ||
-        (agent.status === "running" && Boolean(agent.currentTurnId)),
+        agent.active === true ||
+        (agent.active == null &&
+          (agent.status === "pending_init" ||
+            (agent.status === "running" && Boolean(agent.currentTurnId)))),
     ),
     latestPlan,
     lastAssistantMessage,
     session,
+    sessionUsage,
     snapshot: {
       session,
       history,
@@ -881,6 +925,7 @@ export function analyzeWebSession(snapshot) {
       pendingApproval,
       pendingUserInput,
       subAgents,
+      sessionUsage,
     },
   };
 }

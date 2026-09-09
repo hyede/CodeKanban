@@ -221,19 +221,24 @@ type wireHistItem struct {
 }
 
 type wireSubAgent struct {
-	ThreadID         string  `json:"tid"`
-	ParentThreadID   *string `json:"ptid,omitempty"`
-	Path             string  `json:"p,omitempty"`
-	Nickname         string  `json:"nn,omitempty"`
-	Role             string  `json:"rl,omitempty"`
-	Status           string  `json:"st"`
-	Summary          string  `json:"sm,omitempty"`
-	CurrentTurnID    *string `json:"ctid,omitempty"`
-	LatestItemID     *string `json:"liid,omitempty"`
-	LatestOrderIndex int64   `json:"loi,omitempty"`
-	StartedAt        *int64  `json:"sa,omitempty"`
-	LastActivityAt   *int64  `json:"la,omitempty"`
-	EndedAt          *int64  `json:"ea,omitempty"`
+	ThreadID          string  `json:"tid"`
+	ParentThreadID    *string `json:"ptid,omitempty"`
+	Path              string  `json:"p,omitempty"`
+	Nickname          string  `json:"nn,omitempty"`
+	Role              string  `json:"rl,omitempty"`
+	Status            string  `json:"st"`
+	Active            bool    `json:"act,omitempty"`
+	Summary           string  `json:"sm,omitempty"`
+	InputTokens       int64   `json:"uin,omitempty"`
+	CachedInputTokens int64   `json:"ucin,omitempty"`
+	OutputTokens      int64   `json:"uout,omitempty"`
+	TotalTokens       int64   `json:"utot,omitempty"`
+	CurrentTurnID     *string `json:"ctid,omitempty"`
+	LatestItemID      *string `json:"liid,omitempty"`
+	LatestOrderIndex  int64   `json:"loi,omitempty"`
+	StartedAt         *int64  `json:"sa,omitempty"`
+	LastActivityAt    *int64  `json:"la,omitempty"`
+	EndedAt           *int64  `json:"ea,omitempty"`
 }
 
 type wireHistoryAttach struct {
@@ -794,19 +799,24 @@ func mapWireHistoryItem(item HistoryItem) wireHistItem {
 
 func mapWireSubAgent(item WebSessionSubAgent) wireSubAgent {
 	return wireSubAgent{
-		ThreadID:         item.ThreadID,
-		ParentThreadID:   item.ParentThreadID,
-		Path:             item.Path,
-		Nickname:         item.Nickname,
-		Role:             item.Role,
-		Status:           string(item.Status),
-		Summary:          item.Summary,
-		CurrentTurnID:    item.CurrentTurnID,
-		LatestItemID:     item.LatestItemID,
-		LatestOrderIndex: item.LatestOrderIndex,
-		StartedAt:        unixMilliPtr(item.StartedAt),
-		LastActivityAt:   unixMilliPtr(item.LastActivityAt),
-		EndedAt:          unixMilliPtr(item.EndedAt),
+		ThreadID:          item.ThreadID,
+		ParentThreadID:    item.ParentThreadID,
+		Path:              item.Path,
+		Nickname:          item.Nickname,
+		Role:              item.Role,
+		Status:            string(item.Status),
+		Active:            item.Active,
+		Summary:           item.Summary,
+		InputTokens:       item.InputTokens,
+		CachedInputTokens: item.CachedInputTokens,
+		OutputTokens:      item.OutputTokens,
+		TotalTokens:       item.TotalTokens,
+		CurrentTurnID:     item.CurrentTurnID,
+		LatestItemID:      item.LatestItemID,
+		LatestOrderIndex:  item.LatestOrderIndex,
+		StartedAt:         unixMilliPtr(item.StartedAt),
+		LastActivityAt:    unixMilliPtr(item.LastActivityAt),
+		EndedAt:           unixMilliPtr(item.EndedAt),
 	}
 }
 

@@ -247,7 +247,12 @@ type WireSubAgent = {
   nn?: string;
   rl?: string;
   st?: string;
+  act?: boolean;
   sm?: string;
+  uin?: number;
+  ucin?: number;
+  uout?: number;
+  utot?: number;
   ctid?: string | null;
   liid?: string | null;
   loi?: number;
@@ -348,6 +353,11 @@ export interface WebSessionSubAgent extends WebSessionLiveSubAgent {
   nickname: string;
   role: string;
   status: WebSessionSubAgentStatus;
+  active?: boolean;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
   currentTurnId?: string | null;
   latestItemId?: string | null;
   latestOrderIndex: number;
@@ -1364,15 +1374,24 @@ function normalizeSubAgent(
   const startedAt = parseHistoryTimeValue(record.sa ?? record.startedAt) ?? undefined;
   const currentTurnId = String(record.ctid ?? record.currentTurnId ?? '').trim() || null;
   const normalizedStatus = normalizeSubAgentStatus(record.st ?? record.status);
+  const hasExplicitActive = typeof record.act === 'boolean' || typeof record.active === 'boolean';
+  const active = hasExplicitActive
+    ? Boolean(record.act ?? record.active)
+    : normalizedStatus === 'pending_init' || (normalizedStatus === 'running' && Boolean(currentTurnId));
   return {
     id,
     parentThreadId: String(record.ptid ?? record.parentThreadId ?? '').trim() || null,
     path,
     nickname,
     role,
-    status: normalizedStatus === 'running' && !currentTurnId ? 'idle' : normalizedStatus,
+    status: normalizedStatus === 'running' && !hasExplicitActive && !currentTurnId ? 'idle' : normalizedStatus,
+    active,
     title: subAgentDisplayTitle({ id, nickname, role, path }),
     summary: String(record.sm ?? record.summary ?? '').trim(),
+    inputTokens: Number(record.uin ?? record.inputTokens ?? 0) || 0,
+    cachedInputTokens: Number(record.ucin ?? record.cachedInputTokens ?? 0) || 0,
+    outputTokens: Number(record.uout ?? record.outputTokens ?? 0) || 0,
+    totalTokens: Number(record.utot ?? record.totalTokens ?? 0) || 0,
     currentTurnId,
     latestItemId: String(record.liid ?? record.latestItemId ?? '').trim() || null,
     latestOrderIndex: Number(record.loi ?? record.latestOrderIndex ?? 0) || 0,
@@ -1384,7 +1403,10 @@ function normalizeSubAgent(
 
 function isActiveSubAgent(agent: WebSessionSubAgent) {
   return (
-    agent.status === 'pending_init' || (agent.status === 'running' && Boolean(agent.currentTurnId))
+    agent.active === true ||
+    (agent.active == null &&
+      (agent.status === 'pending_init' ||
+        (agent.status === 'running' && Boolean(agent.currentTurnId))))
   );
 }
 

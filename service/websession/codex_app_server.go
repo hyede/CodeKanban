@@ -1268,6 +1268,7 @@ func (m *Manager) handleCodexAppServerMessage(
 			m.ensureCodexRolloutThreadAttachedAsync(session, run, client, threadID, "")
 			m.appendCodexSubAgentState(session, run, threadID, turnID, map[string]any{
 				"status": string(WebSessionSubAgentRunning),
+				"active": true,
 				"turnId": turnID,
 			})
 			return codexTurnOutcomeNone, nil
@@ -1299,6 +1300,8 @@ func (m *Manager) handleCodexAppServerMessage(
 	case "thread/tokenUsage/updated":
 		if isRootEvent {
 			m.handleCodexAppServerUsage(session, run, message.Params)
+		} else {
+			m.handleCodexSubAgentUsage(session, run, threadID, turnID, message.Params)
 		}
 		return codexTurnOutcomeNone, nil
 	case "warning":
@@ -1352,6 +1355,7 @@ func (m *Manager) handleCodexAppServerMessage(
 			}
 			if nextStatus := codexTurnSubAgentStatus(status); nextStatus != "" {
 				payload["status"] = string(nextStatus)
+				payload["active"] = nextStatus == WebSessionSubAgentRunning
 			}
 			m.appendCodexSubAgentState(session, run, threadID, turnID, payload)
 			return codexTurnOutcomeNone, nil
@@ -1394,6 +1398,7 @@ func (m *Manager) handleCodexAppServerMessage(
 		if !isRootEvent {
 			m.appendCodexSubAgentState(session, run, threadID, turnID, map[string]any{
 				"status": string(WebSessionSubAgentShutdown),
+				"active": false,
 			})
 		}
 		return codexTurnOutcomeNone, nil
@@ -1416,6 +1421,7 @@ func (m *Manager) handleCodexAppServerMessage(
 			if lifecycle != "" {
 				m.appendCodexSubAgentState(session, run, threadID, turnID, map[string]any{
 					"status": string(lifecycle),
+					"active": webSessionSubAgentIsActive(lifecycle),
 				})
 			}
 		}
@@ -2532,7 +2538,7 @@ func (m *Manager) handleCodexSubAgentActivity(
 	kind := strings.ToLower(strings.TrimSpace(stringValue(item["kind"])))
 	status := WebSessionSubAgentStatus("")
 	switch kind {
-	case "started", "interacted":
+	case "started":
 		status = WebSessionSubAgentRunning
 	case "interrupted":
 		status = WebSessionSubAgentInterrupted
@@ -2544,6 +2550,7 @@ func (m *Manager) handleCodexSubAgentActivity(
 	}
 	if status != "" {
 		statePayload["status"] = string(status)
+		statePayload["active"] = kind == "started"
 	}
 	m.appendCodexSubAgentState(session, run, agentThreadID, "", statePayload)
 
@@ -2559,6 +2566,29 @@ func (m *Manager) handleCodexSubAgentActivity(
 			"agentThreadId": agentThreadID,
 			"path":          path,
 			"kind":          kind,
+		},
+	})
+}
+
+func (m *Manager) handleCodexSubAgentUsage(
+	session tables.WebSessionTable,
+	run *activeRun,
+	threadID string,
+	turnID string,
+	params json.RawMessage,
+) {
+	payload := decodeRawObject(params)
+	tokenUsage := decodeRawObject(payload["tokenUsage"])
+	total, ok := parseCodexTokenUsageSnapshot(tokenUsage["total"])
+	if !ok {
+		return
+	}
+	m.appendCodexSubAgentState(session, run, threadID, turnID, map[string]any{
+		"usage": map[string]any{
+			"input_tokens":        total.InputTokens,
+			"cached_input_tokens": total.CachedInputTokens,
+			"output_tokens":       total.OutputTokens,
+			"total_tokens":        total.TotalTokens,
 		},
 	})
 }
