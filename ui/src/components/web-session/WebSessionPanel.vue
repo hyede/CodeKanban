@@ -1135,17 +1135,34 @@
                     </div>
                   </div>
 
-                  <WebSessionReasoningSummary
-                    v-else-if="isCodexReasoningBlock(item) && item.tool"
-                    :text="item.tool.output || ''"
-                    :label="t('webSession.reasoningSummary')"
+                  <WebSessionActivityGroup
+                    v-else-if="isPiActivityGroupBlock(item)"
+                    :rows="activityGroupRows(item)"
+                    :label="activityGroupLabel(item)"
+                    :steps-label="
+                      t('webSession.activityGroupSteps', { count: activityGroupStepCount(item) })
+                    "
+                    :summary="activityGroupSummary(item)"
                     :time="formatTime(item.timestamp)"
                     :time-title="formatDateTime(item.timestamp)"
-                    :expanded="isToolExpanded(item.tool.id)"
-                    @toggle="toggleToolExpanded(item.tool)"
+                    :expanded="isActivityGroupExpanded(item)"
+                    :streaming="isActivityGroupStreaming(item)"
+                    @toggle="toggleActivityGroup(item)"
+                  />
+
+                  <WebSessionReasoningSummary
+                    v-else-if="isReasoningDisclosureBlock(item) && item.tool"
+                    :text="item.tool.output || ''"
+                    :label="reasoningDisclosureLabel(item)"
+                    :summary="reasoningDisclosurePreview(item)"
+                    :streaming="isReasoningStreaming(item)"
+                    :time="formatTime(item.timestamp)"
+                    :time-title="formatDateTime(item.timestamp)"
+                    :expanded="isReasoningDisclosureExpanded(item.tool)"
+                    @toggle="toggleReasoningDisclosure(item.tool)"
                   >
                     <div
-                      v-if="isToolExpanded(item.tool.id)"
+                      v-if="isReasoningDisclosureExpanded(item.tool)"
                       class="chat-markdown"
                       v-html="renderMarkdown(item.tool.output || '')"
                     ></div>
@@ -3521,6 +3538,7 @@ import WebSessionMessageEditDialog from '@/components/web-session/WebSessionMess
 import WebSessionMobileSessionDrawer from '@/components/web-session/WebSessionMobileSessionDrawer.vue';
 import WebSessionScheduledSendDialog from '@/components/web-session/WebSessionScheduledSendDialog.vue';
 import WebSessionReasoningSummary from '@/components/web-session/WebSessionReasoningSummary.vue';
+import WebSessionActivityGroup from '@/components/web-session/WebSessionActivityGroup.vue';
 import WebSessionSidebar from '@/components/web-session/WebSessionSidebar.vue';
 import { useWebSessionSidebarResize } from '@/components/web-session/useWebSessionSidebarResize';
 import WebSessionSkillCatalogPanel from '@/components/web-session/WebSessionSkillCatalogPanel.vue';
@@ -3594,6 +3612,13 @@ import {
 } from '@/components/web-session/webSessionRawToggle';
 import { resolveWebSessionAttachmentPreviewMode } from '@/components/web-session/webSessionAttachmentPreview';
 import { projectWebSessionVisibleTimelineBlocks } from '@/components/web-session/webSessionCompactTimeline';
+import {
+  isPiActivityGroupBlock,
+  piActivityGroupItems,
+  piActivitySummaryText,
+  projectPiActivityGroups,
+  type PiActivityGroupRow,
+} from '@/components/web-session/webSessionPiActivityGroup';
 import {
   findLatestSubAgentActivityBlock,
   isTransportRetryActivityText,
@@ -5348,6 +5373,121 @@ function isCodexReasoningBlock(block: WebSessionBlock) {
   return currentSession.value?.agent === 'codex' && isReasoningBlock(block);
 }
 
+/**
+ * Pi turns routinely emit reasoning plus tool calls without any assistant text,
+ * so Pi thinking is surfaced even while the global "show AI reasoning" switch is
+ * off. It reuses the same low-key disclosure header as Codex rather than a card.
+ */
+function isPiReasoningBlock(block: WebSessionBlock) {
+  return currentSession.value?.agent === 'pi' && isReasoningBlock(block);
+}
+
+function isReasoningDisclosureBlock(block: WebSessionBlock) {
+  return isCodexReasoningBlock(block) || isPiReasoningBlock(block);
+}
+
+function isReasoningStreaming(block: WebSessionBlock) {
+  return isPiReasoningBlock(block) && block.tool?.status === 'running';
+}
+
+function reasoningDisclosureLabel(block: WebSessionBlock) {
+  if (isReasoningStreaming(block)) {
+    return t('webSession.reasoningInProgress');
+  }
+  return isPiReasoningBlock(block)
+    ? t('webSession.toolReasoning')
+    : t('webSession.reasoningSummary');
+}
+
+/** Latest thought line, so a collapsed header reads like a live ticker. */
+function reasoningDisclosurePreview(block: WebSessionBlock) {
+  if (!isPiReasoningBlock(block)) {
+    return '';
+  }
+  const lines = String(block.tool?.output ?? '')
+    .split('\n')
+    .map(line => line.replace(/^#+\s*|\*\*/g, '').trim())
+    .filter(Boolean);
+  return lines[lines.length - 1] ?? '';
+}
+
+/**
+ * Pi folds *adjacent* activity rows instead of classifying every tool name, so
+ * dynamic MCP/extension tools group as well as bash does. Plan cards,
+ * interactive prompts, sub-agent rows and real warnings stay outside the fold.
+ */
+function isPiActivityGroupMember(block: WebSessionBlock) {
+  if (block.kind === 'system') {
+    return block.itemType === 'note' && block.level === 'info';
+  }
+  if (block.kind !== 'tool' || !block.tool) {
+    return false;
+  }
+  if (timelineSubAgent(block)) {
+    return false;
+  }
+  if (isPlanTool(block.tool) || isInteractiveDynamicTool(block.tool)) {
+    return false;
+  }
+  return true;
+}
+
+function isActivityGroupStreaming(group: WebSessionBlock) {
+  return piActivityGroupItems(group).some(item => item.tool?.status === 'running');
+}
+
+function isActivityGroupExpanded(group: WebSessionBlock) {
+  const claimed = expandedTools.value[group.key];
+  if (claimed !== undefined) {
+    return claimed;
+  }
+  return isActivityGroupStreaming(group);
+}
+
+function toggleActivityGroup(group: WebSessionBlock) {
+  expandedTools.value = {
+    ...expandedTools.value,
+    [group.key]: !isActivityGroupExpanded(group),
+  };
+}
+
+function activityGroupStepCount(group: WebSessionBlock) {
+  return piActivityGroupItems(group).filter(item => item.kind === 'tool').length;
+}
+
+function activityGroupLabel(group: WebSessionBlock) {
+  return isActivityGroupStreaming(group)
+    ? t('webSession.activityGroupRunning')
+    : t('webSession.activityGroupDone');
+}
+
+function activityGroupSummary(group: WebSessionBlock) {
+  const items = piActivityGroupItems(group);
+  const last = items[items.length - 1];
+  return last ? piActivitySummaryText(last) : '';
+}
+
+function activityGroupRows(group: WebSessionBlock): PiActivityGroupRow[] {
+  // Collapsed groups do not render a body, so skip building their rows.
+  if (!isActivityGroupExpanded(group)) {
+    return [];
+  }
+  return piActivityGroupItems(group).map(item => {
+    const isNote = item.kind === 'system';
+    return {
+      key: item.key,
+      name: isNote
+        ? ''
+        : isReasoningBlock(item)
+          ? t('webSession.toolReasoning')
+          : String(item.tool?.name ?? '').trim(),
+      summary: isNote ? '' : piActivitySummaryText(item),
+      note: isNote ? piActivitySummaryText(item) : '',
+      body: String(item.tool?.output ?? ''),
+    };
+  });
+}
+
 function isActivityDisplayBlock(block: WebSessionBlock) {
   if (block.kind !== 'tool' || !block.tool) {
     return false;
@@ -5687,10 +5827,9 @@ function shouldRenderToolBlockInTimeline(block: WebSessionBlock) {
     return false;
   }
   if (isReasoningBlock(block)) {
-    if (isCodexReasoningBlock(block)) {
-      return hasReasoningContent(block);
-    }
-    return hasReasoningContent(block) || shouldShowToolPendingPlaceholder(block.tool);
+    // Codex and Pi thinking share the disclosure header, which renders nothing
+    // without text — keep empty reasoning rows out of the timeline entirely.
+    return hasReasoningContent(block);
   }
   const activeToolGroupId = liveState.value.tool?.groupId || '';
   const activeToolId = liveState.value.tool?.id || '';
@@ -5708,7 +5847,7 @@ function shouldRenderToolBlockInTimeline(block: WebSessionBlock) {
 
 const filteredTimelineBlocks = computed(() =>
   timelineBlocks.value.filter(block => {
-    if (!showWebSessionReasoning.value && isReasoningBlock(block)) {
+    if (!showWebSessionReasoning.value && isReasoningBlock(block) && !isPiReasoningBlock(block)) {
       return false;
     }
     if (isPlanChoiceRequestBlock(block)) {
@@ -5720,9 +5859,13 @@ const filteredTimelineBlocks = computed(() =>
     return true;
   })
 );
-const visibleBlocks = computed(() =>
-  projectWebSessionVisibleTimelineBlocks(filteredTimelineBlocks.value)
-);
+const visibleBlocks = computed(() => {
+  const projected = projectWebSessionVisibleTimelineBlocks(filteredTimelineBlocks.value);
+  if (currentSession.value?.agent !== 'pi') {
+    return projected;
+  }
+  return projectPiActivityGroups(projected, isPiActivityGroupMember);
+});
 const {
   inputRef: timelineSearchInputRef,
   openState: timelineSearchOpen,
@@ -9095,7 +9238,17 @@ const timelineContentVersion = computed(() =>
       const toolVersion = block.tool
         ? `${block.tool.id}:${block.tool.status}:${String(block.tool.output ?? '').length}:${toolGroupCount}:${groupItemsLength}`
         : '';
-      return `${block.key}:${block.kind}:${block.text.length}:${block.attachments.length}:${toolVersion}:${block.done ? 1 : 0}`;
+      // Folded Pi runs carry no tool of their own, so their members drive
+      // auto-follow scrolling while the run is still streaming.
+      const activityVersion = block.activityGroupItems
+        ? block.activityGroupItems
+            .map(
+              item =>
+                `${item.key}:${item.tool?.status ?? ''}:${String(item.tool?.output ?? item.text).length}`
+            )
+            .join(',')
+        : '';
+      return `${block.key}:${block.kind}:${block.text.length}:${block.attachments.length}:${toolVersion}:${activityVersion}:${block.done ? 1 : 0}`;
     })
     .join('|')
 );
@@ -11975,7 +12128,7 @@ function handleActivityDisplayClick(block: WebSessionBlock) {
 }
 
 function shouldHideTimelineMeta(item: WebSessionBlock) {
-  if (isCodexReasoningBlock(item)) {
+  if (isReasoningDisclosureBlock(item) || isPiActivityGroupBlock(item)) {
     return true;
   }
   if (!Number.isFinite(item.timestamp) || item.timestamp <= 0) {
@@ -12188,6 +12341,25 @@ function toggleToolExpanded(tool: NonNullable<WebSessionBlock['tool']>) {
   expandedTools.value = {
     ...expandedTools.value,
     [tool.id]: nextExpanded,
+  };
+}
+
+/**
+ * Reasoning disclosures auto-open while Pi is still thinking and fold away once
+ * the segment settles, unless the reader claimed them with a click.
+ */
+function isReasoningDisclosureExpanded(tool: NonNullable<WebSessionBlock['tool']>) {
+  const claimed = expandedTools.value[tool.id];
+  if (claimed !== undefined) {
+    return claimed;
+  }
+  return currentSession.value?.agent === 'pi' && tool.status === 'running';
+}
+
+function toggleReasoningDisclosure(tool: NonNullable<WebSessionBlock['tool']>) {
+  expandedTools.value = {
+    ...expandedTools.value,
+    [tool.id]: !isReasoningDisclosureExpanded(tool),
   };
 }
 

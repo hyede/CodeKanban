@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { WebSessionBlock } from '@/stores/webSession';
 import {
+  isEmptyAssistantBlock,
   isTransportRetryNoteBlock,
   projectWebSessionCompactTimelineBlocks,
   projectWebSessionVisibleTimelineBlocks,
@@ -218,6 +219,36 @@ describe('webSessionCompactTimeline', () => {
     expect(visible).toHaveLength(2);
     expect(visible.map(block => block.tool?.id)).toEqual(['before-retry', 'after-retry']);
     expect(visible.every(block => !block.tool?.commandGroup)).toBe(true);
+  });
+
+  it('hides finished assistant placeholders that never produced content', () => {
+    const thinkingOnly: WebSessionBlock = {
+      key: 'assistant-thinking-only',
+      id: 'assistant-thinking-only',
+      orderIndex: 1,
+      kind: 'assistant',
+      itemType: 'agent_message',
+      text: '',
+      timestamp: Date.UTC(2026, 3, 20, 12, 0, 0),
+      attachments: [],
+      done: true,
+    };
+
+    expect(isEmptyAssistantBlock(thinkingOnly)).toBe(true);
+    expect(isEmptyAssistantBlock({ ...thinkingOnly, text: 'answer' })).toBe(false);
+    expect(isEmptyAssistantBlock({ ...thinkingOnly, done: false })).toBe(false);
+    expect(
+      isEmptyAssistantBlock({
+        ...thinkingOnly,
+        attachments: [{ id: 'a1', name: 'a.png' }],
+      })
+    ).toBe(false);
+
+    const visible = projectWebSessionVisibleTimelineBlocks([
+      thinkingOnly,
+      buildMessageBlock('answer', 2),
+    ]);
+    expect(visible.map(block => block.id)).toEqual(['answer']);
   });
 
   it('folds consecutive file_change blocks that share a command group id', () => {

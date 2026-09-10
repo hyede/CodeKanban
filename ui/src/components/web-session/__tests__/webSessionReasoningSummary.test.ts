@@ -67,4 +67,26 @@ describe('WebSessionReasoningSummary', () => {
     const refreshed = mountSummary();
     expect(refreshed.get('button').attributes('aria-expanded')).toBe('false');
   });
+
+  it('shows a live preview and streaming marker for Pi thinking', () => {
+    const wrapper = mount(WebSessionReasoningSummary, {
+      props: {
+        ...props,
+        label: '思考中',
+        summary: 'Refining ReplaceStep checks',
+        streaming: true,
+        expanded: false,
+      },
+    });
+    expect(wrapper.get('.reasoning-summary-label').classes()).toContain('is-streaming');
+    expect(wrapper.find('.reasoning-summary-dot').exists()).toBe(true);
+    expect(wrapper.get('.reasoning-summary-preview').text()).toBe('Refining ReplaceStep checks');
+    expect(wrapper.find('.reasoning-summary-body').exists()).toBe(false);
+  });
+
+  it('omits the preview and streaming marker for settled summaries', () => {
+    const wrapper = mountSummary();
+    expect(wrapper.find('.reasoning-summary-preview').exists()).toBe(false);
+    expect(wrapper.find('.reasoning-summary-dot').exists()).toBe(false);
+  });
 });

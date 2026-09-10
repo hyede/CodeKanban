@@ -34,6 +34,21 @@ export function isTransportRetryNoteBlock(block: WebSessionBlock): boolean {
   );
 }
 
+/**
+ * Assistant placeholders that never produced any content. `msg_a_st` opens the
+ * bubble as soon as an assistant message starts, so a turn that only emitted
+ * reasoning plus tool calls leaves a finished, empty message row behind.
+ */
+export function isEmptyAssistantBlock(block: WebSessionBlock): boolean {
+  return (
+    block.kind === 'assistant' &&
+    block.done === true &&
+    block.text.trim().length === 0 &&
+    block.attachments.length === 0 &&
+    !block.detail
+  );
+}
+
 export function projectWebSessionCompactTimelineBlocks(
   blocks: WebSessionBlock[]
 ): WebSessionBlock[] {
@@ -86,7 +101,7 @@ export function projectWebSessionVisibleTimelineBlocks(
   blocks: WebSessionBlock[]
 ): WebSessionBlock[] {
   return projectWebSessionCompactTimelineBlocks(blocks).filter(
-    block => !isTransportRetryNoteBlock(block)
+    block => !isTransportRetryNoteBlock(block) && !isEmptyAssistantBlock(block)
   );
 }
 
