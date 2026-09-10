@@ -6165,13 +6165,17 @@ func (m *Manager) decorateCompactToolGroupEvent(sessionID string, event *Event) 
 	firstSeq := event.Seq
 	count := 1
 
+	// sessionAgent locks the run mutex, so it must be resolved before the run
+	// lock below is taken.
+	agent := m.sessionAgent(sessionID)
+
 	m.mu.RLock()
 	run := m.runs[sessionID]
 	m.mu.RUnlock()
 
 	if run != nil {
 		run.mu.Lock()
-		groupKey := compactToolGroupKey(*event)
+		groupKey := compactToolGroupKey(*event, agent)
 		if run.commandGroupKey != "" && run.commandGroupKey != groupKey {
 			run.commandGroupID = ""
 			run.commandGroupKind = ""

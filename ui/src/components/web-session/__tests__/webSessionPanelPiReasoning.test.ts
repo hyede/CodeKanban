@@ -42,38 +42,12 @@ describe('WebSessionPanel Pi reasoning disclosure', () => {
     // Reasoning rows stay text-only: no tool card chrome is introduced.
     expect(panelSource).toMatch(/function reasoningDisclosurePreview\(block: WebSessionBlock\)/);
   });
-});
 
-describe('WebSessionPanel Pi activity folding', () => {
-  it('folds Pi activity runs after the shared visible projection', () => {
-    expect(panelSource).toMatch(/projectPiActivityGroups\(projected, isPiActivityGroupMember\)/);
+  it('folds Pi tool rows through the shared compact projection, by adjacency', () => {
     expect(panelSource).toMatch(
-      /currentSession\.value\?\.agent !== 'pi'[\s\S]{0,80}return projected;/
+      /projectWebSessionVisibleTimelineBlocks\(\s*filteredTimelineBlocks\.value,\s*currentSession\.value\?\.agent\s*\)/
     );
-  });
-
-  it('keeps plan cards, prompts, sub-agent rows and real warnings out of the fold', () => {
-    expect(panelSource).toMatch(/function isPiActivityGroupMember\(block: WebSessionBlock\)/);
-    expect(panelSource).toMatch(/if \(timelineSubAgent\(block\)\) \{\s*return false;/);
-    expect(panelSource).toMatch(
-      /if \(isPlanTool\(block\.tool\) \|\| isInteractiveDynamicTool\(block\.tool\)\) \{\s*return false;/
-    );
-    expect(panelSource).toMatch(/block\.itemType === 'note' && block\.level === 'info'/);
-  });
-
-  it('auto-opens a live Pi run and folds it once every step settles', () => {
-    expect(panelSource).toMatch(/function isActivityGroupStreaming\(group: WebSessionBlock\)/);
-    expect(panelSource).toMatch(/item\.tool\?\.status === 'running'/);
-    expect(panelSource).toMatch(/function isActivityGroupExpanded\(group: WebSessionBlock\)/);
-    expect(panelSource).toMatch(/return isActivityGroupStreaming\(group\);/);
-    expect(panelSource).toMatch(/function toggleActivityGroup\(group: WebSessionBlock\)/);
-  });
-
-  it('renders the fold through the low-key activity group row', () => {
-    expect(panelSource).toMatch(/v-else-if="isPiActivityGroupBlock\(item\)"/);
-    expect(panelSource).toMatch(/:rows="activityGroupRows\(item\)"/);
-    expect(panelSource).toMatch(
-      /if \(isReasoningDisclosureBlock\(item\) \|\| isPiActivityGroupBlock\(item\)\)/
-    );
+    expect(panelSource).not.toMatch(/projectPiActivityGroups/);
+    expect(panelSource).not.toMatch(/isPiActivityGroupMember/);
   });
 });

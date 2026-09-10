@@ -251,6 +251,80 @@ describe('webSessionCompactTimeline', () => {
     expect(visible.map(block => block.id)).toEqual(['answer']);
   });
 
+  it('folds adjacent Pi tool rows by adjacency but keeps other agents kind-keyed', () => {
+    const bash: WebSessionBlock = {
+      key: 'bash-1',
+      id: 'bash-1',
+      orderIndex: 1,
+      kind: 'tool',
+      itemType: 'dynamic_tool_call',
+      text: '',
+      timestamp: Date.UTC(2026, 3, 20, 12, 0, 0),
+      attachments: [],
+      tool: {
+        id: 'bash-1',
+        name: 'bash',
+        kind: 'dynamic_tool_call',
+        status: 'done',
+        output: 'ok',
+      },
+    };
+    const note: WebSessionBlock = {
+      ...bash,
+      key: 'note-1',
+      id: 'note-1',
+      orderIndex: 2,
+      tool: { ...bash.tool!, id: 'note-1', name: 'ctx_note', output: 'saved' },
+    };
+
+    // Codex and Claude Code group by kind/name, so different dynamic tools stay apart.
+    expect(projectWebSessionCompactTimelineBlocks([bash, note]).map(block => block.key)).toEqual([
+      'bash-1',
+      'note-1',
+    ]);
+
+    // Pi folds by adjacency instead, anchored on the first row of the run.
+    const folded = projectWebSessionCompactTimelineBlocks([bash, note], 'pi');
+    expect(folded).toHaveLength(1);
+    expect(folded[0].tool?.name).toBe('ctx_note');
+    expect(folded[0].tool?.commandGroup?.count).toBe(2);
+    expect(folded[0].orderIndex).toBe(1);
+  });
+
+  it('reuses the group id the server stamped on a Pi activity group', () => {
+    const group = { id: 'cmdgrp_bash-1', count: 1, compacted: true };
+    const base: WebSessionBlock = {
+      key: 'a',
+      id: 'a',
+      orderIndex: 1,
+      kind: 'tool',
+      itemType: 'dynamic_tool_call',
+      text: '',
+      timestamp: Date.UTC(2026, 3, 20, 12, 0, 0),
+      attachments: [],
+      tool: {
+        id: 'a',
+        name: 'bash',
+        kind: 'dynamic_tool_call',
+        status: 'done',
+        output: '',
+        commandGroup: group,
+      },
+    };
+    const second: WebSessionBlock = {
+      ...base,
+      key: 'b',
+      id: 'b',
+      orderIndex: 2,
+      tool: { ...base.tool!, id: 'b', name: 'ctx_note', commandGroup: { ...group, count: 2 } },
+    };
+
+    const folded = projectWebSessionCompactTimelineBlocks([base, second], 'pi');
+    expect(folded).toHaveLength(1);
+    expect(folded[0].key).toBe('compact-tool:cmdgrp_bash-1');
+    expect(folded[0].tool?.commandGroup?.compacted).toBe(true);
+  });
+
   it('folds consecutive file_change blocks that share a command group id', () => {
     const projected = projectWebSessionCompactTimelineBlocks([
       buildMessageBlock('intro', 1),

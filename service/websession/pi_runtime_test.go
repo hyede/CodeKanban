@@ -1941,6 +1941,13 @@ func historyContainsToolOutput(window HistoryWindow, toolID, output string) bool
 		if item.Tool != nil && item.Tool.ID == toolID && strings.Contains(item.Tool.Output, output) {
 			return true
 		}
+		// Adjacent Pi tools fold into one activity group, so a folded member is
+		// still independently projected inside the group items.
+		for _, groupItem := range decodeHistoryGroupItems(item.Payload) {
+			if groupItem.ToolID == toolID && strings.Contains(groupItem.Output, output) {
+				return true
+			}
+		}
 	}
 	return false
 }

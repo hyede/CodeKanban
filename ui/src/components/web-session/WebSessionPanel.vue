@@ -1135,21 +1135,6 @@
                     </div>
                   </div>
 
-                  <WebSessionActivityGroup
-                    v-else-if="isPiActivityGroupBlock(item)"
-                    :rows="activityGroupRows(item)"
-                    :label="activityGroupLabel(item)"
-                    :steps-label="
-                      t('webSession.activityGroupSteps', { count: activityGroupStepCount(item) })
-                    "
-                    :summary="activityGroupSummary(item)"
-                    :time="formatTime(item.timestamp)"
-                    :time-title="formatDateTime(item.timestamp)"
-                    :expanded="isActivityGroupExpanded(item)"
-                    :streaming="isActivityGroupStreaming(item)"
-                    @toggle="toggleActivityGroup(item)"
-                  />
-
                   <WebSessionReasoningSummary
                     v-else-if="isReasoningDisclosureBlock(item) && item.tool"
                     :text="item.tool.output || ''"
@@ -3538,7 +3523,6 @@ import WebSessionMessageEditDialog from '@/components/web-session/WebSessionMess
 import WebSessionMobileSessionDrawer from '@/components/web-session/WebSessionMobileSessionDrawer.vue';
 import WebSessionScheduledSendDialog from '@/components/web-session/WebSessionScheduledSendDialog.vue';
 import WebSessionReasoningSummary from '@/components/web-session/WebSessionReasoningSummary.vue';
-import WebSessionActivityGroup from '@/components/web-session/WebSessionActivityGroup.vue';
 import WebSessionSidebar from '@/components/web-session/WebSessionSidebar.vue';
 import { useWebSessionSidebarResize } from '@/components/web-session/useWebSessionSidebarResize';
 import WebSessionSkillCatalogPanel from '@/components/web-session/WebSessionSkillCatalogPanel.vue';
@@ -3612,13 +3596,6 @@ import {
 } from '@/components/web-session/webSessionRawToggle';
 import { resolveWebSessionAttachmentPreviewMode } from '@/components/web-session/webSessionAttachmentPreview';
 import { projectWebSessionVisibleTimelineBlocks } from '@/components/web-session/webSessionCompactTimeline';
-import {
-  isPiActivityGroupBlock,
-  piActivityGroupItems,
-  piActivitySummaryText,
-  projectPiActivityGroups,
-  type PiActivityGroupRow,
-} from '@/components/web-session/webSessionPiActivityGroup';
 import {
   findLatestSubAgentActivityBlock,
   isTransportRetryActivityText,
@@ -5411,83 +5388,6 @@ function reasoningDisclosurePreview(block: WebSessionBlock) {
   return lines[lines.length - 1] ?? '';
 }
 
-/**
- * Pi folds *adjacent* activity rows instead of classifying every tool name, so
- * dynamic MCP/extension tools group as well as bash does. Plan cards,
- * interactive prompts, sub-agent rows and real warnings stay outside the fold.
- */
-function isPiActivityGroupMember(block: WebSessionBlock) {
-  if (block.kind === 'system') {
-    return block.itemType === 'note' && block.level === 'info';
-  }
-  if (block.kind !== 'tool' || !block.tool) {
-    return false;
-  }
-  if (timelineSubAgent(block)) {
-    return false;
-  }
-  if (isPlanTool(block.tool) || isInteractiveDynamicTool(block.tool)) {
-    return false;
-  }
-  return true;
-}
-
-function isActivityGroupStreaming(group: WebSessionBlock) {
-  return piActivityGroupItems(group).some(item => item.tool?.status === 'running');
-}
-
-function isActivityGroupExpanded(group: WebSessionBlock) {
-  const claimed = expandedTools.value[group.key];
-  if (claimed !== undefined) {
-    return claimed;
-  }
-  return isActivityGroupStreaming(group);
-}
-
-function toggleActivityGroup(group: WebSessionBlock) {
-  expandedTools.value = {
-    ...expandedTools.value,
-    [group.key]: !isActivityGroupExpanded(group),
-  };
-}
-
-function activityGroupStepCount(group: WebSessionBlock) {
-  return piActivityGroupItems(group).filter(item => item.kind === 'tool').length;
-}
-
-function activityGroupLabel(group: WebSessionBlock) {
-  return isActivityGroupStreaming(group)
-    ? t('webSession.activityGroupRunning')
-    : t('webSession.activityGroupDone');
-}
-
-function activityGroupSummary(group: WebSessionBlock) {
-  const items = piActivityGroupItems(group);
-  const last = items[items.length - 1];
-  return last ? piActivitySummaryText(last) : '';
-}
-
-function activityGroupRows(group: WebSessionBlock): PiActivityGroupRow[] {
-  // Collapsed groups do not render a body, so skip building their rows.
-  if (!isActivityGroupExpanded(group)) {
-    return [];
-  }
-  return piActivityGroupItems(group).map(item => {
-    const isNote = item.kind === 'system';
-    return {
-      key: item.key,
-      name: isNote
-        ? ''
-        : isReasoningBlock(item)
-          ? t('webSession.toolReasoning')
-          : String(item.tool?.name ?? '').trim(),
-      summary: isNote ? '' : piActivitySummaryText(item),
-      note: isNote ? piActivitySummaryText(item) : '',
-      body: String(item.tool?.output ?? ''),
-    };
-  });
-}
-
 function isActivityDisplayBlock(block: WebSessionBlock) {
   if (block.kind !== 'tool' || !block.tool) {
     return false;
@@ -5859,13 +5759,12 @@ const filteredTimelineBlocks = computed(() =>
     return true;
   })
 );
-const visibleBlocks = computed(() => {
-  const projected = projectWebSessionVisibleTimelineBlocks(filteredTimelineBlocks.value);
-  if (currentSession.value?.agent !== 'pi') {
-    return projected;
-  }
-  return projectPiActivityGroups(projected, isPiActivityGroupMember);
-});
+const visibleBlocks = computed(() =>
+  projectWebSessionVisibleTimelineBlocks(
+    filteredTimelineBlocks.value,
+    currentSession.value?.agent
+  )
+);
 const {
   inputRef: timelineSearchInputRef,
   openState: timelineSearchOpen,
@@ -9238,17 +9137,9 @@ const timelineContentVersion = computed(() =>
       const toolVersion = block.tool
         ? `${block.tool.id}:${block.tool.status}:${String(block.tool.output ?? '').length}:${toolGroupCount}:${groupItemsLength}`
         : '';
-      // Folded Pi runs carry no tool of their own, so their members drive
-      // auto-follow scrolling while the run is still streaming.
-      const activityVersion = block.activityGroupItems
-        ? block.activityGroupItems
-            .map(
-              item =>
-                `${item.key}:${item.tool?.status ?? ''}:${String(item.tool?.output ?? item.text).length}`
-            )
-            .join(',')
-        : '';
-      return `${block.key}:${block.kind}:${block.text.length}:${block.attachments.length}:${toolVersion}:${activityVersion}:${block.done ? 1 : 0}`;
+      // Pi activity groups have no tool of their own; their members carry the
+      // command group identity, so toolVersion already tracks their progress.
+      return `${block.key}:${block.kind}:${block.text.length}:${block.attachments.length}:${toolVersion}:${block.done ? 1 : 0}`;
     })
     .join('|')
 );
@@ -12128,7 +12019,7 @@ function handleActivityDisplayClick(block: WebSessionBlock) {
 }
 
 function shouldHideTimelineMeta(item: WebSessionBlock) {
-  if (isReasoningDisclosureBlock(item) || isPiActivityGroupBlock(item)) {
+  if (isReasoningDisclosureBlock(item)) {
     return true;
   }
   if (!Number.isFinite(item.timestamp) || item.timestamp <= 0) {

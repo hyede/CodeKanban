@@ -14,6 +14,15 @@ import (
 
 const piToolProgressInterval = 100 * time.Millisecond
 
+// piToolHistoryKind is the history kind stamped on every Pi tool call.
+//
+// Pi reports heterogeneous tools (bash, file edits, MCP and extension tools)
+// so they are classified as dynamic tool calls: that makes them eligible for the
+// shared compact-tool folding, keeps the tool name as the row label, and leaves
+// the active-call timeout policy alone because dynamic_tool_call still resolves
+// to the generic tool policy in activeCallTimeoutKindFromTool.
+const piToolHistoryKind = "dynamic_tool_call"
+
 type piRPCMessage struct {
 	Role         string `json:"role"`
 	Timestamp    int64  `json:"timestamp"`
@@ -326,7 +335,7 @@ func (m *Manager) handlePiToolExecution(dispatch *piRuntimeRun, event piRPCEvent
 	_, err := m.appendAndBroadcast(context.Background(), dispatch.session.ID, dispatch.session, Event{
 		ID: utils.NewID(), Type: eventType, RunID: dispatch.run.runID, ParentID: snapshot.parentID,
 		Timestamp: now, Payload: map[string]any{
-			"tid": snapshot.id, "name": firstNonEmpty(snapshot.name, "Tool"), "kind": "tool",
+			"tid": snapshot.id, "name": firstNonEmpty(snapshot.name, "Tool"), "kind": piToolHistoryKind,
 			"in": snapshot.args, "out": snapshot.output, "ok": !payload.IsError,
 		},
 	})
@@ -732,7 +741,7 @@ func (m *Manager) finishPiSettledProjection(dispatch *piRuntimeRun) error {
 		if _, err := m.appendAndBroadcast(context.Background(), dispatch.session.ID, dispatch.session, Event{
 			ID: utils.NewID(), Type: "tool_end", RunID: dispatch.run.runID, ParentID: tool.parentID,
 			Timestamp: time.Now(), Payload: map[string]any{
-				"tid": tool.id, "name": firstNonEmpty(tool.name, "Tool"), "kind": "tool",
+				"tid": tool.id, "name": firstNonEmpty(tool.name, "Tool"), "kind": piToolHistoryKind,
 				"in": tool.args, "out": tool.output, "ok": false,
 			},
 		}); err != nil {

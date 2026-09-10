@@ -412,8 +412,6 @@ export interface WebSessionBlock {
   done?: boolean;
   detail?: WebSessionHistoryDetail;
   payload?: Record<string, unknown>;
-  /** Client-only: the folded Pi activity rows this disclosure stands for. */
-  activityGroupItems?: WebSessionBlock[];
   deliveryState?: WebSessionMessageDeliveryState;
   freshContext?: boolean;
 }

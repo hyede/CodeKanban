@@ -9056,6 +9056,129 @@ func TestDecorateProjectedEventSeparatesDynamicToolNames(t *testing.T) {
 	}
 }
 
+func TestHistoryFoldsAdjacentPiToolsIntoOneActivityGroup(t *testing.T) {
+	cleanup := initTestDB(t)
+	defer cleanup()
+
+	project := seedProject(t)
+	session := seedWebSessionWithAgent(t, project.ID, "Pi activity", 1000, AgentPi)
+	manager, err := NewManager(Config{DataDir: t.TempDir()}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	// Pi names its tools freely, so unlike Codex there is no shared kind to fold
+	// on: two different tools must still end up in one activity group.
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_bash_st", Seq: 1, Type: "tool_st", Timestamp: time.UnixMilli(1_000),
+		Payload: map[string]any{
+			"tid": "bash1", "name": "bash", "kind": piToolHistoryKind,
+			"in": map[string]any{"command": "go test ./..."},
+		},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_bash_end", Seq: 2, Type: "tool_end", Timestamp: time.UnixMilli(2_000),
+		Payload: map[string]any{"tid": "bash1", "kind": piToolHistoryKind, "out": "ok", "ok": true},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_note_st", Seq: 3, Type: "tool_st", Timestamp: time.UnixMilli(3_000),
+		Payload: map[string]any{
+			"tid": "note1", "name": "ctx_note", "kind": piToolHistoryKind,
+			"in": map[string]any{"content": "remember this"},
+		},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_note_end", Seq: 4, Type: "tool_end", Timestamp: time.UnixMilli(4_000),
+		Payload: map[string]any{"tid": "note1", "kind": piToolHistoryKind, "out": "saved", "ok": true},
+	})
+
+	history, err := manager.History(context.Background(), session.ID, 20, nil)
+	if err != nil {
+		t.Fatalf("History returned error: %v", err)
+	}
+	if len(history.Items) != 1 {
+		t.Fatalf("expected one folded Pi activity item, got %d", len(history.Items))
+	}
+	grouped := history.Items[0]
+	if grouped.Tool == nil || grouped.Tool.CommandGroup == nil {
+		t.Fatalf("expected folded group metadata, got %#v", grouped.Tool)
+	}
+	if got := grouped.Tool.CommandGroup.ID; got != commandExecutionGroupID("bash1") {
+		t.Fatalf("expected group anchored on the first tool %q, got %q", commandExecutionGroupID("bash1"), got)
+	}
+	if grouped.Tool.CommandGroup.Count != 2 {
+		t.Fatalf("expected folded count 2, got %d", grouped.Tool.CommandGroup.Count)
+	}
+	if !grouped.Tool.CommandGroup.Compacted {
+		t.Fatalf("expected the Pi activity group to be marked compacted, got %#v", grouped.Tool.CommandGroup)
+	}
+	if got := grouped.Tool.Name; got != "ctx_note" {
+		t.Fatalf("expected the folded card to carry the latest tool %q, got %q", "ctx_note", got)
+	}
+}
+
+func TestHistorySplitsPiActivityGroupOnAssistantReply(t *testing.T) {
+	cleanup := initTestDB(t)
+	defer cleanup()
+
+	project := seedProject(t)
+	session := seedWebSessionWithAgent(t, project.ID, "Pi activity split", 1000, AgentPi)
+	manager, err := NewManager(Config{DataDir: t.TempDir()}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_bash1_st", Seq: 1, Type: "tool_st", Timestamp: time.UnixMilli(1_000),
+		Payload: map[string]any{"tid": "bash1", "name": "bash", "kind": piToolHistoryKind},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_bash1_end", Seq: 2, Type: "tool_end", Timestamp: time.UnixMilli(2_000),
+		Payload: map[string]any{"tid": "bash1", "kind": piToolHistoryKind, "out": "ok", "ok": true},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_text", Seq: 3, Type: "txt_d", Timestamp: time.UnixMilli(3_000),
+		Payload: map[string]any{"mid": "msg1", "txt": "first step done"},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_bash2_st", Seq: 4, Type: "tool_st", Timestamp: time.UnixMilli(4_000),
+		Payload: map[string]any{"tid": "bash2", "name": "bash", "kind": piToolHistoryKind},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_bash2_end", Seq: 5, Type: "tool_end", Timestamp: time.UnixMilli(5_000),
+		Payload: map[string]any{"tid": "bash2", "kind": piToolHistoryKind, "out": "ok", "ok": true},
+	})
+
+	history, err := manager.History(context.Background(), session.ID, 20, nil)
+	if err != nil {
+		t.Fatalf("History returned error: %v", err)
+	}
+	if len(history.Items) != 3 {
+		t.Fatalf("expected tool, reply and tool items, got %d", len(history.Items))
+	}
+	first := history.Items[0]
+	last := history.Items[2]
+	if first.Tool == nil || first.Tool.CommandGroup == nil || last.Tool == nil {
+		t.Fatalf("expected tool items around the reply, got %#v / %#v", first.Tool, last.Tool)
+	}
+	if first.Tool.CommandGroup.Count != 1 {
+		t.Fatalf("expected a single-tool group before the reply, got %d", first.Tool.CommandGroup.Count)
+	}
+	if last.Tool.CommandGroup == nil || last.Tool.CommandGroup.ID == first.Tool.CommandGroup.ID {
+		t.Fatalf("expected the reply to close the Pi activity group, got %#v", last.Tool.CommandGroup)
+	}
+}
+
+func TestPiToolHistoryKindStaysCompactAndGeneric(t *testing.T) {
+	if !isCompactToolKind(piToolHistoryKind) {
+		t.Fatalf("expected %q to be a compact tool kind", piToolHistoryKind)
+	}
+	kind, ok := activeCallTimeoutKindFromTool(piToolHistoryKind)
+	if !ok || kind != activeCallTimeoutKindTool {
+		t.Fatalf("expected %q to keep the generic tool timeout policy, got %q (%v)", piToolHistoryKind, kind, ok)
+	}
+}
+
 func TestCodexToolResultUsesCamelCaseAggregatedOutput(t *testing.T) {
 	got := codexToolResult(map[string]any{
 		"type":             "commandExecution",
