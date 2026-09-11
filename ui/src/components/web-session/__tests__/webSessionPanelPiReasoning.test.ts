@@ -62,8 +62,17 @@ describe('WebSessionPanel streaming render cost', () => {
     expect(panelSource).toMatch(/getEffectiveStreamingMarkdownText\(block, 'reasoning'\)/);
   });
 
-  it('renders streaming thinking as plain text and only parses markdown once it settles', () => {
-    expect(panelSource).toMatch(/class="reasoning-stream-body"\s+v-text="getReasoningMarkdownText\(item\)"/);
+  it('streams thinking through the block-by-block markdown renderer', () => {
+    // Settled blocks keep their HTML across deltas, so streaming bodies render
+    // markdown without re-parsing the whole body on every chunk.
+    expect(panelSource).toMatch(
+      /import WebSessionStreamingMarkdown from '@\/components\/web-session\/WebSessionStreamingMarkdown\.vue';/
+    );
+    expect(panelSource).toMatch(/:blocks="getReasoningStreamingBlocks\(item\)"/);
+    expect(panelSource).toMatch(/:blocks="getMessageStreamingBlocks\(item\)"/);
+    expect(panelSource).toMatch(/renderStreamingMarkdownBlocks\(`reasoning:\$\{block\.key\}`/);
+    expect(panelSource).toMatch(/:blocks="getReasoningStreamingBlocks\(item\)"\s*\/>/);
+    // The settled branch still renders the cached whole-body markdown.
     expect(panelSource).toMatch(/v-html="renderMarkdown\(getReasoningMarkdownText\(item\)\)"/);
     // Neither branch may read the raw output directly any more.
     expect(panelSource).not.toMatch(/renderMarkdown\(item\.tool\.output \|\| ''\)/);

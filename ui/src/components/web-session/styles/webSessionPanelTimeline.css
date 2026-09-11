@@ -2201,13 +2201,11 @@
   }
 }
 
-/* Reasoning streams as plain text: re-parsing markdown on every thinking delta
-   was the main source of repaint cost while Pi was thinking. */
+/* Reasoning streams block by block through WebSessionStreamingMarkdown, so the
+   body stays compact while its markdown settles incrementally. */
 .reasoning-stream-body {
   margin: 0;
   padding: 0;
-  font: inherit;
   font-size: 12px;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

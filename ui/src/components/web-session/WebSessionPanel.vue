@@ -1146,14 +1146,14 @@
                     :expanded="isReasoningDisclosureExpanded(item.tool)"
                     @toggle="toggleReasoningDisclosure(item.tool)"
                   >
-                    <pre
+                    <WebSessionStreamingMarkdown
                       v-if="
                         isReasoningDisclosureExpanded(item.tool) &&
                         isStreamingReasoningMarkdownBlock(item)
                       "
-                      class="reasoning-stream-body"
-                      v-text="getReasoningMarkdownText(item)"
-                    ></pre>
+                      class="chat-markdown reasoning-stream-body"
+                      :blocks="getReasoningStreamingBlocks(item)"
+                    />
                     <div
                       v-else-if="isReasoningDisclosureExpanded(item.tool)"
                       class="chat-markdown"
@@ -1576,6 +1576,13 @@
                         v-if="shouldShowMessageRawToggle(item) && isBlockRawMode(item, 'message')"
                         class="item-text item-text--raw timeline-raw-text"
                       ><code v-html="renderHighlightedPlainText(item.text, timelineSearchQuery)"></code></pre>
+                      <WebSessionStreamingMarkdown
+                        v-else-if="
+                          isStreamingMessageMarkdownBlock(item) && getDisplayBlockText(item)
+                        "
+                        class="item-text chat-markdown"
+                        :blocks="getMessageStreamingBlocks(item)"
+                      />
                       <div
                         v-else-if="getDisplayBlockText(item)"
                         class="item-text chat-markdown"
@@ -3503,7 +3510,11 @@ import {
 } from '@/constants/webSessionActivityDisplayMode';
 import { getAssistantIconByType } from '@/utils/assistantIcon';
 import { isDarkHex } from '@/utils/color';
-import { renderHighlightedPlainText, renderMarkdown } from '@/utils/markdown';
+import {
+  renderHighlightedPlainText,
+  renderMarkdown,
+  renderStreamingMarkdownBlocks,
+} from '@/utils/markdown';
 import { stripMagicContextTags } from '@/utils/magicContextTags';
 import {
   buildImagePlaceholder,
@@ -3537,6 +3548,7 @@ import WebSessionMessageEditDialog from '@/components/web-session/WebSessionMess
 import WebSessionMobileSessionDrawer from '@/components/web-session/WebSessionMobileSessionDrawer.vue';
 import WebSessionScheduledSendDialog from '@/components/web-session/WebSessionScheduledSendDialog.vue';
 import WebSessionReasoningSummary from '@/components/web-session/WebSessionReasoningSummary.vue';
+import WebSessionStreamingMarkdown from '@/components/web-session/WebSessionStreamingMarkdown.vue';
 import WebSessionSidebar from '@/components/web-session/WebSessionSidebar.vue';
 import { useWebSessionSidebarResize } from '@/components/web-session/useWebSessionSidebarResize';
 import WebSessionSkillCatalogPanel from '@/components/web-session/WebSessionSkillCatalogPanel.vue';
@@ -5560,6 +5572,22 @@ function getMessageMarkdownText(block: WebSessionBlock) {
     return getDisplayBlockText(block);
   }
   return getEffectiveStreamingMarkdownText(block, 'message');
+}
+
+/**
+ * Streaming bodies render block by block: settled blocks keep their HTML, so a
+ * growing message only re-renders its tail instead of the whole body.
+ */
+function getMessageStreamingBlocks(block: WebSessionBlock) {
+  return renderStreamingMarkdownBlocks(
+    `message:${block.key}`,
+    getMessageMarkdownText(block),
+    getMessageMarkdownRenderOptions(block)
+  );
+}
+
+function getReasoningStreamingBlocks(block: WebSessionBlock) {
+  return renderStreamingMarkdownBlocks(`reasoning:${block.key}`, getReasoningMarkdownText(block));
 }
 
 function getMessageMarkdownRenderOptions(block: WebSessionBlock) {

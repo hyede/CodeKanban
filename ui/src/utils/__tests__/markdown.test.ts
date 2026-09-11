@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   renderHighlightedCodeBlock,
   renderHighlightedPlainText,
   renderMarkdown,
+  renderStreamingMarkdownBlocks,
+  resetStreamingMarkdownBlocks,
 } from '@/utils/markdown';
 
 describe('renderMarkdown', () => {
@@ -176,5 +178,64 @@ describe('renderMarkdown rendering cache', () => {
 describe('renderHighlightedPlainText markers', () => {
   it('drops Magic Context markers from raw text', () => {
     expect(renderHighlightedPlainText('§7§ raw §8§ text')).toBe('raw text');
+  });
+});
+
+describe('renderStreamingMarkdownBlocks', () => {
+  beforeEach(() => {
+    resetStreamingMarkdownBlocks();
+  });
+
+  it('splits a body into its top-level blocks', () => {
+    const blocks = renderStreamingMarkdownBlocks(
+      'k',
+      '# Title\n\nfirst para\n\n```js\nlet a = 1\n```'
+    );
+
+    expect(blocks.map(block => block.key)).toEqual(['0', '1', '2']);
+    expect(blocks[0].html).toContain('<h1');
+    expect(blocks[1].html).toContain('first para');
+    expect(blocks[2].html).toContain('hljs');
+  });
+
+  it('reuses settled blocks so only the growing tail is re-rendered', () => {
+    const first = renderStreamingMarkdownBlocks('k', '# Title\n\nstreaming');
+    const second = renderStreamingMarkdownBlocks('k', '# Title\n\nstreaming more text');
+
+    // Object identity is what lets the renderer skip patching: same object
+    // means the identical html string, so no DOM work for settled blocks.
+    expect(second[0]).toBe(first[0]);
+    expect(second[1]).not.toBe(first[1]);
+    expect(second[1].html).toContain('more text');
+  });
+
+  it('re-renders a block whose source changed', () => {
+    const first = renderStreamingMarkdownBlocks('k', 'alpha');
+    const second = renderStreamingMarkdownBlocks('k', 'beta');
+
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].html).toContain('beta');
+  });
+
+  it('keeps block state per stream key', () => {
+    const a = renderStreamingMarkdownBlocks('stream-a', 'shared text');
+    const b = renderStreamingMarkdownBlocks('stream-b', 'shared text');
+
+    expect(b[0].html).toBe(a[0].html);
+    expect(b[0]).not.toBe(a[0]);
+  });
+
+  it('drops state for an empty body and recovers afterwards', () => {
+    renderStreamingMarkdownBlocks('k', 'text');
+    expect(renderStreamingMarkdownBlocks('k', '')).toEqual([]);
+    expect(renderStreamingMarkdownBlocks('k', 'text')[0].html).toContain('text');
+  });
+
+  it('drops Magic Context markers before splitting', () => {
+    const blocks = renderStreamingMarkdownBlocks('k', 'drop §12§, §13§ now');
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].html).not.toContain('§');
+    expect(blocks[0].html).toContain('drop now');
   });
 });

@@ -372,3 +372,102 @@ export function renderMarkdown(value: string, options: RenderMarkdownOptions = {
   }
   return markdownHtmlCache.write(variant, value, html);
 }
+
+export interface StreamingMarkdownBlock {
+  key: string;
+  html: string;
+}
+
+type MarkdownTokenList = Parameters<Marked['parser']>[0];
+type MarkdownToken = MarkdownTokenList[number];
+
+interface StreamingMarkdownState {
+  variant: string;
+  raws: string[];
+  blocks: StreamingMarkdownBlock[];
+}
+
+const streamingMarkdownStateByKey = new Map<string, StreamingMarkdownState>();
+const STREAMING_MARKDOWN_STATE_LIMIT = 24;
+
+function readStreamingState(stateKey: string) {
+  const state = streamingMarkdownStateByKey.get(stateKey);
+  if (state) {
+    streamingMarkdownStateByKey.delete(stateKey);
+    streamingMarkdownStateByKey.set(stateKey, state);
+  }
+  return state;
+}
+
+function writeStreamingState(stateKey: string, state: StreamingMarkdownState) {
+  streamingMarkdownStateByKey.set(stateKey, state);
+  while (streamingMarkdownStateByKey.size > STREAMING_MARKDOWN_STATE_LIMIT) {
+    const oldest = streamingMarkdownStateByKey.keys().next().value;
+    if (oldest === undefined || oldest === stateKey) {
+      break;
+    }
+    streamingMarkdownStateByKey.delete(oldest);
+  }
+}
+
+function renderStreamingMarkdownBlock(token: MarkdownToken, options: RenderMarkdownOptions) {
+  const query = options.textHighlightQuery ?? '';
+  try {
+    const html = getMarkdownRenderer(options).parser([token]) as string;
+    return highlightRenderedText(html, query);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Render markdown block by block so a body that is still streaming only pays for
+ * the block that actually changed.
+ *
+ * Whole-body parsing per delta is quadratic over a message and re-runs syntax
+ * highlighting over text that already scrolled past. Splitting on top-level
+ * tokens keeps every settled block's HTML string identical, which lets the
+ * renderer skip patching those nodes entirely; only the growing tail block is
+ * re-parsed.
+ */
+export function renderStreamingMarkdownBlocks(
+  stateKey: string,
+  value: string,
+  options: RenderMarkdownOptions = {}
+): StreamingMarkdownBlock[] {
+  if (!value) {
+    streamingMarkdownStateByKey.delete(stateKey);
+    return [];
+  }
+
+  const variant = markdownOptionsVariantKey(options);
+  const source = stripMagicContextTags(value);
+  const tokens = (getMarkdownRenderer(options).lexer(source) as MarkdownToken[]).filter(
+    token => token.type !== 'space'
+  );
+  const previous = readStreamingState(stateKey);
+  const reusable = previous && previous.variant === variant ? previous : undefined;
+
+  const blocks: StreamingMarkdownBlock[] = [];
+  const raws: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const raw = token.raw ?? '';
+    raws.push(raw);
+    const cached = reusable && reusable.raws[index] === raw ? reusable.blocks[index] : undefined;
+    if (cached) {
+      // Reusing the object reuses its html string, so the child skips its patch.
+      blocks.push(cached);
+      continue;
+    }
+    blocks.push({ key: `${index}`, html: renderStreamingMarkdownBlock(token, options) });
+  }
+
+  writeStreamingState(stateKey, { variant, raws, blocks });
+  return blocks;
+}
+
+/** Test seam: streaming block state must not leak between cases. */
+export function resetStreamingMarkdownBlocks() {
+  streamingMarkdownStateByKey.clear();
+}
