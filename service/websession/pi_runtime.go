@@ -166,7 +166,10 @@ func (m *Manager) startPiRuntime(
 		}
 	}()
 
-	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// The handshake shares one deadline across get_state/get_commands/get_entries
+	// and starts before the child process has answered anything, so it uses the
+	// generous startup budget instead of the per-request timeout.
+	requestCtx, cancel := context.WithTimeout(ctx, piRPCStartupTimeout)
 	defer cancel()
 	var state piRPCState
 	if err := client.Request(requestCtx, "get_state", nil, &state); err != nil {

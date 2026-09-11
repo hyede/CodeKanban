@@ -22,6 +22,11 @@ const (
 	piRPCMaxInlineToolEventBytes = 64 * 1024
 	piRPCStderrLimit             = 64 * 1024
 	piRPCRequestTimeout          = 30 * time.Second
+	// piRPCStartupTimeout bounds the reusable process cold-start handshake. The
+	// first get_state only answers after the child finished booting (cmd wrapper,
+	// node startup, extension/skill loading, session file load), which under
+	// machine load can take far longer than a responsive-process RPC round trip.
+	piRPCStartupTimeout = 45 * time.Second
 )
 
 var errPiRPCClosed = errors.New("Pi RPC process is closed")
