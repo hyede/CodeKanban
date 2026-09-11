@@ -78,6 +78,12 @@ describe('WebSessionPanel streaming render cost', () => {
     expect(panelSource).not.toMatch(/renderMarkdown\(item\.tool\.output \|\| ''\)/);
   });
 
+  it('streams plan cards through the same incremental renderer', () => {
+    expect(panelSource).toMatch(/v-else-if="isStreamingPlanMarkdownBlock\(item\)"/);
+    expect(panelSource).toMatch(/:blocks="getPlanStreamingBlocks\(item\)"/);
+    expect(panelSource).toContain('`plan:${block.key}`');
+  });
+
   it('keeps the reasoning preview off a full-body split', () => {
     const previewStart = panelSource.indexOf('function reasoningDisclosurePreview');
     expect(previewStart).toBeGreaterThan(-1);

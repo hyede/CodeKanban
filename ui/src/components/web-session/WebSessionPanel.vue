@@ -1074,6 +1074,11 @@
                               renderHighlightedPlainText(item.tool.output, timelineSearchQuery)
                             "
                           ></code></pre>
+                          <WebSessionStreamingMarkdown
+                            v-else-if="isStreamingPlanMarkdownBlock(item)"
+                            class="chat-markdown"
+                            :blocks="getPlanStreamingBlocks(item)"
+                          />
                           <div
                             v-else
                             class="chat-markdown"
@@ -5611,6 +5616,15 @@ function getPlanToolMarkdownRenderOptions(block: WebSessionBlock) {
     : timelineMarkdownRenderOptions.value;
   const query = timelineSearchQuery.value.trim();
   return query ? { ...options, textHighlightQuery: query } : options;
+}
+
+/** Same incremental block rendering the message and reasoning bodies use. */
+function getPlanStreamingBlocks(block: WebSessionBlock) {
+  return renderStreamingMarkdownBlocks(
+    `plan:${block.key}`,
+    getPlanToolMarkdownText(block),
+    getPlanToolMarkdownRenderOptions(block)
+  );
 }
 
 function getTimelineRawModeKey(block: WebSessionBlock, surface: TimelineRawSurface) {
