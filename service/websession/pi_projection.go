@@ -671,6 +671,14 @@ func (m *Manager) respondPiExtensionRequest(
 		return errors.New("Pi extension response run is no longer active")
 	}
 	now := time.Now()
+	if eventType == "approval_res" && request.Command != "" {
+		if eventPayload == nil {
+			eventPayload = map[string]any{}
+		}
+		if strings.TrimSpace(stringValue(eventPayload["command"])) == "" {
+			eventPayload["command"] = request.Command
+		}
+	}
 	if err := m.updateRuntimeState(context.Background(), session.ID, applyAssistantStateUpdates(map[string]any{"updated_at": now}, AssistantStateWorking, now)); err != nil {
 		runtime.stop(errors.New("Pi extension response state update failed"))
 		return err

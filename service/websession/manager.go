@@ -6656,7 +6656,7 @@ func (m *Manager) respondToApproval(sessionID, action string) error {
 		dispatchLock.Unlock()
 		confirmed := action != "reject" && action != "cancel"
 		return m.respondPiExtensionRequest(record, run, request, map[string]any{"confirmed": confirmed}, "approval_res", map[string]any{
-			"act": action, "prompt": request.Prompt,
+			"act": action, "prompt": request.Prompt, "command": request.Command,
 		})
 	}
 	defer dispatchLock.Unlock()
@@ -6701,8 +6701,9 @@ func (m *Manager) respondToApproval(sessionID, action string) error {
 			RunID:     utils.NewID(),
 			Timestamp: now,
 			Payload: map[string]any{
-				"act":    action,
-				"prompt": pending.Prompt,
+				"act":     action,
+				"prompt":  pending.Prompt,
+				"command": pending.Command,
 			},
 		})
 		if err := m.startClaudeDeferredResume(context.Background(), record, pending); err != nil {
@@ -6739,8 +6740,9 @@ func (m *Manager) respondToApproval(sessionID, action string) error {
 			TurnID:    pending.TurnID,
 			Timestamp: now,
 			Payload: map[string]any{
-				"act":    action,
-				"prompt": pending.Prompt,
+				"act":     action,
+				"prompt":  pending.Prompt,
+				"command": pending.Command,
 			},
 		})
 		_ = m.updateRuntimeState(

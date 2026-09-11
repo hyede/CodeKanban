@@ -51,3 +51,42 @@ describe('WebSessionPanel Pi reasoning disclosure', () => {
     expect(panelSource).not.toMatch(/isPiActivityGroupMember/);
   });
 });
+
+describe('WebSessionPanel streaming render cost', () => {
+  it('routes Pi thinking through the throttled streaming markdown controller', () => {
+    // The streaming surfaces are the only ones allowed to bypass a full
+    // re-render per delta; thinking has to be one of them.
+    expect(panelSource).toMatch(/type StreamingMarkdownSurface = 'message' \| 'plan' \| 'reasoning'/);
+    expect(panelSource).toMatch(/function isStreamingReasoningMarkdownBlock\(block: WebSessionBlock\)/);
+    expect(panelSource).toMatch(/key: buildStreamingMarkdownKey\(block, 'reasoning'\)/);
+    expect(panelSource).toMatch(/getEffectiveStreamingMarkdownText\(block, 'reasoning'\)/);
+  });
+
+  it('renders streaming thinking as plain text and only parses markdown once it settles', () => {
+    expect(panelSource).toMatch(/class="reasoning-stream-body"\s+v-text="getReasoningMarkdownText\(item\)"/);
+    expect(panelSource).toMatch(/v-html="renderMarkdown\(getReasoningMarkdownText\(item\)\)"/);
+    // Neither branch may read the raw output directly any more.
+    expect(panelSource).not.toMatch(/renderMarkdown\(item\.tool\.output \|\| ''\)/);
+  });
+
+  it('keeps the reasoning preview off a full-body split', () => {
+    const previewStart = panelSource.indexOf('function reasoningDisclosurePreview');
+    expect(previewStart).toBeGreaterThan(-1);
+    const previewBody = panelSource.slice(previewStart, previewStart + 700);
+
+    expect(previewBody).toContain('lastIndexOf(');
+    expect(previewBody).not.toContain('.split(');
+  });
+
+  it('coalesces pending auto-scroll runs instead of cancelling them', () => {
+    expect(panelSource).toMatch(/let timelineScrollSyncScheduled = false;/);
+    expect(panelSource).toMatch(/if \(timelineScrollSyncScheduled && !force\) \{\s*return;/);
+    expect(panelSource).toMatch(
+      /function invalidateTimelineScrollSync\(\) \{\s*timelineScrollSyncVersion \+= 1;\s*timelineScrollSyncScheduled = false;/
+    );
+  });
+
+  it('strips Magic Context markers from tool output rows', () => {
+    expect(panelSource).toMatch(/stripMagicContextTags\(item\.tool\.output\)/);
+  });
+});

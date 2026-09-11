@@ -2200,3 +2200,14 @@
     transform: translateX(380%);
   }
 }
+
+/* Reasoning streams as plain text: re-parsing markdown on every thinking delta
+   was the main source of repaint cost while Pi was thinking. */
+.reasoning-stream-body {
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

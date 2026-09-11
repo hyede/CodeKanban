@@ -950,9 +950,10 @@ func (m *Manager) findClaudePendingApprovalRequest(
 		return nil, fmt.Errorf("approval request is missing tool id")
 	}
 	return &pendingServerRequest{
-		Kind:   pendingServerRequestPlanApproval,
-		ItemID: itemID,
-		Prompt: firstNonEmpty(strings.TrimSpace(stringValue(payload["prompt"])), item.Text),
+		Kind:    pendingServerRequestPlanApproval,
+		ItemID:  itemID,
+		Prompt:  firstNonEmpty(strings.TrimSpace(stringValue(payload["prompt"])), item.Text),
+		Command: strings.TrimSpace(stringValue(payload["command"])),
 	}, nil
 }
 

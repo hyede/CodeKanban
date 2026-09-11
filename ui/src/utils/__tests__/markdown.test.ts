@@ -136,3 +136,45 @@ describe('renderMarkdown', () => {
     expect(html).toContain('hljs-deletion');
   });
 });
+
+describe('renderMarkdown rendering cache', () => {
+  it('reuses the rendered html for an unchanged body', () => {
+    const body = '# Heading\n\nsome **body** text';
+
+    // Identity matters: the timeline re-renders on every stream delta, and a
+    // fresh parse per render is what made long sessions janky.
+    expect(renderMarkdown(body)).toBe(renderMarkdown(body));
+  });
+
+  it('re-renders when the body changes', () => {
+    const first = renderMarkdown('first body');
+    const second = renderMarkdown('second body');
+
+    expect(second).not.toBe(first);
+    expect(first).toContain('first body');
+    expect(second).toContain('second body');
+  });
+
+  it('keeps results apart per highlight query', () => {
+    const body = 'searchable body';
+    const plain = renderMarkdown(body);
+    const highlighted = renderMarkdown(body, { textHighlightQuery: 'searchable' });
+
+    expect(highlighted).not.toBe(plain);
+    expect(highlighted).toContain('markdown-search-highlight');
+    expect(renderMarkdown(body)).toBe(plain);
+  });
+
+  it('drops Magic Context markers before parsing', () => {
+    const html = renderMarkdown('§12§ thinking about §13§ the parser');
+
+    expect(html).not.toContain('§');
+    expect(html).toContain('thinking about');
+  });
+});
+
+describe('renderHighlightedPlainText markers', () => {
+  it('drops Magic Context markers from raw text', () => {
+    expect(renderHighlightedPlainText('§7§ raw §8§ text')).toBe('raw text');
+  });
+});

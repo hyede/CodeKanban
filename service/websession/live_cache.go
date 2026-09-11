@@ -556,9 +556,10 @@ func (m *Manager) applyEventToHistoryCacheDB(
 			ObservedAt:     ptr(event.Timestamp),
 			Level:          level,
 			Detail: &HistoryDetail{
-				Type:   "approval_response",
-				Prompt: stringValue(payload["prompt"]),
-				Action: action,
+				Type:    "approval_response",
+				Prompt:  stringValue(payload["prompt"]),
+				Command: stringValue(payload["command"]),
+				Action:  action,
 			},
 			Payload: payload,
 		})

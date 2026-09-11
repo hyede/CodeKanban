@@ -21,6 +21,7 @@ import typescript from 'highlight.js/lib/languages/typescript';
 import xml from 'highlight.js/lib/languages/xml';
 import yaml from 'highlight.js/lib/languages/yaml';
 import { Marked, type Tokens } from 'marked';
+import { stripMagicContextTags } from '@/utils/magicContextTags';
 import { resolveCopyableAbsoluteHref } from '@/utils/messageLinkNavigation';
 
 type HljsLanguageModule = Parameters<typeof hljs.registerLanguage>[1];
@@ -144,8 +145,67 @@ function highlightRenderedTextSegment(value: string, matcher: RegExp) {
   return value.replace(matcher, match => `<mark class="markdown-search-highlight">${match}</mark>`);
 }
 
+/**
+ * Rendered HTML is cached because the whole timeline re-renders on every stream
+ * delta: without it, every visible block re-parses its markdown on each update.
+ * The key is the original string so an unchanged block hits the cache by
+ * identity instead of rebuilding a composite key out of the whole body.
+ */
+function createRenderedHtmlCache(limit: number) {
+  const buckets = new Map<string, Map<string, string>>();
+
+  return {
+    read(variant: string, value: string) {
+      const bucket = buckets.get(variant);
+      const cached = bucket?.get(value);
+      if (cached === undefined || !bucket) {
+        return undefined;
+      }
+      // Keep the most recently used entries when trimming.
+      bucket.delete(value);
+      bucket.set(value, cached);
+      return cached;
+    },
+    write(variant: string, value: string, html: string) {
+      let bucket = buckets.get(variant);
+      if (!bucket) {
+        bucket = new Map<string, string>();
+        buckets.set(variant, bucket);
+      }
+      bucket.set(value, html);
+      while (bucket.size > limit) {
+        const oldest = bucket.keys().next().value;
+        if (oldest === undefined) {
+          break;
+        }
+        bucket.delete(oldest);
+      }
+      return html;
+    },
+  };
+}
+
+const plainTextHtmlCache = createRenderedHtmlCache(60);
+const markdownHtmlCache = createRenderedHtmlCache(60);
+
+function highlightVariantKey(query?: string) {
+  return query ?? '';
+}
+
 export function renderHighlightedPlainText(value: string, query?: string) {
-  return highlightRenderedText(escapeHtml(value), query ?? '');
+  if (!value) {
+    return '';
+  }
+  const variant = highlightVariantKey(query);
+  const cached = plainTextHtmlCache.read(variant, value);
+  if (cached !== undefined) {
+    return cached;
+  }
+  return plainTextHtmlCache.write(
+    variant,
+    value,
+    highlightRenderedText(escapeHtml(stripMagicContextTags(value)), query ?? '')
+  );
 }
 
 function pickLanguageName(value?: string) {
@@ -277,16 +337,38 @@ function getMarkdownRenderer(options: RenderMarkdownOptions = {}) {
   return renderer;
 }
 
+function markdownOptionsVariantKey(options: RenderMarkdownOptions = {}) {
+  return JSON.stringify({
+    disableCodeHighlight: !!options.disableCodeHighlight,
+    enableCodeBlockCopy: !!options.enableCodeBlockCopy,
+    codeBlockCopyLabel: options.codeBlockCopyLabel || '',
+    enableLinkCopy: !!options.enableLinkCopy,
+    linkCopyLabel: options.linkCopyLabel || '',
+    textHighlightQuery: options.textHighlightQuery || '',
+  });
+}
+
 export function renderMarkdown(value: string, options: RenderMarkdownOptions = {}) {
   if (!value) {
     return '';
   }
 
-  try {
-    const rendered = getMarkdownRenderer(options).parse(value) as string;
-    return highlightRenderedText(rendered, options.textHighlightQuery ?? '');
-  } catch {
-    const rendered = escapeHtml(value).replace(/\n/g, '<br>');
-    return highlightRenderedText(rendered, options.textHighlightQuery ?? '');
+  const variant = markdownOptionsVariantKey(options);
+  const cached = markdownHtmlCache.read(variant, value);
+  if (cached !== undefined) {
+    return cached;
   }
+
+  // Magic Context markers only ever addressed the model; strip them before the
+  // text reaches the reader.
+  const source = stripMagicContextTags(value);
+  let html: string;
+  try {
+    const rendered = getMarkdownRenderer(options).parse(source) as string;
+    html = highlightRenderedText(rendered, options.textHighlightQuery ?? '');
+  } catch {
+    const rendered = escapeHtml(source).replace(/\n/g, '<br>');
+    html = highlightRenderedText(rendered, options.textHighlightQuery ?? '');
+  }
+  return markdownHtmlCache.write(variant, value, html);
 }

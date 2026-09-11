@@ -1137,7 +1137,7 @@
 
                   <WebSessionReasoningSummary
                     v-else-if="isReasoningDisclosureBlock(item) && item.tool"
-                    :text="item.tool.output || ''"
+                    :text="getReasoningMarkdownText(item)"
                     :label="reasoningDisclosureLabel(item)"
                     :summary="reasoningDisclosurePreview(item)"
                     :streaming="isReasoningStreaming(item)"
@@ -1146,10 +1146,18 @@
                     :expanded="isReasoningDisclosureExpanded(item.tool)"
                     @toggle="toggleReasoningDisclosure(item.tool)"
                   >
+                    <pre
+                      v-if="
+                        isReasoningDisclosureExpanded(item.tool) &&
+                        isStreamingReasoningMarkdownBlock(item)
+                      "
+                      class="reasoning-stream-body"
+                      v-text="getReasoningMarkdownText(item)"
+                    ></pre>
                     <div
-                      v-if="isReasoningDisclosureExpanded(item.tool)"
+                      v-else-if="isReasoningDisclosureExpanded(item.tool)"
                       class="chat-markdown"
-                      v-html="renderMarkdown(item.tool.output || '')"
+                      v-html="renderMarkdown(getReasoningMarkdownText(item))"
                     ></div>
                   </WebSessionReasoningSummary>
 
@@ -1211,7 +1219,7 @@
                       </div>
                       <div v-if="item.tool.output" class="tool-section">
                         <div class="tool-section-label">{{ t('webSession.toolOutput') }}</div>
-                        <pre class="tool-code">{{ item.tool.output }}</pre>
+                        <pre class="tool-code">{{ stripMagicContextTags(item.tool.output) }}</pre>
                       </div>
                       <div
                         v-else-if="shouldShowToolPendingPlaceholder(item.tool)"
@@ -1360,7 +1368,7 @@
                         </div>
                         <div v-if="item.tool.output" class="tool-section">
                           <div class="tool-section-label">{{ t('webSession.toolOutput') }}</div>
-                          <pre class="tool-code">{{ item.tool.output }}</pre>
+                          <pre class="tool-code">{{ stripMagicContextTags(item.tool.output) }}</pre>
                         </div>
                         <div
                           v-else-if="shouldShowToolPendingPlaceholder(item.tool)"
@@ -1406,6 +1414,11 @@
                       >
                         {{ historyInteractionPrompt(item) }}
                       </div>
+
+                      <pre
+                        v-if="historyInteractionCommand(item)"
+                        class="approval-command history-interaction-command"
+                      >{{ historyInteractionCommand(item) }}</pre>
 
                       <div
                         v-if="item.detail.questions?.length"
@@ -3491,6 +3504,7 @@ import {
 import { getAssistantIconByType } from '@/utils/assistantIcon';
 import { isDarkHex } from '@/utils/color';
 import { renderHighlightedPlainText, renderMarkdown } from '@/utils/markdown';
+import { stripMagicContextTags } from '@/utils/magicContextTags';
 import {
   buildImagePlaceholder,
   buildImageViewPreviewUrl,
@@ -4076,6 +4090,7 @@ const showJumpToBottom = ref(false);
 const devCyberPolicySessionId = ref('');
 const lastTimelineScrollTop = ref(0);
 let timelineScrollSyncVersion = 0;
+let timelineScrollSyncScheduled = false;
 let pendingUserInputTimelineAnchor: {
   sessionId: string;
   requestKey: string;
@@ -5376,16 +5391,22 @@ function reasoningDisclosureLabel(block: WebSessionBlock) {
     : t('webSession.reasoningSummary');
 }
 
-/** Latest thought line, so a collapsed header reads like a live ticker. */
+/**
+ * Latest thought line, so a collapsed header reads like a live ticker. Reads the
+ * throttled stream text and scans backwards for the last line instead of
+ * splitting the whole body on every render.
+ */
 function reasoningDisclosurePreview(block: WebSessionBlock) {
   if (!isPiReasoningBlock(block)) {
     return '';
   }
-  const lines = String(block.tool?.output ?? '')
-    .split('\n')
-    .map(line => line.replace(/^#+\s*|\*\*/g, '').trim())
-    .filter(Boolean);
-  return lines[lines.length - 1] ?? '';
+  const text = getReasoningMarkdownText(block).replace(/\s+$/, '');
+  if (!text) {
+    return '';
+  }
+  const breakIndex = text.lastIndexOf('\n');
+  const line = breakIndex === -1 ? text : text.slice(breakIndex + 1);
+  return line.replace(/^#+\s*|\*\*/g, '').trim();
 }
 
 function isActivityDisplayBlock(block: WebSessionBlock) {
@@ -5487,7 +5508,7 @@ function shouldShowPlanRawToggle(block: WebSessionBlock) {
     block.kind === 'tool' && block.tool && isPlanTool(block.tool) && block.tool.output?.trim()
   );
 }
-type StreamingMarkdownSurface = 'message' | 'plan';
+type StreamingMarkdownSurface = 'message' | 'plan' | 'reasoning';
 
 function buildStreamingMarkdownKey(block: WebSessionBlock, surface: StreamingMarkdownSurface) {
   return `${block.key}:${surface}`;
@@ -5503,8 +5524,24 @@ function isStreamingPlanMarkdownBlock(block: WebSessionBlock) {
   );
 }
 
+function isStreamingReasoningMarkdownBlock(block: WebSessionBlock) {
+  return isReasoningDisclosureBlock(block) && block.tool?.status === 'running';
+}
+
+/**
+ * Thinking is re-rendered on every delta, so while it streams we read the
+ * throttled snapshot and the template renders it as plain text. Markdown is
+ * only parsed once the segment settles.
+ */
+function getReasoningMarkdownText(block: WebSessionBlock) {
+  if (!isStreamingReasoningMarkdownBlock(block)) {
+    return block.tool?.output ?? '';
+  }
+  return getEffectiveStreamingMarkdownText(block, 'reasoning');
+}
+
 function getStreamingMarkdownText(block: WebSessionBlock, surface: StreamingMarkdownSurface) {
-  if (surface === 'plan') {
+  if (surface === 'reasoning' || surface === 'plan') {
     return block.tool?.output ?? '';
   }
   return getDisplayBlockText(block);
@@ -5854,6 +5891,15 @@ const streamingMarkdownTargets = computed(() =>
       if (text) {
         targets.push({
           key: buildStreamingMarkdownKey(block, 'plan'),
+          text,
+        });
+      }
+    }
+    if (isStreamingReasoningMarkdownBlock(block)) {
+      const text = block.tool?.output ?? '';
+      if (text) {
+        targets.push({
+          key: buildStreamingMarkdownKey(block, 'reasoning'),
           text,
         });
       }
@@ -12341,6 +12387,43 @@ function historyInteractionPrompt(item: WebSessionBlock) {
   return item.detail?.prompt?.trim() || item.text?.trim() || '';
 }
 
+function historyInteractionCommand(item: WebSessionBlock) {
+  if (
+    item.detail?.type !== 'approval_request' &&
+    item.detail?.type !== 'approval_response'
+  ) {
+    return '';
+  }
+  const direct = item.detail.command?.trim() || '';
+  if (direct) {
+    return direct;
+  }
+  const payload = asRecord(item.payload);
+  const payloadCommand = typeof payload?.command === 'string' ? payload.command.trim() : '';
+  if (payloadCommand) {
+    return payloadCommand;
+  }
+  if (item.detail.type !== 'approval_response') {
+    return '';
+  }
+  const prompt = item.detail.prompt?.trim() || '';
+  if (!prompt) {
+    return '';
+  }
+  for (let index = blocks.value.length - 1; index >= 0; index -= 1) {
+    const candidate = blocks.value[index];
+    if (
+      candidate.timestamp > item.timestamp ||
+      candidate.detail?.type !== 'approval_request' ||
+      candidate.detail.prompt?.trim() !== prompt
+    ) {
+      continue;
+    }
+    return candidate.detail.command?.trim() || '';
+  }
+  return '';
+}
+
 function historyInteractionBadgeClass(item: WebSessionBlock) {
   switch (item.detail?.type) {
     case 'approval_request':
@@ -15294,6 +15377,7 @@ function cancelTimelinePositionRestore() {
 
 function invalidateTimelineScrollSync() {
   timelineScrollSyncVersion += 1;
+  timelineScrollSyncScheduled = false;
 }
 
 function cancelTimelinePositionRestoreForUserInteraction(container: HTMLDivElement) {
@@ -15531,9 +15615,19 @@ function syncScrollToBottom() {
 }
 
 function scheduleScrollToBottom(force = false) {
+  // Content streams faster than the two animation frames this waits for, so an
+  // already scheduled run has to be kept instead of replaced: it reads the live
+  // scroll height when it executes, which is the position we want anyway.
+  // Bumping the version again would cancel it before it ever ran, leaving
+  // streaming output permanently unscrolled.
+  if (timelineScrollSyncScheduled && !force) {
+    return;
+  }
   const scheduledVersion = ++timelineScrollSyncVersion;
+  timelineScrollSyncScheduled = true;
   nextTick(() => {
     const run = () => {
+      timelineScrollSyncScheduled = false;
       const container = timelineScrollRef.value;
       if (
         !container ||
