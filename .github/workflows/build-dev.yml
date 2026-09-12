@@ -1,0 +1,352 @@
+name: Build (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号，如 1.2.3。留空则用最近 tag + -alpha 打开发版'
+        required: false
+        type: string
+      create_release:
+        description: '打包完成后创建 GitHub Release（必须填写版本号）'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  prepare:
+    name: Validate inputs and resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version_main: ${{ steps.version.outputs.VERSION_MAIN }}
+      version_prerelease: ${{ steps.version.outputs.VERSION_PRERELEASE }}
+      build_metadata: ${{ steps.version.outputs.BUILD_METADATA }}
+      app_channel: ${{ steps.version.outputs.APP_CHANNEL }}
+      release_tag: ${{ steps.version.outputs.RELEASE_TAG }}
+
+    steps:
+      - name: Check version input
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          CREATE_RELEASE: ${{ inputs.create_release }}
+        run: |
+          if [[ "${CREATE_RELEASE}" == "true" && -z "${INPUT_VERSION}" ]]; then
+            echo "::error::勾选 create_release 时必须填写 version，否则无法确定要打的 tag"
+            exit 1
+          fi
+
+          if [[ -n "${INPUT_VERSION}" && ! "${INPUT_VERSION}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$ ]]; then
+            echo "::error::版本号格式应为 1.2.3 或 1.2.3-rc.1，实际收到：${INPUT_VERSION}"
+            exit 1
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          # 未填版本号时要靠 git describe 找最近 tag，需要完整历史
+          fetch-depth: 0
+
+      - name: Resolve version info
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          BUILD_DATE=$(date +%Y%m%d)
+          echo "BUILD_METADATA=+${BUILD_DATE}" >> $GITHUB_OUTPUT
+
+          if [[ -n "${INPUT_VERSION}" ]]; then
+            # 手动指定版本号：作为正式版打包
+            VERSION="${INPUT_VERSION#v}"
+            echo "VERSION_MAIN=${VERSION}" >> $GITHUB_OUTPUT
+            echo "VERSION_PRERELEASE=" >> $GITHUB_OUTPUT
+            echo "APP_CHANNEL=stable" >> $GITHUB_OUTPUT
+            echo "RELEASE_TAG=v${VERSION}" >> $GITHUB_OUTPUT
+          else
+            # 未指定版本号：基于最近 tag 打开发版
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            echo "VERSION_MAIN=${LATEST_TAG#v}" >> $GITHUB_OUTPUT
+            echo "VERSION_PRERELEASE=-alpha" >> $GITHUB_OUTPUT
+            echo "APP_CHANNEL=dev" >> $GITHUB_OUTPUT
+            echo "RELEASE_TAG=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Summarize build target
+        run: |
+          {
+            echo "### 打包参数"
+            echo ""
+            echo "- 分支/引用：\`${{ github.ref_name }}\`"
+            echo "- 版本：\`${{ steps.version.outputs.VERSION_MAIN }}${{ steps.version.outputs.VERSION_PRERELEASE }}${{ steps.version.outputs.BUILD_METADATA }}\`"
+            echo "- 通道：\`${{ steps.version.outputs.APP_CHANNEL }}\`"
+            echo "- 创建 Release：\`${{ inputs.create_release }}\`"
+          } >> $GITHUB_STEP_SUMMARY
+
+  frontend:
+    name: Frontend quality and build
+    needs: prepare
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: 'ui/pnpm-lock.yaml'
+
+      - name: Install frontend dependencies
+        working-directory: ./ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint frontend
+        working-directory: ./ui
+        run: pnpm lint
+
+      - name: Type-check frontend
+        working-directory: ./ui
+        run: pnpm type-check
+
+      - name: Test frontend
+        working-directory: ./ui
+        run: pnpm test
+
+      - name: Build frontend
+        working-directory: ./ui
+        run: pnpm build-only
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-dist
+          path: ui/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  node-tests:
+    name: Node SDK and CLI tests
+    needs: prepare
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install local Node SDK
+        run: npm install --prefix . --ignore-scripts --no-audit --no-fund --no-save --package-lock=false ./packages/node-sdk
+
+      - name: Test Node SDK and CLI
+        run: node --test packages/node-sdk/test/*.test.js packages/codekanban-cli/test/*.test.js
+
+  go-quality:
+    name: Go quality (${{ matrix.os }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: Test Go packages
+        run: go test -count=1 -p 1 ./...
+
+      - name: Vet Go packages
+        run: go vet ./...
+
+  build:
+    name: Build for ${{ matrix.platform }}
+    needs: [prepare, frontend, node-tests, go-quality]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Linux
+          - os: ubuntu-latest
+            platform: linux-amd64
+            goos: linux
+            goarch: amd64
+            artifact_name: CodeKanban-linux-amd64
+            exe_name: CodeKanban
+          - os: ubuntu-latest
+            platform: linux-arm64
+            goos: linux
+            goarch: arm64
+            artifact_name: CodeKanban-linux-arm64
+            exe_name: CodeKanban
+          # Windows
+          - os: windows-latest
+            platform: windows-amd64
+            goos: windows
+            goarch: amd64
+            artifact_name: CodeKanban-windows-amd64
+            exe_name: CodeKanban.exe
+          # macOS
+          - os: macos-latest
+            platform: darwin-amd64
+            goos: darwin
+            goarch: amd64
+            artifact_name: CodeKanban-macos-amd64
+            exe_name: CodeKanban
+          - os: macos-latest
+            platform: darwin-arm64
+            goos: darwin
+            goarch: arm64
+            artifact_name: CodeKanban-macos-arm64
+            exe_name: CodeKanban
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: Clear embedded frontend
+        shell: bash
+        run: rm -rf static/*
+
+      - name: Download frontend dist
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: static
+
+      - name: Build Go binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w -X 'main.VERSION_MAIN=${{ needs.prepare.outputs.version_main }}' -X 'main.VERSION_PRERELEASE=${{ needs.prepare.outputs.version_prerelease }}' -X 'main.VERSION_BUILD_METADATA=${{ needs.prepare.outputs.build_metadata }}' -X 'main.APP_CHANNEL=${{ needs.prepare.outputs.app_channel }}'" -trimpath -o ${{ matrix.exe_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.exe_name }}
+          retention-days: 30
+
+  release:
+    name: Create Release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    if: ${{ inputs.create_release }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        env:
+          CURRENT_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/${CURRENT_TAG}" >/dev/null; then
+            echo "::error::tag ${CURRENT_TAG} 已存在，请换一个版本号"
+            exit 1
+          fi
+
+          # tag 尚未创建，由 action-gh-release 在当前 commit 上打，因此和 HEAD 比较
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          echo "Current tag: ${CURRENT_TAG}"
+          echo "Previous tag: ${PREVIOUS_TAG}"
+
+          {
+            echo "CHANGELOG<<EOF"
+            echo "## What's Changed"
+            echo ""
+
+            if [ -n "${PREVIOUS_TAG}" ]; then
+              # Commits between the latest existing tag and the commit being released
+              git log ${PREVIOUS_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges
+            else
+              # First release, get all commits
+              git log HEAD --pretty=format:"- %s (%h)" --no-merges | head -20
+            fi
+
+            echo ""
+            echo ""
+            if [ -n "${PREVIOUS_TAG}" ]; then
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${CURRENT_TAG}"
+            fi
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Package binaries
+        run: |
+          mkdir -p release
+
+          # Package Windows binaries as .zip
+          cd artifacts/CodeKanban-windows-amd64
+          zip ../../release/CodeKanban-windows-amd64.zip CodeKanban.exe
+          cd ../..
+
+          # Package Linux binaries as .tar.gz
+          cd artifacts/CodeKanban-linux-amd64
+          tar -czf ../../release/CodeKanban-linux-amd64.tar.gz CodeKanban
+          cd ../..
+
+          cd artifacts/CodeKanban-linux-arm64
+          tar -czf ../../release/CodeKanban-linux-arm64.tar.gz CodeKanban
+          cd ../..
+
+          # Package macOS binaries as .tar.gz
+          cd artifacts/CodeKanban-macos-amd64
+          tar -czf ../../release/CodeKanban-macos-amd64.tar.gz CodeKanban
+          cd ../..
+
+          cd artifacts/CodeKanban-macos-arm64
+          tar -czf ../../release/CodeKanban-macos-arm64.tar.gz CodeKanban
+          cd ../..
+
+          # List packaged files
+          ls -lh release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # 手动触发时没有 tag ref，必须显式指定 tag 与要打 tag 的 commit
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ needs.prepare.outputs.release_tag }}
+          files: release/*
+          body: ${{ steps.changelog.outputs.CHANGELOG }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
