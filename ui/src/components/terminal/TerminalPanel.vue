@@ -409,6 +409,21 @@
         :is-mobile="isMobile"
       />
     </div>
+
+    <div v-if="shouldShowVirtualKeys" class="virtual-key-bar">
+      <div v-for="group in virtualKeyGroups" :key="group.id" class="virtual-key-group">
+        <button
+          v-for="key in group.keys"
+          :key="key.id"
+          type="button"
+          class="virtual-key"
+          :title="t('terminal.virtualKeySend', { key: key.label })"
+          @click="handleVirtualKeyPress(key)"
+        >
+          {{ key.label }}
+        </button>
+      </div>
+    </div>
   </div>
 
   <!-- AI 会话历史对话框 -->
@@ -487,6 +502,10 @@ import {
   TERMINAL_SNAPSHOT_INTERVAL_OPTIONS,
   formatTerminalSnapshotInterval,
 } from '@/constants/terminalRenderMode';
+import {
+  TERMINAL_VIRTUAL_KEY_GROUPS,
+  type TerminalVirtualKey,
+} from '@/constants/terminalVirtualKeys';
 import Sortable, { type SortableEvent } from 'sortablejs';
 import { useLocale } from '@/composables/useLocale';
 import type {
@@ -618,6 +637,7 @@ const panelRight = ref(170);
 const autoResize = useStorage('terminal-auto-resize', true);
 const sendResizeOnSwitch = useStorage('terminal-send-resize-on-switch', true);
 const showBranchFilter = useStorage('terminal-show-branch-filter', true);
+const showVirtualKeys = useStorage('terminal-show-virtual-keys', false);
 const panelSize = reactive({
   width: 0,
   height: 0,
@@ -872,6 +892,13 @@ const settingsMenuOptions = computed<DropdownOption[]>(() => [
     label: t('terminal.showBranchFilter'),
     key: 'branch-filter-toggle',
     icon: showBranchFilter.value
+      ? () => h(NIcon, null, { default: () => h(CheckmarkOutline) })
+      : undefined,
+  },
+  {
+    label: t('terminal.showVirtualKeys'),
+    key: 'virtual-keys-toggle',
+    icon: showVirtualKeys.value
       ? () => h(NIcon, null, { default: () => h(CheckmarkOutline) })
       : undefined,
   },
@@ -1751,6 +1778,25 @@ function handleEditorSelect(key: string | number) {
   void openEditorForTab(activeTerminalTab.value, key);
 }
 
+const virtualKeyGroups = TERMINAL_VIRTUAL_KEY_GROUPS;
+
+// 只有激活的是真实终端时才显示虚拟键，空标签没有可发送的会话
+const shouldShowVirtualKeys = computed(
+  () => showVirtualKeys.value && Boolean(activeId.value) && !isEmptyTab(activeId.value)
+);
+
+function handleVirtualKeyPress(key: TerminalVirtualKey) {
+  const sessionId = activeId.value;
+  if (!sessionId || isEmptyTab(sessionId)) {
+    return;
+  }
+  if (!send(sessionId, { type: 'input', data: key.data })) {
+    message.warning(t('terminal.virtualKeyDisconnected'));
+    return;
+  }
+  focusSessionInStore(sessionId);
+}
+
 const enabledQuickActions = computed(() =>
   terminalQuickActions.value.filter(action => action.enabled && action.command.trim())
 );
@@ -1886,7 +1932,7 @@ function resolveQuickActionCommand(id: string) {
 
 function resolveAgentCommand(agent: 'claude' | 'codex') {
   if (agent === 'claude') {
-    return resolveQuickActionCommand('claude') || resolveQuickActionCommand('ccr') || 'claude';
+    return resolveQuickActionCommand('claude') || 'claude';
   }
   return resolveQuickActionCommand('codex') || 'codex';
 }
@@ -2558,6 +2604,9 @@ function handleSettingsMenuSelect(key: string) {
       branchFilter.value = 'all';
       saveCurrentBranchFilter(props.projectId, 'all');
     }
+  } else if (key === 'virtual-keys-toggle') {
+    showVirtualKeys.value = !showVirtualKeys.value;
+    scheduleResizeAll();
   } else if (key === 'default-open-in-mirror-mode') {
     settingsStore.updateDefaultTerminalRenderMode(
       defaultTerminalRenderMode.value === 'snapshot' ? 'live' : 'snapshot'
@@ -2910,6 +2959,56 @@ defineExpose({
   min-width: 0;
   overflow: hidden;
   background-color: var(--kanban-terminal-bg, #1e1e1e);
+}
+
+.virtual-key-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  flex-shrink: 0;
+  padding: 6px 12px;
+  background-color: var(--app-surface, var(--n-card-color, #fff));
+  border-top: 1px solid var(--app-border, var(--n-border-color));
+}
+
+.virtual-key-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.virtual-key {
+  min-width: 32px;
+  height: 26px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--app-text-secondary, var(--n-text-color-2, #666));
+  background: var(--app-surface-hover, var(--n-color-hover, rgba(0, 0, 0, 0.04)));
+  border: 1px solid var(--app-border, var(--n-border-color, #e0e0e0));
+  border-radius: 5px;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.virtual-key:hover {
+  color: var(--app-text-primary, var(--n-text-color, #1f1f1f));
+  background: var(--app-surface-active, var(--n-color-pressed, rgba(0, 0, 0, 0.08)));
+}
+
+.virtual-key:active {
+  color: var(--app-accent, var(--n-color-primary, #3b82f6));
+  border-color: var(--app-accent, var(--n-color-primary, #3b82f6));
+}
+
+.virtual-key:focus-visible {
+  outline: 2px solid var(--app-focus-ring, var(--n-color-primary, #3b82f6));
+  outline-offset: 1px;
 }
 
 .tab-label {

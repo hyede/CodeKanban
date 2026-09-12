@@ -495,6 +495,9 @@ export default {
     renameSuccess: '标签已更新',
     renameFailed: '重命名失败',
     showBranchFilter: '显示按分支过滤终端条',
+    showVirtualKeys: '显示虚拟按键条',
+    virtualKeySend: '发送 {key}',
+    virtualKeyDisconnected: '终端未连接，按键未发送',
     // Process status
     processStatusIdle: '空闲',
     processStatusBusy: '执行中',

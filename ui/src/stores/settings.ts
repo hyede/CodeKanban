@@ -356,16 +356,8 @@ const DEFAULT_DAILY_TIP_SETTINGS: DailyTipSettings = {
 export const DEFAULT_TERMINAL_QUICK_ACTIONS: TerminalQuickAction[] = [
   {
     id: 'claude',
-    name: 'Claude Code',
-    command: 'claude',
-    icon: 'claude',
-    enabled: true,
-    stacked: false,
-  },
-  {
-    id: 'ccr',
-    name: 'Claude Code Router',
-    command: 'ccr code',
+    name: 'Claude',
+    command: 'claude --dangerously-skip-permissions',
     icon: 'claude',
     enabled: true,
     stacked: false,
@@ -373,7 +365,7 @@ export const DEFAULT_TERMINAL_QUICK_ACTIONS: TerminalQuickAction[] = [
   {
     id: 'codex',
     name: 'Codex',
-    command: 'codex',
+    command: 'codex --yolo',
     icon: 'codex',
     enabled: true,
     stacked: false,

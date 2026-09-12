@@ -513,6 +513,9 @@ export default {
     renameSuccess: 'Tab renamed',
     renameFailed: 'Failed to rename',
     showBranchFilter: 'Show branch filter bar',
+    showVirtualKeys: 'Show virtual key bar',
+    virtualKeySend: 'Send {key}',
+    virtualKeyDisconnected: 'Terminal is not connected, key not sent',
     // Process status
     processStatusIdle: 'Idle',
     processStatusBusy: 'Busy',
