@@ -17,20 +17,26 @@ describe('WebSessionPanel Pi reasoning disclosure', () => {
     );
   });
 
-  it('auto-opens live Pi thinking and folds it once the segment settles', () => {
+  it('keeps live Pi thinking folded behind its ticking header line', () => {
     expect(panelSource).toMatch(
       /function isReasoningDisclosureExpanded\(tool: NonNullable<WebSessionBlock\['tool'\]>\)/
     );
+    // While streaming, the header line itself ticks with the latest thought, so
+    // the disclosure has no running-state default: only a reader click opens
+    // the capped body box.
     expect(panelSource).toMatch(
-      /currentSession\.value\?\.agent === 'pi' && tool\.status === 'running'/
+      /function isReasoningDisclosureExpanded\(tool: NonNullable<WebSessionBlock\['tool'\]>\)\s*\{\s*return Boolean\(expandedTools\.value\[tool\.id\]\);\s*\}/
+    );
+    expect(panelSource).not.toMatch(
+      /return currentSession\.value\?\.agent === 'pi' && tool\.status === 'running';/
     );
     expect(panelSource).toMatch(
       /function toggleReasoningDisclosure\(tool: NonNullable<WebSessionBlock\['tool'\]>\)/
     );
-    // A user click claims the disclosure: the manual value must win over the
-    // automatic "running" default.
+    // A click claims the disclosure and the choice sticks across streaming and
+    // settled states.
     expect(panelSource).toMatch(
-      /const claimed = expandedTools\.value\[tool\.id\];[\s\S]*?if \(claimed !== undefined\) \{\s*return claimed;/
+      /\[tool\.id\]: !isReasoningDisclosureExpanded\(tool\)/
     );
   });
 
