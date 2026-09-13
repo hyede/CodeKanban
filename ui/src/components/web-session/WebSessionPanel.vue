@@ -12324,13 +12324,17 @@ function toggleToolExpanded(tool: NonNullable<WebSessionBlock['tool']>) {
 }
 
 /**
- * Reasoning disclosures stay folded: while Pi streams, the header line itself
- * ticks with the latest thought, and opening the capped body box is always the
- * reader's call. A click claims the disclosure, and the choice sticks across
- * streaming and settled states.
+ * Reasoning disclosures auto-open while Pi is still thinking and fold away once
+ * the segment settles, unless the reader claimed them with a click. The
+ * auto-opened body is the capped scroll box, so the live stream grows inside a
+ * stable frame instead of stretching the timeline.
  */
 function isReasoningDisclosureExpanded(tool: NonNullable<WebSessionBlock['tool']>) {
-  return Boolean(expandedTools.value[tool.id]);
+  const claimed = expandedTools.value[tool.id];
+  if (claimed !== undefined) {
+    return claimed;
+  }
+  return currentSession.value?.agent === 'pi' && tool.status === 'running';
 }
 
 function toggleReasoningDisclosure(tool: NonNullable<WebSessionBlock['tool']>) {
