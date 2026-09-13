@@ -55,6 +55,22 @@ func TestHandlePiExtensionUIRequestIgnoresStatusAndKeepsNotify(t *testing.T) {
 		t.Fatalf("setStatus changed history metadata: seq=%d items=%d", statusRecord.LastEventSeq, statusRecord.ItemCount)
 	}
 
+	debugRequest := json.RawMessage(`{"id":"notify-debug","method":"notify","message":"RTK rewrite: ls -> rtk ls","notifyType":"debug"}`)
+	if err := manager.handlePiExtensionUIRequest(dispatch, debugRequest); err != nil {
+		t.Fatalf("handle debug notify request: %v", err)
+	}
+	infoRequest := json.RawMessage(`{"id":"notify-info","method":"notify","message":"Extension info notice"}`)
+	if err := manager.handlePiExtensionUIRequest(dispatch, infoRequest); err != nil {
+		t.Fatalf("handle info notify request: %v", err)
+	}
+	window, err = manager.loadHistoryWindow(context.Background(), created.ID, 10, nil)
+	if err != nil {
+		t.Fatalf("load history after info/debug notify: %v", err)
+	}
+	if len(window.Items) != 0 {
+		t.Fatalf("info/debug notify created timeline items: %#v", window.Items)
+	}
+
 	notifyRequest := json.RawMessage(`{"id":"notify-1","method":"notify","message":"Extension warning","notifyType":"warning"}`)
 	if err := manager.handlePiExtensionUIRequest(dispatch, notifyRequest); err != nil {
 		t.Fatalf("handle notify request: %v", err)
@@ -72,6 +88,51 @@ func TestHandlePiExtensionUIRequestIgnoresStatusAndKeepsNotify(t *testing.T) {
 	}
 	if code := stringValue(item.Payload["code"]); code != "pi_extension_ui_notify" {
 		t.Fatalf("notify code = %q, want pi_extension_ui_notify", code)
+	}
+}
+
+func TestDropSuppressedPiExtensionNotes(t *testing.T) {
+	rtkNote := HistoryItem{
+		Kind: "system", ItemType: "note", Level: "info",
+		Text:    "RTK rewrite: ls -> rtk ls",
+		Payload: map[string]any{"code": "pi_extension_ui_notify", "lvl": "info", "txt": "RTK rewrite: ls -> rtk ls"},
+	}
+	warningNote := HistoryItem{
+		Kind: "system", ItemType: "note", Level: "warning",
+		Text:    "Extension warning",
+		Payload: map[string]any{"code": "pi_extension_ui_notify", "lvl": "warning", "txt": "Extension warning"},
+	}
+	errorNote := HistoryItem{
+		Kind: "system", ItemType: "note", Level: "error",
+		Text:    "Extension failure",
+		Payload: map[string]any{"code": "pi_extension_ui_notify", "lvl": "error", "txt": "Extension failure"},
+	}
+	transportNote := HistoryItem{
+		Kind: "system", ItemType: "note", Level: "info",
+		Text:    "reconnecting",
+		Payload: map[string]any{"code": "transport_retrying", "txt": "reconnecting"},
+	}
+	assistantMessage := HistoryItem{Kind: "assistant", ItemType: "agent_message", Text: "hello"}
+
+	items := dropSuppressedPiExtensionNotes([]HistoryItem{
+		rtkNote, assistantMessage, warningNote, transportNote, errorNote,
+	})
+	if len(items) != 4 {
+		t.Fatalf("item count after suppression = %d, want 4: %#v", len(items), items)
+	}
+	for _, item := range items {
+		if isSuppressedPiExtensionNote(item) {
+			t.Fatalf("suppressed item leaked through: %#v", item)
+		}
+	}
+
+	// A missing level falls back to info, so unlabeled extension notes stay hidden.
+	unlabeled := HistoryItem{
+		Kind: "system", ItemType: "note",
+		Payload: map[string]any{"code": "pi_extension_ui_notify"},
+	}
+	if !isSuppressedPiExtensionNote(unlabeled) {
+		t.Fatalf("unlabeled extension note should stay suppressed")
 	}
 }
 

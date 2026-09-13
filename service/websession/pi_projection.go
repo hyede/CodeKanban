@@ -467,8 +467,11 @@ func (m *Manager) handlePiExtensionUIRequest(dispatch *piRuntimeRun, raw json.Ra
 		text := firstNonEmpty(strings.TrimSpace(request.Message), strings.TrimSpace(request.StatusText), strings.Join(request.WidgetLines, "\n"), strings.TrimSpace(request.Text), strings.TrimSpace(request.Title))
 		if text != "" {
 			level := strings.ToLower(strings.TrimSpace(request.NotifyType))
+			// Extension notify probes (rtk rewrite traces and similar debug
+			// chatter) only matter when the extension flags them as warnings
+			// or errors; the rest never leave the backend.
 			if level != "warning" && level != "error" {
-				level = "info"
+				return nil
 			}
 			m.appendRunNote(dispatch.session.ID, dispatch.session, dispatch.run, level, truncateToolOutput("tool", text), map[string]any{"code": "pi_extension_ui_" + request.Method})
 		}

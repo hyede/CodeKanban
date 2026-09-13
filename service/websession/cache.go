@@ -849,6 +849,7 @@ func (m *Manager) loadHistoryWindow(
 	for index := len(rows) - 1; index >= 0; index-- {
 		items = append(items, mapHistoryItemRowWithSession(rows[index], sessionID))
 	}
+	items = dropSuppressedPiExtensionNotes(items)
 
 	return HistoryWindow{
 		Items:        items,
@@ -897,6 +898,7 @@ func (m *Manager) loadHistoryWindowAfter(
 	for _, row := range rows {
 		items = append(items, mapHistoryItemRowWithSession(row, sessionID))
 	}
+	items = dropSuppressedPiExtensionNotes(items)
 
 	return HistoryWindow{
 		Items:       items,
