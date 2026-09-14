@@ -772,7 +772,7 @@ func (m *Manager) finishPiSettledProjection(dispatch *piRuntimeRun) error {
 		return err
 	}
 	if strings.TrimSpace(lastError) != "" {
-		return errors.New("Pi assistant run failed")
+		return fmt.Errorf("Pi assistant run failed: %s", truncateString(strings.TrimSpace(lastError), 2000))
 	}
 	return nil
 }
