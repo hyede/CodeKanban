@@ -104,6 +104,7 @@ type WebSessionRuntimeConfig struct {
 	Source                 ContextWindowSource       `json:"source"`
 	Models                 []CodexModelInfo          `json:"models"`
 	PiModels               []PiModelInfo             `json:"piModels"`
+	CCRModels              []CCRModelInfo            `json:"ccrModels"`
 	HasCodex               bool                      `json:"hasCodex"`
 	HasClaudeCode          bool                      `json:"hasClaudeCode"`
 	CodexVersion           *string                   `json:"codexVersion,omitempty"`
@@ -219,6 +220,7 @@ func defaultCodexRuntimeConfig() WebSessionRuntimeConfig {
 		Source:                 ContextWindowSourceUnavailable,
 		Models:                 []CodexModelInfo{},
 		PiModels:               []PiModelInfo{},
+		CCRModels:              []CCRModelInfo{},
 		HasCodex:               false,
 		HasClaudeCode:          false,
 		SupportsWebSession:     false,
@@ -395,6 +397,9 @@ func (m *Manager) getWebSessionRuntimeConfigWithModels(force bool) WebSessionRun
 	if config.HasCodex {
 		config.Models = m.getCodexModelCatalog(force)
 	}
+	if m.ccrRuntimeAvailable() {
+		config.CCRModels = m.getCCRModelCatalog(force)
+	}
 	return config
 }
 
@@ -410,7 +415,13 @@ func (m *Manager) getWebSessionRuntimeConfigWithModelsBackground() WebSessionRun
 	} else if config.Models == nil {
 		config.Models = []CodexModelInfo{}
 	}
-	config.CapabilitiesRefreshing = binaryRefreshing || piRefreshing || modelsRefreshing
+	ccrModelsRefreshing := false
+	if m.ccrRuntimeAvailable() {
+		config.CCRModels, ccrModelsRefreshing = m.getCCRModelCatalogBackground()
+	} else if config.CCRModels == nil {
+		config.CCRModels = []CCRModelInfo{}
+	}
+	config.CapabilitiesRefreshing = binaryRefreshing || piRefreshing || modelsRefreshing || ccrModelsRefreshing
 	config.Agents = runtimeAgentCapabilities(config)
 	return config
 }

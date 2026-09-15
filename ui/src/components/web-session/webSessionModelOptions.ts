@@ -1,5 +1,6 @@
 import type {
   WebSessionAgent,
+  WebSessionCCRModelInfo,
   WebSessionCodexDefaultPermissionLevel,
   WebSessionCodexDefaultReasoningEffort,
   WebSessionPiModelInfo,
@@ -276,6 +277,20 @@ export const CLAUDE_MODEL_OPTIONS: WebSessionModelOption[] = [
   { label: 'Sonnet', value: 'sonnet' },
   { label: 'Haiku', value: 'haiku' },
 ];
+
+// CCR routes claude through the Claude Code Router gateway, so the selectable
+// models are the gateway's provider/model ids instead of Anthropic aliases.
+export function resolveCCRModelOptions(
+  models: WebSessionCCRModelInfo[] = []
+): WebSessionModelOption[] {
+  return models
+    .filter(model => Boolean(model.model?.trim()))
+    .map(model => ({
+      label: model.displayName?.trim() || model.model,
+      value: model.model,
+      menuLabel: model.model,
+    }));
+}
 
 export const CLAUDE_RUNTIME_OPTIONS: WebSessionModelOption[] = [
   { label: 'CC', value: 'claude', menuLabel: 'Claude Code' },

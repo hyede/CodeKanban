@@ -429,6 +429,12 @@ export interface WebSessionPiModelInfo {
   maxTokens: number;
 }
 
+export interface WebSessionCCRModelInfo {
+  model: string;
+  provider: string;
+  displayName?: string;
+}
+
 export interface WebSessionRuntimeConfig {
   agents?: Partial<Record<WebSessionAgent, WebSessionAgentCapability>>;
   capabilitiesRefreshing?: boolean;
@@ -438,6 +444,7 @@ export interface WebSessionRuntimeConfig {
   source: WebSessionContextWindowSource;
   models: WebSessionCodexModelInfo[];
   piModels?: WebSessionPiModelInfo[];
+  ccrModels?: WebSessionCCRModelInfo[];
   hasCodex: boolean;
   hasClaudeCode: boolean;
   codexVersion?: string | null;

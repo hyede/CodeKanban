@@ -110,7 +110,8 @@ type Config struct {
 	RemoteAttachmentClient      *http.Client
 	ClaudePath                  string
 	CCRPath                     string
-	CCRConfigPath               string
+	CCRProfile                  string
+	CCRGatewayURL               string
 	CodexPath                   string
 	PiPath                      string
 	PiRuntimeIdleTTL            time.Duration
@@ -167,6 +168,7 @@ type Manager struct {
 	pendingDirty                map[string]bool
 	codexContextWindow          codexContextWindowResolver
 	piProbe                     piRuntimeProbeCache
+	ccrModels                   ccrModelCatalogCache
 	runtimeCapabilityProbes     runtimeCapabilityProbeHooks
 	piRuntimeMu                 sync.Mutex
 	piRuntimeTerminators        map[string]piRuntimeTerminator
@@ -177,10 +179,6 @@ type Manager struct {
 	claudeHookSettingsPath      string
 	claudeHookErr               error
 	claudeHookServer            *http.Server
-	ccrHookMu                   sync.Mutex
-	ccrHookReady                bool
-	ccrHookErr                  error
-	ccrHookClaudePath           string
 	historyCleanupMu            sync.Mutex
 	workTimingBackfillMu        sync.Mutex
 	workTimingLocks             [64]sync.Mutex
@@ -519,10 +517,13 @@ func NewManager(cfg Config, logger *zap.Logger) (*Manager, error) {
 		cfg.ClaudePath = getenvDefault("CLAUDE_PATH", "claude")
 	}
 	if cfg.CCRPath == "" {
-		cfg.CCRPath = getenvDefault("CCR_PATH", "ccr")
+		cfg.CCRPath = defaultCCRPath()
 	}
-	if cfg.CCRConfigPath == "" {
-		cfg.CCRConfigPath = getenvDefault("CCR_CONFIG_PATH", defaultCCRConfigPath())
+	if cfg.CCRProfile == "" {
+		cfg.CCRProfile = getenvDefault("CCR_PROFILE", "default-claude-code")
+	}
+	if cfg.CCRGatewayURL == "" {
+		cfg.CCRGatewayURL = getenvDefault("CCR_GATEWAY_URL", "http://127.0.0.1:3456")
 	}
 	if cfg.CodexPath == "" {
 		cfg.CodexPath = getenvDefault("CODEX_PATH", "codex")
@@ -6490,17 +6491,11 @@ func (m *Manager) buildExecCommand(ctx context.Context, session tables.WebSessio
 			"--verbose",
 		}
 		claudeRuntime := effectiveClaudeRuntime(session)
-		if claudeRuntime == ClaudeRuntimeCCR {
-			if err := m.ensureCCRClaudeHookSettings(); err != nil {
-				return nil, nil, false, err
-			}
-		} else {
-			settingsPath, err := m.ensureClaudeHookServer()
-			if err != nil {
-				return nil, nil, false, err
-			}
-			args = append(args, "--settings", settingsPath)
+		settingsPath, err := m.ensureClaudeHookServer()
+		if err != nil {
+			return nil, nil, false, err
 		}
+		args = append(args, "--settings", settingsPath)
 		if err := validateWebSessionPermissionLevel(AgentClaude, permissionLevel); err != nil {
 			return nil, nil, false, err
 		}
@@ -6528,9 +6523,12 @@ func (m *Manager) buildExecCommand(ctx context.Context, session tables.WebSessio
 		if err != nil {
 			return nil, nil, false, err
 		}
-		cmd := m.buildClaudeCommand(ctx, claudeRuntime, args)
+		cmd, err := m.buildClaudeCommand(ctx, claudeRuntime, args)
+		if err != nil {
+			return nil, nil, false, err
+		}
 		cmd.Dir = session.Cwd
-		cmd.Env = m.claudeCommandEnv(claudeRuntime)
+		cmd.Env = os.Environ()
 		return cmd, stdin, true, nil
 	case AgentCodex:
 		args := []string{"exec", "--json", "--skip-git-repo-check"}
@@ -6585,12 +6583,19 @@ func (m *Manager) buildExecCommand(ctx context.Context, session tables.WebSessio
 	}
 }
 
-func (m *Manager) buildClaudeCommand(ctx context.Context, runtime ClaudeRuntime, args []string) *exec.Cmd {
+func (m *Manager) buildClaudeCommand(ctx context.Context, runtime ClaudeRuntime, args []string) (*exec.Cmd, error) {
 	if normalizeClaudeRuntime(runtime) == ClaudeRuntimeCCR {
-		ccrArgs := append([]string{"code"}, args...)
-		return exec.CommandContext(ctx, m.cfg.CCRPath, ccrArgs...)
+		// Claude Code Router v3 launches agent CLIs through profiles:
+		// `ccr <profile> cli -- <agent args>` passes our claude arguments through
+		// to the profile's claude wrapper unchanged.
+		profile := strings.TrimSpace(m.cfg.CCRProfile)
+		if profile == "" {
+			return nil, fmt.Errorf("claude code router profile is not configured (set CCR_PROFILE)")
+		}
+		ccrArgs := append([]string{profile, "cli", "--"}, args...)
+		return exec.CommandContext(ctx, m.cfg.CCRPath, ccrArgs...), nil
 	}
-	return exec.CommandContext(ctx, m.cfg.ClaudePath, args...)
+	return exec.CommandContext(ctx, m.cfg.ClaudePath, args...), nil
 }
 
 func isClaudeControlCommand(cmd *exec.Cmd) bool {
@@ -6605,25 +6610,6 @@ func isClaudeControlCommand(cmd *exec.Cmd) bool {
 		}
 	}
 	return hasPromptTool
-}
-
-func (m *Manager) claudeCommandEnv(runtime ClaudeRuntime) []string {
-	env := os.Environ()
-	if normalizeClaudeRuntime(runtime) != ClaudeRuntimeCCR || strings.TrimSpace(m.ccrHookClaudePath) == "" {
-		return env
-	}
-	return upsertEnv(env, "CLAUDE_PATH", m.ccrHookClaudePath)
-}
-
-func upsertEnv(env []string, key, value string) []string {
-	prefix := key + "="
-	for i, item := range env {
-		if strings.HasPrefix(item, prefix) {
-			env[i] = prefix + value
-			return env
-		}
-	}
-	return append(env, prefix+value)
 }
 
 func (m *Manager) respondToApproval(sessionID, action string) error {
@@ -8178,12 +8164,45 @@ func getenvDefault(key, fallback string) string {
 	return fallback
 }
 
-func defaultCCRConfigPath() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(homeDir) == "" {
-		return filepath.Join(".claude-code-router", "config.json")
+func defaultCCRPath() string {
+	ccrPath := getenvDefault("CCR_PATH", "ccr")
+	// Respect an explicitly configured path even when it is not resolvable on
+	// the current PATH; the later exec failure carries a clearer error.
+	if _, err := exec.LookPath(ccrPath); err == nil || strings.TrimSpace(os.Getenv("CCR_PATH")) != "" {
+		return ccrPath
 	}
-	return filepath.Join(homeDir, ".claude-code-router", "config.json")
+	// The Claude Code Router v3 desktop app ships its launcher as `ccr-app` in
+	// its own bin directory instead of the npm CLI's `ccr`; both run the same
+	// CLI. The bin directory is only added to the user PATH at install time, so
+	// probe the known locations for services started with a stale PATH.
+	for _, dir := range ccrDesktopBinDirs() {
+		for _, name := range []string{"ccr-app", "ccr"} {
+			for _, ext := range []string{"", ".cmd", ".exe"} {
+				candidate := filepath.Join(dir, name+ext)
+				if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+					return candidate
+				}
+			}
+		}
+	}
+	return ccrPath
+}
+
+func ccrDesktopBinDirs() []string {
+	var dirs []string
+	appendDir := func(base, rel string) {
+		if strings.TrimSpace(base) == "" {
+			return
+		}
+		dirs = append(dirs, filepath.Join(base, rel))
+	}
+	appendDir(os.Getenv("APPDATA"), filepath.Join("claude-code-router", "bin"))
+	if homeDir, err := os.UserHomeDir(); err == nil && strings.TrimSpace(homeDir) != "" {
+		appendDir(homeDir, filepath.Join("Library", "Application Support", "claude-code-router", "bin"))
+		appendDir(homeDir, filepath.Join(".config", "claude-code-router", "bin"))
+		appendDir(homeDir, filepath.Join(".claude-code-router", "bin"))
+	}
+	return dirs
 }
 
 func truncateString(value string, limit int) string {

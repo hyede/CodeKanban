@@ -11716,3 +11716,52 @@ func appendHistoryEvent(t *testing.T, manager *Manager, sessionID string, event 
 		t.Fatalf("applyEventToHistoryCache returned error: %v", err)
 	}
 }
+
+func TestDefaultCCRFallsBackToDesktopAppLauncher(t *testing.T) {
+	writeLauncher := func(dir, name string) error {
+		script := "#!/bin/sh\nexit 0\n"
+		if runtime.GOOS == "windows" {
+			name, script = name+".cmd", "@echo off\r\nexit /b 0\r\n"
+		}
+		return os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755)
+	}
+
+	t.Run("probes the desktop bin dir when the PATH is stale", func(t *testing.T) {
+		appDataDir := t.TempDir()
+		binDir := filepath.Join(appDataDir, "claude-code-router", "bin")
+		if err := os.MkdirAll(binDir, 0o755); err != nil {
+			t.Fatalf("create fake desktop bin dir: %v", err)
+		}
+		if err := writeLauncher(binDir, "ccr-app"); err != nil {
+			t.Fatalf("write fake ccr-app launcher: %v", err)
+		}
+		t.Setenv("PATH", t.TempDir())
+		t.Setenv("CCR_PATH", "")
+		t.Setenv("APPDATA", appDataDir)
+
+		ccrPath := defaultCCRPath()
+		if !strings.Contains(strings.ToLower(ccrPath), filepath.Join("claude-code-router", "bin")) ||
+			!strings.Contains(strings.ToLower(ccrPath), "ccr-app") {
+			t.Fatalf("expected default CCR path to probe the desktop bin dir, got %q", ccrPath)
+		}
+	})
+
+	t.Run("returns the CLI name when nothing is installed", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		t.Setenv("CCR_PATH", "")
+		t.Setenv("APPDATA", t.TempDir())
+
+		if ccrPath := defaultCCRPath(); ccrPath != "ccr" {
+			t.Fatalf("expected default CCR path to stay ccr, got %q", ccrPath)
+		}
+	})
+
+	t.Run("keeps an explicit CCR_PATH even when unresolvable", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		t.Setenv("CCR_PATH", "custom-ccr")
+
+		if ccrPath := defaultCCRPath(); ccrPath != "custom-ccr" {
+			t.Fatalf("expected explicit CCR_PATH to win, got %q", ccrPath)
+		}
+	})
+}

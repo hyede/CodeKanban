@@ -188,17 +188,11 @@ func (m *Manager) buildClaudeResumeCommand(ctx context.Context, session tables.W
 		"--verbose",
 	}
 	claudeRuntime := effectiveClaudeRuntime(session)
-	if claudeRuntime == ClaudeRuntimeCCR {
-		if err := m.ensureCCRClaudeHookSettings(); err != nil {
-			return nil, err
-		}
-	} else {
-		settingsPath, err := m.ensureClaudeHookServer()
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, "--settings", settingsPath)
+	settingsPath, err := m.ensureClaudeHookServer()
+	if err != nil {
+		return nil, err
 	}
+	args = append(args, "--settings", settingsPath)
 	workflowMode := effectiveWorkflowMode(session)
 	permissionLevel := effectivePermissionLevel(session)
 	switch normalizeWorkflowMode(workflowMode) {
@@ -224,9 +218,12 @@ func (m *Manager) buildClaudeResumeCommand(ctx context.Context, session tables.W
 	if effort := claudeReasoningEffortArg(ReasoningEffort(session.ReasoningEffort)); effort != "" {
 		args = append(args, "--effort", effort)
 	}
-	cmd := m.buildClaudeCommand(ctx, claudeRuntime, args)
+	cmd, err := m.buildClaudeCommand(ctx, claudeRuntime, args)
+	if err != nil {
+		return nil, err
+	}
 	cmd.Dir = session.Cwd
-	cmd.Env = m.claudeCommandEnv(claudeRuntime)
+	cmd.Env = os.Environ()
 	return cmd, nil
 }
 

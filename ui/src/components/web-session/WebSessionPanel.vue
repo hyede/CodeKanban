@@ -3594,6 +3594,7 @@ import {
 import {
   CLAUDE_RUNTIME_OPTIONS,
   CLAUDE_MODEL_OPTIONS,
+  resolveCCRModelOptions,
   CODEX_ADDITIONAL_MODEL_OPTIONS,
   CODEX_MODEL_OPTIONS,
   CODEX_PRIMARY_MODEL_OPTIONS,
@@ -11065,6 +11066,7 @@ function getKnownModelLabel(value?: string | null) {
   return (
     [
       ...CLAUDE_MODEL_OPTIONS,
+      ...resolveCCRModelOptions(runtimeConfig.value?.ccrModels ?? []),
       ...CODEX_MODEL_OPTIONS,
       ...resolvePiModelOptions(runtimeConfig.value?.piModels ?? []),
     ].find(option => option.value === normalizedModel)?.label ?? normalizedModel
@@ -11399,7 +11401,14 @@ function setCustomModelsForAgent(agent: WebSessionCustomModelAgent, values: stri
 
 function builtinModelValuesForAgent(agent: WebSessionAgent) {
   if (agent === 'claude') {
-    return CLAUDE_MODEL_OPTIONS.map(option => option.value);
+    const values = CLAUDE_MODEL_OPTIONS.map(option => option.value);
+    if (draftClaudeRuntime.value === 'ccr') {
+      return [
+        ...resolveCCRModelOptions(runtimeConfig.value?.ccrModels ?? []).map(option => option.value),
+        ...values,
+      ];
+    }
+    return values;
   }
   if (agent === 'codex') {
     return CODEX_MODEL_OPTIONS.map(option => option.value);
@@ -11432,11 +11441,13 @@ const customModelOptions = computed(() => {
 const modelOptions = computed(() => {
   const activeModel = currentSession.value?.model ?? draftModel.value;
   if (selectedAgent.value === 'claude') {
+    const ccrOptions =
+      draftClaudeRuntime.value === 'ccr'
+        ? resolveCCRModelOptions(runtimeConfig.value?.ccrModels ?? [])
+        : [];
+    const builtinOptions = ccrOptions.length > 0 ? ccrOptions : [...CLAUDE_MODEL_OPTIONS];
     return [
-      ...withCurrentModelOption(
-        [...CLAUDE_MODEL_OPTIONS, ...customModelOptions.value],
-        activeModel
-      ),
+      ...withCurrentModelOption([...builtinOptions, ...customModelOptions.value], activeModel),
       { label: t('webSession.customModel'), value: CUSTOM_MODEL_VALUE },
     ];
   }

@@ -365,7 +365,7 @@ export const DEFAULT_TERMINAL_QUICK_ACTIONS: TerminalQuickAction[] = [
   {
     id: 'ccr',
     name: 'Claude Code Router',
-    command: 'ccr code',
+    command: 'ccr-app default-claude-code',
     icon: 'claude',
     enabled: true,
     stacked: false,

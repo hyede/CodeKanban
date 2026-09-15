@@ -15,6 +15,7 @@ import {
   rememberCustomModel,
   rememberPiFrequentModel,
   removeCustomModel,
+  resolveCCRModelOptions,
   resolveCodexReasoningEfforts,
   resolveCustomModelOptions,
   resolvePiModelOptionGroups,
@@ -372,5 +373,36 @@ describe('webSessionModelOptions', () => {
     ]);
     expect(resolveCodexReasoningEfforts('gpt-5.6-luna')).not.toContain('none');
     expect(resolveCodexReasoningEfforts('gpt-5.6-luna')).not.toContain('ultra');
+  });
+});
+
+describe('resolveCCRModelOptions', () => {
+  it('prefers display names as labels and keeps gateway ids as values', () => {
+    expect(
+      resolveCCRModelOptions([
+        { model: 'ZCode API/GLM-5.3', provider: 'ZCode API' },
+        {
+          model: 'DeepSeek/deepseek-flash',
+          provider: 'DeepSeek',
+          displayName: 'DeepSeek V4.1 Flash',
+        },
+        { model: '   ', provider: 'broken' },
+      ])
+    ).toEqual([
+      {
+        label: 'ZCode API/GLM-5.3',
+        value: 'ZCode API/GLM-5.3',
+        menuLabel: 'ZCode API/GLM-5.3',
+      },
+      {
+        label: 'DeepSeek V4.1 Flash',
+        value: 'DeepSeek/deepseek-flash',
+        menuLabel: 'DeepSeek/deepseek-flash',
+      },
+    ]);
+  });
+
+  it('returns no options when nothing has been sniffed', () => {
+    expect(resolveCCRModelOptions([])).toEqual([]);
   });
 });
