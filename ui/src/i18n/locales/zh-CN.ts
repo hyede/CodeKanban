@@ -1244,6 +1244,8 @@ export default {
     projectWorkspaceSettings: '项目与工作区',
     terminalSettings: '终端',
     sessionSettings: '会话',
+    sessionGeneralSettings: '通用',
+    sessionCodexSettings: 'Codex',
     sessionDisplaySettings: '会话显示',
     sessionDefaultsSettings: '会话默认值与重试策略',
     sessionQuickInputSettings: '会话快捷输入',

@@ -1299,6 +1299,8 @@ export default {
     projectWorkspaceSettings: 'Project & Workspace',
     terminalSettings: 'Terminal',
     sessionSettings: 'Sessions',
+    sessionGeneralSettings: 'General',
+    sessionCodexSettings: 'Codex',
     sessionDisplaySettings: 'Session Display',
     sessionDefaultsSettings: 'Session Defaults and Retry Policy',
     sessionQuickInputSettings: 'Session Quick Input',
