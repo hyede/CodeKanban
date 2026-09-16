@@ -767,38 +767,43 @@ export function resolveCodexReasoningEfforts(
   return fallback ? [...fallback] : null;
 }
 
+export const BUILTIN_DEFAULT_MODELS: Record<WebSessionAgentOption, string> = {
+  claude: 'opus',
+  codex: EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_MODEL,
+  pi: '',
+  devin: 'swe-2-high',
+};
+
+export const BUILTIN_DEFAULT_REASONING_EFFORTS: Record<
+  WebSessionAgentOption,
+  WebSessionReasoningEffort
+> = {
+  claude: 'default',
+  codex: EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT,
+  pi: 'default',
+  devin: 'high',
+};
+
 export function defaultModelForAgent(
   agent: WebSessionAgentOption,
-  configuredCodexModel = DEFAULT_WEB_SESSION_CODEX_MODEL
+  configuredModel = DEFAULT_WEB_SESSION_CODEX_MODEL
 ) {
-  if (agent === 'claude') {
-    return 'opus';
-  }
-  if (agent === 'pi') {
-    return '';
-  }
-  if (agent === 'devin') {
-    return 'swe-2-high';
-  }
-  const configured = configuredCodexModel.trim();
+  const configured = configuredModel.trim();
   return !configured || configured.toLowerCase() === DEFAULT_WEB_SESSION_CODEX_MODEL
-    ? EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_MODEL
+    ? BUILTIN_DEFAULT_MODELS[agent]
     : configured;
 }
 
 export function defaultReasoningEffortForAgent(
   agent: WebSessionAgentOption,
-  configuredCodexEffort: WebSessionCodexDefaultReasoningEffort = DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT
+  configuredEffort: WebSessionCodexDefaultReasoningEffort = DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT
 ): WebSessionReasoningEffort {
-  if (agent === 'devin') {
-    return 'high';
-  }
-  if (agent !== 'codex' || configuredCodexEffort === 'model_default') {
+  if (configuredEffort === 'model_default') {
     return 'default';
   }
-  return configuredCodexEffort === 'default'
-    ? EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT
-    : configuredCodexEffort;
+  return configuredEffort === 'default'
+    ? BUILTIN_DEFAULT_REASONING_EFFORTS[agent]
+    : configuredEffort;
 }
 
 export function defaultPermissionLevelForAgent(

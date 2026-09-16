@@ -116,12 +116,12 @@ type Config struct {
 	PiPath                      string
 	DevinPath                   string
 	PiRuntimeIdleTTL            time.Duration
-	DefaultCodexModel           func() string
+	DefaultAgentModel           func(agent Agent) string
 	CodexClientName             func() string
 	CodexClientTitle            func() string
 	CodexClientVersion          func() string
 	DefaultCodexContextWindow   func() int64
-	DefaultCodexReasoningEffort func() ReasoningEffort
+	DefaultAgentReasoningEffort func(agent Agent) ReasoningEffort
 	DefaultCodexPermissionLevel func() string
 	DefaultCodexSyncMode        func() SyncMode
 	AutoRetryDefaultsConfig     func() utils.WebSessionAutoRetryDefaultsConfig
@@ -7679,18 +7679,17 @@ func defaultReasoningEffort(agent Agent, provided ReasoningEffort) ReasoningEffo
 }
 
 func (m *Manager) resolveSessionModel(agent Agent, provided string) string {
-	if strings.TrimSpace(provided) != "" || normalizeAgent(agent) != AgentCodex {
+	if strings.TrimSpace(provided) != "" {
 		return defaultModel(agent, provided)
 	}
-	if m != nil && m.cfg.DefaultCodexModel != nil {
-		if configured := strings.TrimSpace(m.cfg.DefaultCodexModel()); configured != "" {
-			if strings.EqualFold(configured, utils.WebSessionCodexDefaultSetting) {
-				return defaultModel(agent, "")
-			}
-			return configured
-		}
+	configured := ""
+	if m != nil && m.cfg.DefaultAgentModel != nil {
+		configured = strings.TrimSpace(m.cfg.DefaultAgentModel(normalizeAgent(agent)))
 	}
-	return defaultModel(agent, "")
+	if configured == "" || strings.EqualFold(configured, utils.WebSessionCodexDefaultSetting) {
+		return defaultModel(agent, "")
+	}
+	return configured
 }
 
 func (m *Manager) resolveSessionReasoningEffort(
@@ -7698,30 +7697,37 @@ func (m *Manager) resolveSessionReasoningEffort(
 	modelName string,
 	provided ReasoningEffort,
 ) ReasoningEffort {
-	if normalizeAgent(agent) == AgentDevin && strings.TrimSpace(string(provided)) == "" {
-		if effort := devinReasoningEffortFromModel(modelName); effort != ReasoningEffortDefault {
-			return effort
-		}
-	}
-	if strings.TrimSpace(string(provided)) != "" || normalizeAgent(agent) != AgentCodex {
+	if strings.TrimSpace(string(provided)) != "" {
 		return defaultReasoningEffort(agent, provided)
 	}
-	configured := strings.TrimSpace(utils.WebSessionCodexDefaultSetting)
-	if m != nil && m.cfg.DefaultCodexReasoningEffort != nil {
-		if value := strings.TrimSpace(string(m.cfg.DefaultCodexReasoningEffort())); value != "" {
+	normalizedAgent := normalizeAgent(agent)
+	configured := utils.WebSessionCodexDefaultSetting
+	if m != nil && m.cfg.DefaultAgentReasoningEffort != nil {
+		if value := strings.TrimSpace(string(m.cfg.DefaultAgentReasoningEffort(normalizedAgent))); value != "" {
 			configured = strings.ToLower(value)
 		}
 	}
 	switch configured {
-	case utils.WebSessionCodexDefaultSetting:
-		return normalizeCodexReasoningEffort(
-			modelName,
-			ReasoningEffort(utils.DefaultWebSessionCodexReasoningEffort),
-		)
 	case utils.WebSessionCodexModelDefaultEffort:
 		return ReasoningEffortDefault
+	case utils.WebSessionCodexDefaultSetting:
+		if normalizedAgent == AgentDevin {
+			if effort := devinReasoningEffortFromModel(modelName); effort != ReasoningEffortDefault {
+				return effort
+			}
+		}
+		if normalizedAgent == AgentCodex {
+			return normalizeCodexReasoningEffort(
+				modelName,
+				ReasoningEffort(utils.DefaultWebSessionCodexReasoningEffort),
+			)
+		}
+		return defaultReasoningEffort(agent, "")
 	default:
-		return normalizeCodexReasoningEffort(modelName, ReasoningEffort(configured))
+		if normalizedAgent == AgentCodex {
+			return normalizeCodexReasoningEffort(modelName, ReasoningEffort(configured))
+		}
+		return normalizeReasoningEffort(ReasoningEffort(configured))
 	}
 }
 

@@ -43,35 +43,32 @@
           </n-input>
         </div>
         <nav class="settings-nav">
-          <button
-            v-for="card in settingsCards"
-            :key="card.id"
-            type="button"
-            class="settings-nav-item"
-            :class="{ 'is-active': activeSettingsSection === card.id }"
-            @click="handleSettingsSectionClick(card.id)"
-          >
-            <span class="settings-nav-item__title">{{ card.title }}</span>
-            <span v-if="card.dirty" class="settings-nav-item__dot"></span>
-          </button>
-          <div v-if="activeSettingsSection === 'session'" class="settings-subnav">
+          <template v-for="card in settingsCards" :key="card.id">
             <button
               type="button"
-              class="settings-subnav-item"
-              :class="{ 'is-active': sessionSubsection === 'general' }"
-              @click="sessionSubsection = 'general'"
+              class="settings-nav-item"
+              :class="{ 'is-active': activeSettingsSection === card.id }"
+              @click="handleSettingsSectionClick(card.id)"
             >
-              {{ t('settings.sessionGeneralSettings') }}
+              <span class="settings-nav-item__title">{{ card.title }}</span>
+              <span v-if="card.dirty" class="settings-nav-item__dot"></span>
             </button>
-            <button
-              type="button"
-              class="settings-subnav-item"
-              :class="{ 'is-active': sessionSubsection === 'codex' }"
-              @click="sessionSubsection = 'codex'"
+            <div
+              v-if="card.id === 'session' && activeSettingsSection === 'session'"
+              class="settings-subnav"
             >
-              {{ t('settings.sessionCodexSettings') }}
-            </button>
-          </div>
+              <button
+                v-for="subsection in sessionSubsectionOptions"
+                :key="subsection.value"
+                type="button"
+                class="settings-subnav-item"
+                :class="{ 'is-active': sessionSubsection === subsection.value }"
+                @click="sessionSubsection = subsection.value"
+              >
+                {{ subsection.label }}
+              </button>
+            </div>
+          </template>
         </nav>
       </aside>
 
@@ -595,14 +592,7 @@
                 </n-form>
               </n-card>
 
-              <n-card
-                :title="
-                  sessionSubsection === 'codex'
-                    ? t('settings.sessionCodexSettings')
-                    : t('settings.sessionDefaultsSettings')
-                "
-                size="huge"
-              >
+              <n-card :title="sessionDefaultsCardTitle" size="huge">
                 <template #header-extra>
                   <n-button
                     size="small"
@@ -924,6 +914,114 @@
                         <span class="form-tip">
                           {{ t('settings.webSessionActiveCallTimeoutPromptTip') }}
                         </span>
+                      </n-space>
+                    </n-form-item>
+                  </template>
+                  <template v-if="sessionSubsection === 'claude'">
+                    <n-form-item
+                      :label="t('settings.webSessionAgentDefaultModel')"
+                      data-search-key="webSessionClaudeDefaultModel"
+                    >
+                      <n-space vertical size="small">
+                        <n-select
+                          v-model:value="developerForm.webSessionClaudeDefaultModel"
+                          :options="webSessionClaudeDefaultModelOptions"
+                          :disabled="developerLoading"
+                          filterable
+                          tag
+                          style="max-width: 320px"
+                        />
+                        <span class="form-tip">{{
+                          t('settings.webSessionClaudeDefaultModelTip')
+                        }}</span>
+                      </n-space>
+                    </n-form-item>
+                    <n-form-item
+                      :label="t('settings.webSessionAgentDefaultReasoningEffort')"
+                      data-search-key="webSessionClaudeDefaultReasoningEffort"
+                    >
+                      <n-space vertical size="small">
+                        <n-select
+                          v-model:value="developerForm.webSessionClaudeDefaultReasoningEffort"
+                          :options="webSessionClaudeDefaultReasoningEffortOptions"
+                          :disabled="developerLoading"
+                          style="max-width: 320px"
+                        />
+                        <span class="form-tip">{{
+                          t('settings.webSessionClaudeDefaultReasoningEffortTip')
+                        }}</span>
+                      </n-space>
+                    </n-form-item>
+                  </template>
+                  <template v-if="sessionSubsection === 'pi'">
+                    <n-form-item
+                      :label="t('settings.webSessionAgentDefaultModel')"
+                      data-search-key="webSessionPiDefaultModel"
+                    >
+                      <n-space vertical size="small">
+                        <n-select
+                          v-model:value="developerForm.webSessionPiDefaultModel"
+                          :options="webSessionPiDefaultModelOptions"
+                          :disabled="developerLoading"
+                          filterable
+                          tag
+                          style="max-width: 320px"
+                        />
+                        <span class="form-tip">{{
+                          t('settings.webSessionPiDefaultModelTip')
+                        }}</span>
+                      </n-space>
+                    </n-form-item>
+                    <n-form-item
+                      :label="t('settings.webSessionAgentDefaultReasoningEffort')"
+                      data-search-key="webSessionPiDefaultReasoningEffort"
+                    >
+                      <n-space vertical size="small">
+                        <n-select
+                          v-model:value="developerForm.webSessionPiDefaultReasoningEffort"
+                          :options="webSessionPiDefaultReasoningEffortOptions"
+                          :disabled="developerLoading"
+                          style="max-width: 320px"
+                        />
+                        <span class="form-tip">{{
+                          t('settings.webSessionPiDefaultReasoningEffortTip')
+                        }}</span>
+                      </n-space>
+                    </n-form-item>
+                  </template>
+                  <template v-if="sessionSubsection === 'devin'">
+                    <n-form-item
+                      :label="t('settings.webSessionAgentDefaultModel')"
+                      data-search-key="webSessionDevinDefaultModel"
+                    >
+                      <n-space vertical size="small">
+                        <n-select
+                          v-model:value="developerForm.webSessionDevinDefaultModel"
+                          :options="webSessionDevinDefaultModelOptions"
+                          :disabled="developerLoading"
+                          filterable
+                          tag
+                          style="max-width: 320px"
+                        />
+                        <span class="form-tip">{{
+                          t('settings.webSessionDevinDefaultModelTip')
+                        }}</span>
+                      </n-space>
+                    </n-form-item>
+                    <n-form-item
+                      :label="t('settings.webSessionAgentDefaultReasoningEffort')"
+                      data-search-key="webSessionDevinDefaultReasoningEffort"
+                    >
+                      <n-space vertical size="small">
+                        <n-select
+                          v-model:value="developerForm.webSessionDevinDefaultReasoningEffort"
+                          :options="webSessionDevinDefaultReasoningEffortOptions"
+                          :disabled="developerLoading"
+                          style="max-width: 320px"
+                        />
+                        <span class="form-tip">{{
+                          t('settings.webSessionDevinDefaultReasoningEffortTip')
+                        }}</span>
                       </n-space>
                     </n-form-item>
                   </template>
@@ -2104,15 +2202,25 @@ import GitSettingsSection from '@/components/settings/GitSettingsSection.vue';
 import type {
   DeveloperConfig,
   AvailableShellsResponse,
+  WebSessionAgentDefaultReasoningEffort,
   WebSessionCodexDefaultReasoningEffort,
   WebSessionCodexModelInfo,
+  WebSessionDevinModelInfo,
+  WebSessionPiModelInfo,
   WebSessionReasoningEffort,
   WorktreeConfig,
 } from '@/types/models';
 import {
+  BUILTIN_DEFAULT_REASONING_EFFORTS,
+  CLAUDE_MODEL_OPTIONS,
   CODEX_MODEL_OPTIONS,
+  DEVIN_MODEL_OPTIONS,
   defaultModelForAgent,
   resolveCodexReasoningEfforts,
+  resolveDevinModelOptions,
+  resolveDevinReasoningEfforts,
+  resolvePiModelOptions,
+  resolvePiReasoningEfforts,
 } from '@/components/web-session/webSessionModelOptions';
 import { GENERIC_CODEX_REASONING_EFFORTS } from '@/constants/webSessionDefaults';
 import {
@@ -2162,7 +2270,8 @@ const SETTINGS_SECTION_IDS = [
   'backup',
 ] as const;
 type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
-type SessionSubsection = 'general' | 'codex';
+type SessionSubsection = 'general' | 'codex' | 'claude' | 'pi' | 'devin';
+type SessionAgentSubsection = Exclude<SessionSubsection, 'general'>;
 
 function sanitizeSettingsSectionId(value: string | null | undefined): SettingsSectionId {
   if (value === 'project-terminal') {
@@ -2805,6 +2914,35 @@ async function handleFollowSystemModeChange(value: FollowSystemThemeSetting) {
 const developerForm = reactive<DeveloperConfig>(sanitizeDeveloperConfig());
 const developerOriginal = ref<DeveloperConfig | null>(null);
 const codexModelCatalog = ref<WebSessionCodexModelInfo[]>([]);
+const piModelCatalog = ref<WebSessionPiModelInfo[]>([]);
+const devinModelCatalog = ref<WebSessionDevinModelInfo[]>([]);
+
+const sessionSubsectionOptions = computed(() => [
+  { value: 'general' as SessionSubsection, label: t('settings.sessionGeneralSettings') },
+  { value: 'codex' as SessionSubsection, label: t('settings.sessionCodexSettings') },
+  { value: 'claude' as SessionSubsection, label: t('settings.sessionClaudeSettings') },
+  { value: 'pi' as SessionSubsection, label: t('settings.sessionPiSettings') },
+  { value: 'devin' as SessionSubsection, label: t('settings.sessionDevinSettings') },
+]);
+
+function sessionAgentLabel(agent: SessionAgentSubsection) {
+  switch (agent) {
+    case 'claude':
+      return t('settings.sessionClaudeSettings');
+    case 'pi':
+      return t('settings.sessionPiSettings');
+    case 'devin':
+      return t('settings.sessionDevinSettings');
+    default:
+      return t('settings.sessionCodexSettings');
+  }
+}
+
+const sessionDefaultsCardTitle = computed(() =>
+  sessionSubsection.value === 'general'
+    ? t('settings.sessionDefaultsSettings')
+    : sessionAgentLabel(sessionSubsection.value)
+);
 const developerUsesCustomActiveCallTimeout = computed(
   () => developerForm.webSessionActiveCallTimeout.timeoutMode === 'custom'
 );
@@ -2821,6 +2959,20 @@ const webSessionCodexDefaultModelOptions = computed(() => [
   })),
 ]);
 
+const REASONING_EFFORT_SHORT_LABELS: Record<
+  Exclude<WebSessionReasoningEffort, 'default'>,
+  string
+> = {
+  none: 'Off',
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Mid',
+  high: 'High',
+  xhigh: 'Xhigh',
+  max: 'Max',
+  ultra: 'Ultra',
+};
+
 function reasoningEffortLabel(effort: WebSessionCodexDefaultReasoningEffort) {
   if (effort === 'default') {
     return t('settings.webSessionCodexDefaultReasoningEffortOption');
@@ -2828,18 +2980,141 @@ function reasoningEffortLabel(effort: WebSessionCodexDefaultReasoningEffort) {
   if (effort === 'model_default') {
     return t('settings.webSessionCodexModelDefaultReasoningEffort');
   }
-  const labels: Record<Exclude<WebSessionReasoningEffort, 'default'>, string> = {
-    none: 'Off',
-    minimal: 'Minimal',
-    low: 'Low',
-    medium: 'Mid',
-    high: 'High',
-    xhigh: 'Xhigh',
-    max: 'Max',
-    ultra: 'Ultra',
-  };
-  return labels[effort];
+  return REASONING_EFFORT_SHORT_LABELS[effort];
 }
+
+function agentEffortLabel(effort: WebSessionReasoningEffort) {
+  if (effort === 'default') {
+    return t('settings.webSessionCodexModelDefaultReasoningEffort');
+  }
+  return REASONING_EFFORT_SHORT_LABELS[effort];
+}
+
+const FALLBACK_AGENT_REASONING_EFFORTS: WebSessionReasoningEffort[] = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+];
+
+function supportedAgentReasoningEfforts(
+  agent: SessionAgentSubsection,
+  configuredModel: string
+): WebSessionReasoningEffort[] {
+  if (agent === 'claude') {
+    return GENERIC_CODEX_REASONING_EFFORTS.filter(value => value !== 'default');
+  }
+  const effectiveModel = defaultModelForAgent(agent, configuredModel);
+  if (agent === 'pi') {
+    const known = piModelCatalog.value.some(
+      model => `${model.provider}/${model.id}` === effectiveModel
+    );
+    if (effectiveModel && known) {
+      const supported = resolvePiReasoningEfforts(piModelCatalog.value, effectiveModel).filter(
+        value => value !== 'default'
+      );
+      if (supported.length) {
+        return supported;
+      }
+    }
+    return FALLBACK_AGENT_REASONING_EFFORTS.filter(value => value !== 'ultra');
+  }
+  if (agent === 'devin') {
+    const known = devinModelCatalog.value.some(model => model.model === effectiveModel);
+    if (effectiveModel && known) {
+      const supported = resolveDevinReasoningEfforts(
+        devinModelCatalog.value,
+        effectiveModel
+      ).filter(value => value !== 'default');
+      if (supported.length) {
+        return supported;
+      }
+    }
+    return FALLBACK_AGENT_REASONING_EFFORTS;
+  }
+  return FALLBACK_AGENT_REASONING_EFFORTS;
+}
+
+function agentDefaultReasoningEffortOptions(
+  agent: SessionAgentSubsection,
+  configuredModel: string
+) {
+  const options: Array<{ label: string; value: WebSessionAgentDefaultReasoningEffort }> = [
+    {
+      label: t('settings.webSessionAgentDefaultReasoningEffortOption', {
+        effort: agentEffortLabel(BUILTIN_DEFAULT_REASONING_EFFORTS[agent]),
+      }),
+      value: 'default',
+    },
+  ];
+  if (BUILTIN_DEFAULT_REASONING_EFFORTS[agent] !== 'default') {
+    options.push({
+      label: t('settings.webSessionCodexModelDefaultReasoningEffort'),
+      value: 'model_default',
+    });
+  }
+  for (const effort of supportedAgentReasoningEfforts(agent, configuredModel)) {
+    options.push({ label: agentEffortLabel(effort), value: effort });
+  }
+  return options;
+}
+
+function isAllowedAgentDefaultEffort(
+  agent: SessionAgentSubsection,
+  configuredModel: string,
+  effort: WebSessionAgentDefaultReasoningEffort
+) {
+  if (effort === 'default' || effort === 'model_default') {
+    return true;
+  }
+  return supportedAgentReasoningEfforts(agent, configuredModel).includes(effort);
+}
+
+function defaultAgentModelOption(modelLabel: string) {
+  return {
+    label: t('settings.webSessionAgentDefaultModelOption', { model: modelLabel }),
+    value: 'default',
+  };
+}
+
+const webSessionClaudeDefaultModelOptions = computed(() => [
+  defaultAgentModelOption('Opus'),
+  ...CLAUDE_MODEL_OPTIONS.map(option => ({
+    label: option.menuLabel || option.label,
+    value: option.value,
+  })),
+]);
+const webSessionPiDefaultModelOptions = computed(() => [
+  defaultAgentModelOption(t('settings.webSessionAgentDefaultModelAuto')),
+  ...resolvePiModelOptions(piModelCatalog.value).map(option => ({
+    label: option.menuLabel || option.label,
+    value: option.value,
+  })),
+]);
+const webSessionDevinDefaultModelOptions = computed(() => {
+  const catalogOptions = resolveDevinModelOptions(devinModelCatalog.value);
+  const options = catalogOptions.length ? catalogOptions : DEVIN_MODEL_OPTIONS;
+  return [
+    defaultAgentModelOption('SWE-2 High'),
+    ...options.map(option => ({
+      label: option.menuLabel || option.label,
+      value: option.value,
+    })),
+  ];
+});
+const webSessionClaudeDefaultReasoningEffortOptions = computed(() =>
+  agentDefaultReasoningEffortOptions('claude', developerForm.webSessionClaudeDefaultModel)
+);
+const webSessionPiDefaultReasoningEffortOptions = computed(() =>
+  agentDefaultReasoningEffortOptions('pi', developerForm.webSessionPiDefaultModel)
+);
+const webSessionDevinDefaultReasoningEffortOptions = computed(() =>
+  agentDefaultReasoningEffortOptions('devin', developerForm.webSessionDevinDefaultModel)
+);
 
 function supportedDefaultReasoningEfforts(model: string): WebSessionCodexDefaultReasoningEffort[] {
   const effectiveModel = defaultModelForAgent('codex', model);
@@ -2889,6 +3164,17 @@ const developerSessionDirty = computed(() => {
       developerOriginal.value.webSessionCodexDefaultPermissionLevel ||
     developerForm.webSessionCodexDefaultSyncMode !==
       developerOriginal.value.webSessionCodexDefaultSyncMode ||
+    developerForm.webSessionClaudeDefaultModel !==
+      developerOriginal.value.webSessionClaudeDefaultModel ||
+    developerForm.webSessionClaudeDefaultReasoningEffort !==
+      developerOriginal.value.webSessionClaudeDefaultReasoningEffort ||
+    developerForm.webSessionPiDefaultModel !== developerOriginal.value.webSessionPiDefaultModel ||
+    developerForm.webSessionPiDefaultReasoningEffort !==
+      developerOriginal.value.webSessionPiDefaultReasoningEffort ||
+    developerForm.webSessionDevinDefaultModel !==
+      developerOriginal.value.webSessionDevinDefaultModel ||
+    developerForm.webSessionDevinDefaultReasoningEffort !==
+      developerOriginal.value.webSessionDevinDefaultReasoningEffort ||
     JSON.stringify(developerForm.webSessionAutoRetryDefaults) !==
       JSON.stringify(developerOriginal.value.webSessionAutoRetryDefaults) ||
     JSON.stringify(developerForm.webSessionActiveCallTimeout) !==
@@ -2946,12 +3232,16 @@ async function handleSaveDeveloperConfig() {
   }
 }
 
-async function loadCodexModelCatalog() {
+async function loadSessionModelCatalogs() {
   try {
     const config = await webSessionApi.runtimeConfig();
     codexModelCatalog.value = config.models ?? [];
+    piModelCatalog.value = config.piModels ?? [];
+    devinModelCatalog.value = config.devinModels ?? [];
   } catch {
     codexModelCatalog.value = [];
+    piModelCatalog.value = [];
+    devinModelCatalog.value = [];
   }
 }
 
@@ -2961,6 +3251,51 @@ watch(
     const supported = supportedDefaultReasoningEfforts(model);
     if (!supported.includes(developerForm.webSessionCodexDefaultReasoningEffort)) {
       developerForm.webSessionCodexDefaultReasoningEffort = 'default';
+    }
+  },
+  { deep: true }
+);
+
+watch(
+  [
+    () => developerForm.webSessionClaudeDefaultModel,
+    () => developerForm.webSessionPiDefaultModel,
+    () => developerForm.webSessionDevinDefaultModel,
+    () => piModelCatalog.value,
+    () => devinModelCatalog.value,
+  ],
+  () => {
+    const agents: Array<{
+      agent: SessionAgentSubsection;
+      modelKey:
+        | 'webSessionClaudeDefaultModel'
+        | 'webSessionPiDefaultModel'
+        | 'webSessionDevinDefaultModel';
+      effortKey:
+        | 'webSessionClaudeDefaultReasoningEffort'
+        | 'webSessionPiDefaultReasoningEffort'
+        | 'webSessionDevinDefaultReasoningEffort';
+    }> = [
+      {
+        agent: 'claude',
+        modelKey: 'webSessionClaudeDefaultModel',
+        effortKey: 'webSessionClaudeDefaultReasoningEffort',
+      },
+      {
+        agent: 'pi',
+        modelKey: 'webSessionPiDefaultModel',
+        effortKey: 'webSessionPiDefaultReasoningEffort',
+      },
+      {
+        agent: 'devin',
+        modelKey: 'webSessionDevinDefaultModel',
+        effortKey: 'webSessionDevinDefaultReasoningEffort',
+      },
+    ];
+    for (const { agent, modelKey, effortKey } of agents) {
+      if (!isAllowedAgentDefaultEffort(agent, developerForm[modelKey], developerForm[effortKey])) {
+        developerForm[effortKey] = 'default';
+      }
     }
   },
   { deep: true }
@@ -3199,7 +3534,7 @@ const authAccessDirty = computed(() => {
 
 useInit(() => {
   loadDeveloperConfig();
-  void loadCodexModelCatalog();
+  void loadSessionModelCatalogs();
   loadWorktreeSettings();
   loadShellsConfig();
   loadAuthAccessConfig();

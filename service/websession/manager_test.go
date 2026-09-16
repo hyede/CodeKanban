@@ -445,10 +445,10 @@ func TestManagerCreateSessionUsesConfiguredCodexDefaultsAndExplicitOverrides(t *
 	configuredPermission := utils.WebSessionCodexStandardPermission
 	manager, err := NewManager(Config{
 		DataDir: t.TempDir(),
-		DefaultCodexModel: func() string {
+		DefaultAgentModel: func(Agent) string {
 			return configuredModel
 		},
-		DefaultCodexReasoningEffort: func() ReasoningEffort {
+		DefaultAgentReasoningEffort: func(Agent) ReasoningEffort {
 			return configuredEffort
 		},
 		DefaultCodexPermissionLevel: func() string {
@@ -516,10 +516,10 @@ func TestManagerCreateSessionResolvesCodexDefaultSentinels(t *testing.T) {
 	configuredPermission := utils.WebSessionCodexDefaultSetting
 	manager, err := NewManager(Config{
 		DataDir: t.TempDir(),
-		DefaultCodexModel: func() string {
+		DefaultAgentModel: func(Agent) string {
 			return configuredModel
 		},
-		DefaultCodexReasoningEffort: func() ReasoningEffort {
+		DefaultAgentReasoningEffort: func(Agent) ReasoningEffort {
 			return configuredEffort
 		},
 		DefaultCodexPermissionLevel: func() string {

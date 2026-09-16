@@ -13,6 +13,12 @@ describe('developer config defaults', () => {
     expect(config.webSessionCodexDefaultPermissionLevel).toBe('default');
     expect(config.webSessionCodexDefaultSyncMode).toBe('default');
     expect(config.webSessionCodexContextWindow).toBe(0);
+    expect(config.webSessionClaudeDefaultModel).toBe('default');
+    expect(config.webSessionClaudeDefaultReasoningEffort).toBe('default');
+    expect(config.webSessionPiDefaultModel).toBe('default');
+    expect(config.webSessionPiDefaultReasoningEffort).toBe('default');
+    expect(config.webSessionDevinDefaultModel).toBe('default');
+    expect(config.webSessionDevinDefaultReasoningEffort).toBe('default');
     expect(config.webSessionAutoRetryDefaults).toEqual({
       scope: 'network_only',
       preset: 'gentle_stop',
@@ -72,6 +78,24 @@ describe('developer config defaults', () => {
     clone.webSessionAutoRetryDefaults.scope = 'all_failures';
     expect(source.webSessionActiveCallTimeout.callKinds.mcp).toBe(true);
     expect(source.webSessionAutoRetryDefaults.scope).toBe('network_only');
+  });
+
+  it('normalizes per-agent default models and reasoning efforts', () => {
+    const config = sanitizeDeveloperConfig({
+      webSessionClaudeDefaultModel: '  sonnet  ',
+      webSessionClaudeDefaultReasoningEffort: 'high',
+      webSessionPiDefaultModel: ' anthropic/claude-sonnet-4 ',
+      webSessionPiDefaultReasoningEffort: 'max',
+      webSessionDevinDefaultModel: 'swe-2',
+      webSessionDevinDefaultReasoningEffort: 'model_default',
+    });
+
+    expect(config.webSessionClaudeDefaultModel).toBe('sonnet');
+    expect(config.webSessionClaudeDefaultReasoningEffort).toBe('high');
+    expect(config.webSessionPiDefaultModel).toBe('anthropic/claude-sonnet-4');
+    expect(config.webSessionPiDefaultReasoningEffort).toBe('max');
+    expect(config.webSessionDevinDefaultModel).toBe('swe-2');
+    expect(config.webSessionDevinDefaultReasoningEffort).toBe('model_default');
   });
 
   it('keeps explicitly cleared client metadata as the opt-out value', () => {

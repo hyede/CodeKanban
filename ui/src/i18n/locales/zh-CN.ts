@@ -765,6 +765,9 @@ export default {
     editUserMessageWorkspaceWarning: '对话会从这里重新生成，但工作区中已经产生的文件修改不会回退。',
     editUserMessageSubmit: '编辑并重新生成',
     editUserMessageSuccess: '已创建编辑分支',
+    forkUserMessage: '从此消息分叉会话',
+    forkUserMessageRunning: '请先停止当前运行再分叉',
+    forkSessionSuccess: '已创建分叉会话',
     userMessageFailed: '消息发送失败，点击重新发送',
     userMessageRetrying: '正在重新发送这条消息...',
     userMessageRetryBusy: '当前会话正在执行，请稍后再重新发送',
@@ -1260,6 +1263,9 @@ export default {
     sessionSettings: '会话',
     sessionGeneralSettings: '通用',
     sessionCodexSettings: 'Codex',
+    sessionClaudeSettings: 'Claude Code',
+    sessionPiSettings: 'Pi',
+    sessionDevinSettings: 'Devin',
     sessionDisplaySettings: '会话显示',
     sessionDefaultsSettings: '会话默认值与重试策略',
     sessionQuickInputSettings: '会话快捷输入',
@@ -1538,6 +1544,22 @@ export default {
     webSessionCodexDefaultSyncModeOption: '默认（快速同步）',
     webSessionCodexDefaultSyncModeTip:
       '快速同步继续走 app-server，速度更快；深度同步从 ai_session 原始日志重建完整时间线，速度更慢但能保留工具调用与时间信息。',
+    webSessionAgentDefaultModel: '默认模型',
+    webSessionAgentDefaultModelOption: '默认（{model}）',
+    webSessionAgentDefaultModelAuto: '自动',
+    webSessionAgentDefaultReasoningEffort: '默认推理强度',
+    webSessionAgentDefaultReasoningEffortOption: '默认（{effort}）',
+    webSessionClaudeDefaultModelTip:
+      '用于之后新建的 Claude Code 会话。可选择列表中的模型，也可直接输入自定义模型名称。',
+    webSessionClaudeDefaultReasoningEffortTip: '用于之后新建的 Claude Code 会话。',
+    webSessionPiDefaultModelTip:
+      '用于之后新建的 Pi 会话。可选择列表中的模型，也可直接输入自定义 provider/model。',
+    webSessionPiDefaultReasoningEffortTip:
+      '用于之后新建的 Pi 会话；可选强度会根据当前默认模型的能力进行限制。',
+    webSessionDevinDefaultModelTip:
+      '用于之后新建的 Devin 会话。可选择列表中的模型，也可直接输入自定义模型名称。',
+    webSessionDevinDefaultReasoningEffortTip:
+      '用于之后新建的 Devin 会话；可选强度会根据当前默认模型的能力进行限制。',
     webSessionActiveCallTimeout: '活跃调用超时自动恢复',
     webSessionActiveCallTimeoutTip:
       '仅作用于后端 Codex 会话。当受监控的活跃调用持续超过阈值时，CodeKanban 会自动打断当前 run，并补发一条继续 prompt。',

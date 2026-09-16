@@ -357,22 +357,29 @@ describe('webSessionModelOptions', () => {
     expect(MORE_MODELS_VALUE).toBe('__more_models__');
   });
 
-  it('uses configurable Codex defaults without changing Claude or Pi defaults', () => {
+  it('resolves per-agent configured models and reasoning efforts', () => {
     expect(defaultModelForAgent('codex')).toBe('gpt-5.6-sol');
     expect(defaultModelForAgent('codex', 'custom-codex-model')).toBe('custom-codex-model');
     expect(defaultModelForAgent('claude')).toBe('opus');
+    expect(defaultModelForAgent('claude', 'sonnet')).toBe('sonnet');
     expect(defaultReasoningEffortForAgent('codex')).toBe('xhigh');
     expect(defaultReasoningEffortForAgent('codex', 'high')).toBe('high');
     expect(defaultReasoningEffortForAgent('codex', 'model_default')).toBe('default');
-    expect(defaultReasoningEffortForAgent('claude', 'high')).toBe('default');
+    expect(defaultReasoningEffortForAgent('claude')).toBe('default');
+    expect(defaultReasoningEffortForAgent('claude', 'high')).toBe('high');
     expect(defaultPermissionLevelForAgent('codex')).toBe('elevated');
     expect(defaultPermissionLevelForAgent('codex', 'standard')).toBe('default');
     expect(defaultPermissionLevelForAgent('codex', 'yolo')).toBe('yolo');
     expect(defaultPermissionLevelForAgent('claude', 'standard')).toBe('elevated');
     expect(defaultModelForAgent('pi')).toBe('');
+    expect(defaultModelForAgent('pi', 'openai/gpt-5.5')).toBe('openai/gpt-5.5');
     expect(defaultModelForAgent('devin')).toBe('swe-2-high');
-    expect(defaultReasoningEffortForAgent('pi', 'high')).toBe('default');
-    expect(defaultReasoningEffortForAgent('devin', 'high')).toBe('high');
+    expect(defaultModelForAgent('devin', 'swe-2')).toBe('swe-2');
+    expect(defaultReasoningEffortForAgent('pi')).toBe('default');
+    expect(defaultReasoningEffortForAgent('pi', 'high')).toBe('high');
+    expect(defaultReasoningEffortForAgent('devin')).toBe('high');
+    expect(defaultReasoningEffortForAgent('devin', 'low')).toBe('low');
+    expect(defaultReasoningEffortForAgent('devin', 'model_default')).toBe('default');
     expect(defaultPermissionLevelForAgent('pi', 'standard')).toBe('elevated');
     expect(defaultPermissionLevelForAgent('devin', 'standard')).toBe('elevated');
   });

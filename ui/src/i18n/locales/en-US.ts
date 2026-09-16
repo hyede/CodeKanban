@@ -792,6 +792,9 @@ export default {
       'The conversation will regenerate from this point, but existing workspace file changes will not be reverted.',
     editUserMessageSubmit: 'Edit and Regenerate',
     editUserMessageSuccess: 'Edited branch created',
+    forkUserMessage: 'Fork session from this message',
+    forkUserMessageRunning: 'Stop the current run before forking',
+    forkSessionSuccess: 'Forked session created',
     userMessageFailed: 'Message failed. Click to resend.',
     userMessageRetrying: 'Resending this message...',
     userMessageRetryBusy: 'Wait for the current run to finish before resending.',
@@ -1316,6 +1319,9 @@ export default {
     sessionSettings: 'Sessions',
     sessionGeneralSettings: 'General',
     sessionCodexSettings: 'Codex',
+    sessionClaudeSettings: 'Claude Code',
+    sessionPiSettings: 'Pi',
+    sessionDevinSettings: 'Devin',
     sessionDisplaySettings: 'Session Display',
     sessionDefaultsSettings: 'Session Defaults and Retry Policy',
     sessionQuickInputSettings: 'Session Quick Input',
@@ -1616,6 +1622,22 @@ export default {
     webSessionCodexDefaultSyncModeOption: 'Default (Fast Sync)',
     webSessionCodexDefaultSyncModeTip:
       'Fast sync keeps using app-server for lower latency. Deep sync rebuilds the timeline from ai_session rollout logs and preserves tool calls and timestamps.',
+    webSessionAgentDefaultModel: 'Default Model',
+    webSessionAgentDefaultModelOption: 'Default ({model})',
+    webSessionAgentDefaultModelAuto: 'Auto',
+    webSessionAgentDefaultReasoningEffort: 'Default Reasoning Effort',
+    webSessionAgentDefaultReasoningEffortOption: 'Default ({effort})',
+    webSessionClaudeDefaultModelTip:
+      'Used for newly created Claude Code sessions. Choose a listed model or enter a custom model name.',
+    webSessionClaudeDefaultReasoningEffortTip: 'Used for newly created Claude Code sessions.',
+    webSessionPiDefaultModelTip:
+      'Used for newly created Pi sessions. Choose a listed model or enter a custom provider/model value.',
+    webSessionPiDefaultReasoningEffortTip:
+      'Used for newly created Pi sessions. Available efforts follow the selected model capabilities.',
+    webSessionDevinDefaultModelTip:
+      'Used for newly created Devin sessions. Choose a listed model or enter a custom model name.',
+    webSessionDevinDefaultReasoningEffortTip:
+      'Used for newly created Devin sessions. Available efforts follow the selected model capabilities.',
     webSessionActiveCallTimeout: 'Timed-out active call recovery',
     webSessionActiveCallTimeoutTip:
       'Backend-only Codex safeguard. When a monitored active call keeps running past the threshold, CodeKanban interrupts the run and sends a follow-up prompt automatically.',

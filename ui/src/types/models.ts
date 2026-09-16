@@ -276,6 +276,12 @@ export interface DeveloperConfig {
   webSessionCodexDefaultReasoningEffort: WebSessionCodexDefaultReasoningEffort;
   webSessionCodexDefaultPermissionLevel: WebSessionCodexDefaultPermissionLevel;
   webSessionCodexDefaultSyncMode: 'default' | 'fast' | 'deep';
+  webSessionClaudeDefaultModel: string;
+  webSessionClaudeDefaultReasoningEffort: WebSessionAgentDefaultReasoningEffort;
+  webSessionPiDefaultModel: string;
+  webSessionPiDefaultReasoningEffort: WebSessionAgentDefaultReasoningEffort;
+  webSessionDevinDefaultModel: string;
+  webSessionDevinDefaultReasoningEffort: WebSessionAgentDefaultReasoningEffort;
   webSessionAutoRetryDefaults: WebSessionAutoRetryDefaultsConfig;
   webSessionActiveCallTimeout: WebSessionActiveCallTimeoutConfig;
 }
@@ -370,6 +376,8 @@ export type WebSessionReasoningEffort =
 
 export type WebSessionCodexDefaultReasoningEffort = WebSessionReasoningEffort | 'model_default';
 
+export type WebSessionAgentDefaultReasoningEffort = WebSessionCodexDefaultReasoningEffort;
+
 export type WebSessionCodexDefaultPermissionLevel = 'default' | 'standard' | 'elevated' | 'yolo';
 
 export interface WebSessionCodexModelInfo {
@@ -413,6 +421,7 @@ export interface WebSessionAgentCapability {
   supportsImages: boolean;
   supportsCompaction: boolean;
   supportsSteer: boolean;
+  supportsFork?: boolean;
   supportsFollowUp: boolean;
   supportsGoal: boolean;
   supportsSubAgentRegistry: boolean;
@@ -477,6 +486,7 @@ export interface WebSessionRuntimeConfig {
   piDiagnostics?: string;
   supportsWebSession: boolean;
   supportsDevinWebSession?: boolean;
+  supportsDevinSessionFork?: boolean;
   webSessionMinCodexVersion: string;
   supportsMultiAgentV2?: boolean;
   multiAgentV2MinCodexVersion?: string;
