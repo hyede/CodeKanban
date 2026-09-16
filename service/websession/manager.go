@@ -114,6 +114,7 @@ type Config struct {
 	CCRGatewayURL               string
 	CodexPath                   string
 	PiPath                      string
+	DevinPath                   string
 	PiRuntimeIdleTTL            time.Duration
 	DefaultCodexModel           func() string
 	CodexClientName             func() string
@@ -125,6 +126,7 @@ type Config struct {
 	DefaultCodexSyncMode        func() SyncMode
 	AutoRetryDefaultsConfig     func() utils.WebSessionAutoRetryDefaultsConfig
 	ActiveCallTimeoutConfig     func() utils.WebSessionActiveCallTimeoutConfig
+	TerminalShell               func() utils.TerminalShellConfig
 }
 
 type Manager struct {
@@ -530,6 +532,9 @@ func NewManager(cfg Config, logger *zap.Logger) (*Manager, error) {
 	}
 	if cfg.PiPath == "" {
 		cfg.PiPath = getenvDefault("PI_PATH", "pi")
+	}
+	if cfg.DevinPath == "" {
+		cfg.DevinPath = getenvDefault("DEVIN_PATH", "devin")
 	}
 	if cfg.PiRuntimeIdleTTL <= 0 {
 		cfg.PiRuntimeIdleTTL = 2 * time.Minute
@@ -2350,7 +2355,7 @@ func (m *Manager) pendingApprovalSnapshot(record tables.WebSessionTable) *Pendin
 	if !ok || request.Kind == pendingServerRequestPlanApproval {
 		return nil
 	}
-	if request.PiRuntime == nil && run.codexAppServer() == nil {
+	if request.PiRuntime == nil && run.codexAppServer() == nil && run.devinACP() == nil {
 		return nil
 	}
 	actionable := len(request.RawID) > 0
@@ -4816,6 +4821,10 @@ func (m *Manager) runSession(ctx context.Context, run *activeRun, session tables
 		m.runCodexAppServerSession(ctx, run, session, text, attachments)
 		return
 	}
+	if run.backend == SessionBackendDevinACP && normalizeAgent(Agent(session.Agent)) == AgentDevin {
+		m.runDevinACPSession(ctx, run, session, text, attachments)
+		return
+	}
 	if run.backend == SessionBackendPiRPC && normalizeAgent(Agent(session.Agent)) == AgentPi {
 		if run.piCompaction {
 			m.runPiRPCCompaction(ctx, run, session)
@@ -6702,6 +6711,22 @@ func (m *Manager) respondToApproval(sessionID, action string) error {
 	}
 
 	if pending, ok := run.pendingApprovalRequest(); ok {
+		if run.backend == SessionBackendDevinACP && run.devinACP() != nil {
+			if err := run.devinACP().respond(pending.RawID, devinPermissionResponsePayload(action, pending)); err != nil {
+				return err
+			}
+			run.clearPendingServerRequest()
+			m.resumeActiveCallTimeout(run)
+			record, err = m.GetSession(context.Background(), sessionID)
+			if err != nil {
+				return err
+			}
+			now := time.Now()
+			_, _ = m.appendAndBroadcast(context.Background(), sessionID, record, Event{ID: utils.NewID(), Type: "approval_res", RunID: run.runID, ParentID: run.assistantMessageID, Timestamp: now, Payload: map[string]any{"act": action}})
+			_ = m.updateRuntimeState(context.Background(), sessionID, applyAssistantStateUpdates(map[string]any{"updated_at": now}, AssistantStateWorking, now))
+			m.broadcastSessionSummary(context.Background(), sessionID)
+			return nil
+		}
 		app := run.codexAppServer()
 		if app == nil {
 			return fmt.Errorf("session approval channel is unavailable")
@@ -7609,6 +7634,8 @@ func defaultTitle(agent Agent, projectName string) string {
 		prefix = "Claude"
 	case AgentPi:
 		prefix = "Pi"
+	case AgentDevin:
+		prefix = "Devin"
 	}
 	if strings.TrimSpace(projectName) == "" {
 		return prefix
@@ -7625,6 +7652,8 @@ func defaultModel(agent Agent, provided string) string {
 		return utils.DefaultWebSessionCodexModel
 	case AgentClaude:
 		return "opus"
+	case AgentDevin:
+		return "swe-2-high"
 	default:
 		return ""
 	}
@@ -7642,6 +7671,9 @@ func defaultReasoningEffort(agent Agent, provided ReasoningEffort) ReasoningEffo
 	}
 	if normalizeAgent(agent) == AgentCodex {
 		return ReasoningEffort(utils.DefaultWebSessionCodexReasoningEffort)
+	}
+	if normalizeAgent(agent) == AgentDevin {
+		return ReasoningEffortHigh
 	}
 	return ReasoningEffortDefault
 }
@@ -7666,6 +7698,11 @@ func (m *Manager) resolveSessionReasoningEffort(
 	modelName string,
 	provided ReasoningEffort,
 ) ReasoningEffort {
+	if normalizeAgent(agent) == AgentDevin && strings.TrimSpace(string(provided)) == "" {
+		if effort := devinReasoningEffortFromModel(modelName); effort != ReasoningEffortDefault {
+			return effort
+		}
+	}
 	if strings.TrimSpace(string(provided)) != "" || normalizeAgent(agent) != AgentCodex {
 		return defaultReasoningEffort(agent, provided)
 	}
@@ -7719,6 +7756,8 @@ func defaultSessionBackend(agent Agent) SessionBackend {
 		return SessionBackendCodexAppServer
 	case AgentPi:
 		return SessionBackendPiRPC
+	case AgentDevin:
+		return SessionBackendDevinACP
 	default:
 		return SessionBackendLegacyExec
 	}
@@ -7735,6 +7774,10 @@ func normalizeSessionBackend(backend SessionBackend, agent Agent) SessionBackend
 		if normalizedAgent == AgentPi {
 			return SessionBackendPiRPC
 		}
+	case string(SessionBackendDevinACP):
+		if normalizedAgent == AgentDevin {
+			return SessionBackendDevinACP
+		}
 	case string(SessionBackendLegacyExec):
 		if normalizedAgent != AgentPi {
 			return SessionBackendLegacyExec
@@ -7750,10 +7793,10 @@ func normalizeAgent(agent Agent) Agent {
 func validateAgent(agent Agent) (Agent, error) {
 	normalized := normalizeAgent(agent)
 	switch normalized {
-	case AgentClaude, AgentCodex, AgentPi:
+	case AgentClaude, AgentCodex, AgentPi, AgentDevin:
 		return normalized, nil
 	default:
-		return "", fmt.Errorf("invalid agent %q: expected claude, codex, or pi", strings.TrimSpace(string(agent)))
+		return "", fmt.Errorf("invalid agent %q: expected claude, codex, pi, or devin", strings.TrimSpace(string(agent)))
 	}
 }
 
@@ -7939,6 +7982,10 @@ func effectiveSessionBackend(record tables.WebSessionTable) SessionBackend {
 	case string(SessionBackendPiRPC):
 		if agent == AgentPi {
 			return SessionBackendPiRPC
+		}
+	case string(SessionBackendDevinACP):
+		if agent == AgentDevin {
+			return SessionBackendDevinACP
 		}
 	default:
 		if agent == AgentCodex {

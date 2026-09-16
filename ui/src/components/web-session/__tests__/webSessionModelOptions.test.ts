@@ -12,12 +12,21 @@ import {
   defaultPermissionLevelForAgent,
   defaultReasoningEffortForAgent,
   filterPiModelOptionGroups,
+  parseDevinCostSummary,
   rememberCustomModel,
   rememberPiFrequentModel,
   removeCustomModel,
   resolveCCRModelOptions,
   resolveCodexReasoningEfforts,
   resolveCustomModelOptions,
+  resolveDevinFusionModel,
+  resolveDevinFusionModelConfigs,
+  resolveDevinModelForReasoning,
+  resolveDevinModelOptionGroups,
+  resolveDevinModelOptions,
+  resolveDevinReasoningEfforts,
+  resolveDevinSelectedReasoningEffort,
+  resolveDevinSpecialModelOptions,
   resolvePiModelOptionGroups,
   resolvePiModelOptions,
   resolvePiPrimaryModelOptions,
@@ -26,6 +35,258 @@ import {
 } from '@/components/web-session/webSessionModelOptions';
 
 describe('webSessionModelOptions', () => {
+  it('uses the Devin catalog for model, reasoning, and pricing metadata', () => {
+    const models = [
+      {
+        model: 'swe-2-high',
+        displayName: 'SWE-2 High',
+        family: 'SWE-2',
+        defaultReasoningEffort: 'high' as const,
+        supportedReasoningEfforts: ['high' as const],
+        costTier: 'Free',
+      },
+      {
+        model: 'swe-2-medium',
+        displayName: 'SWE-2 Medium',
+        family: 'SWE-2',
+        defaultReasoningEffort: 'medium' as const,
+        supportedReasoningEfforts: ['medium' as const],
+        costSummary: '$1 / 1M Output',
+      },
+    ];
+    expect(resolveDevinModelOptions(models)[1].description).toBe('$1 / 1M Output');
+    expect(resolveDevinReasoningEfforts(models, 'swe-2-high')).toEqual(['high', 'medium']);
+    expect(resolveDevinModelForReasoning(models, 'swe-2-high', 'medium')).toBe('swe-2-medium');
+    expect(resolveDevinSelectedReasoningEffort(models, 'swe-2-high', 'default')).toBe('high');
+    expect(resolveDevinModelOptionGroups(models).map(group => group.label)).toEqual(['All Models']);
+  });
+
+  it('collapses Devin family variants into a single option named by the family', () => {
+    const models = [
+      {
+        model: 'swe-2-high',
+        displayName: 'SWE-2 High',
+        family: 'SWE-2',
+        defaultReasoningEffort: 'high' as const,
+      },
+      {
+        model: 'swe-2-medium',
+        displayName: 'SWE-2 Medium',
+        family: 'SWE-2',
+        defaultReasoningEffort: 'medium' as const,
+      },
+      {
+        model: 'glm-5-2-max',
+        displayName: 'GLM-5.2 Max',
+        family: 'GLM-5.2',
+        defaultReasoningEffort: 'max' as const,
+        recommended: true,
+      },
+    ];
+    const groups = resolveDevinModelOptionGroups(models);
+    expect(groups.map(group => group.label)).toEqual(['Recommended', 'All Models']);
+    const all = groups.find(group => group.key === 'devin-all');
+    expect(all?.children.map(option => option.label)).toEqual(['SWE-2']);
+    expect(all?.children[0].value).toBe('swe-2-high');
+    expect(all?.children[0].detail?.efforts).toEqual(['medium', 'high']);
+  });
+
+  it('points a Devin family option at the currently selected variant', () => {
+    const models = [
+      {
+        model: 'swe-2-high',
+        displayName: 'SWE-2 High',
+        family: 'SWE-2',
+        defaultReasoningEffort: 'high' as const,
+      },
+      {
+        model: 'swe-2-low',
+        displayName: 'SWE-2 Low',
+        family: 'SWE-2',
+        defaultReasoningEffort: 'low' as const,
+      },
+    ];
+    const groups = resolveDevinModelOptionGroups(models, [], 'swe-2-low');
+    expect(groups[0].children[0].value).toBe('swe-2-low');
+    expect(groups[0].children[0].label).toBe('SWE-2');
+  });
+
+  it('maps Devin catalog status fields to option badges without implying recommended', () => {
+    const models = [
+      {
+        model: 'swe-2-high',
+        displayName: 'SWE-2 High',
+        family: 'SWE-2',
+        defaultReasoningEffort: 'high' as const,
+        isNew: true,
+      },
+      {
+        model: 'glm-5-2-max',
+        displayName: 'GLM-5.2 Max',
+        family: 'GLM-5.2',
+        defaultReasoningEffort: 'max' as const,
+        isBeta: true,
+        costTier: 'promotion',
+      },
+    ];
+    const options = resolveDevinModelOptions(models);
+    expect(options[0].badges).toEqual(['new']);
+    expect(options[1].badges).toEqual(['promo', 'beta']);
+    // Status badges do not populate the Recommended group.
+    expect(resolveDevinModelOptionGroups(models).map(group => group.label)).toEqual(['All Models']);
+  });
+
+  it('dedupes Devin recent models and resolves recently used variants', () => {
+    const models = [
+      {
+        model: 'swe-2-high',
+        displayName: 'SWE-2 High',
+        family: 'SWE-2',
+        defaultReasoningEffort: 'high' as const,
+      },
+      {
+        model: 'swe-2-low',
+        displayName: 'SWE-2 Low',
+        family: 'SWE-2',
+        defaultReasoningEffort: 'low' as const,
+      },
+    ];
+    const groups = resolveDevinModelOptionGroups(
+      models,
+      ['swe-2-low', 'swe-2-low', 'missing-model', ' swe-2-high '],
+      'swe-2-low'
+    );
+    const recent = groups.find(group => group.key === 'devin-recent');
+    expect(recent?.label).toBe('Recently Used');
+    expect(recent?.children.map(option => option.value)).toEqual(['swe-2-low', 'swe-2-high']);
+    expect(recent?.children[0].label).toBe('SWE-2 Low');
+    expect(recent?.children[0].menuLabel).toBe('SWE-2');
+    expect(recent?.children[0].accentLabel).toBe('Low');
+    expect(recent?.children[0].removable).toBe(true);
+  });
+
+  it('marks removable Devin recent options without an accent for special families', () => {
+    const models = [
+      {
+        model: 'fusion-a',
+        displayName: 'Fusion (Claude Fable 5.1 Medium + SWE-2 Medium)',
+        family: 'Fusion',
+      },
+      {
+        model: 'adaptive-a',
+        displayName: 'Adaptive (Auto)',
+        family: 'Adaptive',
+      },
+    ];
+    const groups = resolveDevinModelOptionGroups(models, ['fusion-a', 'adaptive-a']);
+    const recent = groups.find(group => group.key === 'devin-recent');
+    expect(recent?.children.map(option => option.value)).toEqual(['fusion-a', 'adaptive-a']);
+    expect(recent?.children[0].removable).toBe(true);
+    expect(recent?.children[0].menuLabel).toBe('Fusion (Claude Fable 5.1 Medium + SWE-2 Medium)');
+    expect(recent?.children[0].accentLabel).toBeUndefined();
+    expect(recent?.children[1].accentLabel).toBeUndefined();
+  });
+
+  it('exposes the Devin input price on model options', () => {
+    const models = [
+      {
+        model: 'glm-5-2-max',
+        displayName: 'GLM-5.2 Max',
+        family: 'GLM-5.2',
+        costSummary:
+          '$10 / 1M Input · $30 / 1M Output · $1 / 1M Cache Read · $5 / 1M Cache Write · $2 / 1M Refresh · $4 / 1M Long Context',
+      },
+      {
+        model: 'swe-2-high',
+        displayName: 'SWE-2 High',
+        family: 'SWE-2',
+      },
+    ];
+    const options = resolveDevinModelOptions(models);
+    expect(options[0].inputPrice).toBe('$10/1M');
+    expect(options[1].inputPrice).toBeUndefined();
+  });
+
+  it('follows the selected special Devin model for fusion and adaptive options', () => {
+    const models = [
+      {
+        model: 'fusion-a',
+        displayName: 'Fusion (Claude Fable 5.1 Medium + SWE-2 Medium)',
+        family: 'Fusion',
+      },
+      {
+        model: 'fusion-b',
+        displayName: 'Fusion (Claude Fable 5.1 High + SWE-2 Low)',
+        family: 'Fusion',
+      },
+    ];
+    expect(resolveDevinSpecialModelOptions(models)[0].value).toBe('fusion-a');
+    expect(resolveDevinSpecialModelOptions(models, 'fusion-b')[0].value).toBe('fusion-b');
+  });
+
+  it('parses Devin fusion configs with sidekick effort and resolves selections', () => {
+    const models = [
+      {
+        model: 'fusion-a',
+        displayName: 'Fusion (Claude Fable 5.1 Medium + SWE-2 Medium)',
+        family: 'Fusion',
+      },
+      {
+        model: 'fusion-b',
+        displayName: 'Fusion (Claude Fable 5.1 Medium + SWE-2 High)',
+        family: 'Fusion',
+      },
+      {
+        model: 'fusion-c',
+        displayName: 'Fusion (Claude Fable 5.1 Medium Thinking + SWE-2 Medium Fast)',
+        family: 'Fusion',
+      },
+    ];
+    const configs = resolveDevinFusionModelConfigs(models);
+    expect(configs).toEqual([
+      {
+        model: 'fusion-a',
+        lead: 'Claude Fable 5.1',
+        effort: 'Medium',
+        sidekick: 'SWE-2',
+        sidekickEffort: 'Medium',
+        fast: false,
+      },
+      {
+        model: 'fusion-b',
+        lead: 'Claude Fable 5.1',
+        effort: 'Medium',
+        sidekick: 'SWE-2',
+        sidekickEffort: 'High',
+        fast: false,
+      },
+      {
+        model: 'fusion-c',
+        lead: 'Claude Fable 5.1',
+        effort: 'Medium',
+        sidekick: 'SWE-2',
+        sidekickEffort: 'Medium',
+        fast: true,
+      },
+    ]);
+    expect(
+      resolveDevinFusionModel(configs, {
+        lead: 'Claude Fable 5.1',
+        effort: 'Medium',
+        sidekick: 'SWE-2',
+        sidekickEffort: 'High',
+        fast: false,
+      })
+    ).toBe('fusion-b');
+    expect(
+      resolveDevinFusionModel(configs, {
+        lead: 'Missing',
+        effort: 'Low',
+        sidekick: 'None',
+        fast: false,
+      })
+    ).toBe('fusion-a');
+  });
   it('shows only the popular codex models by default', () => {
     expect(CODEX_PRIMARY_MODEL_OPTIONS.map(option => option.value)).toEqual([
       'gpt-5.5',
@@ -109,8 +370,11 @@ describe('webSessionModelOptions', () => {
     expect(defaultPermissionLevelForAgent('codex', 'yolo')).toBe('yolo');
     expect(defaultPermissionLevelForAgent('claude', 'standard')).toBe('elevated');
     expect(defaultModelForAgent('pi')).toBe('');
+    expect(defaultModelForAgent('devin')).toBe('swe-2-high');
     expect(defaultReasoningEffortForAgent('pi', 'high')).toBe('default');
+    expect(defaultReasoningEffortForAgent('devin', 'high')).toBe('high');
     expect(defaultPermissionLevelForAgent('pi', 'standard')).toBe('elevated');
+    expect(defaultPermissionLevelForAgent('devin', 'standard')).toBe('elevated');
   });
 
   it('uses model-specific reasoning efforts from the Codex catalog', () => {
@@ -404,5 +668,33 @@ describe('resolveCCRModelOptions', () => {
 
   it('returns no options when nothing has been sniffed', () => {
     expect(resolveCCRModelOptions([])).toEqual([]);
+  });
+});
+
+describe('parseDevinCostSummary', () => {
+  it('splits the real fusion cost summary into labeled price items', () => {
+    const summary =
+      '$10 / 1M Input · $0.25 / 1M Cached input · $50 / 1M Output · $0.2 / 1M Sidekick input · $0.02 / 1M Sidekick cached input · $1.2 / 1M Sidekick output';
+    expect(parseDevinCostSummary(summary)).toEqual([
+      { price: '$10', unit: '1M', label: 'Input' },
+      { price: '$0.25', unit: '1M', label: 'Cached input' },
+      { price: '$50', unit: '1M', label: 'Output' },
+      { price: '$0.2', unit: '1M', label: 'Sidekick input' },
+      { price: '$0.02', unit: '1M', label: 'Sidekick cached input' },
+      { price: '$1.2', unit: '1M', label: 'Sidekick output' },
+    ]);
+  });
+
+  it('returns unmatched entries as label-only items with empty price and unit', () => {
+    expect(parseDevinCostSummary('Flat rate · $1 / 1M Output')).toEqual([
+      { price: '', unit: '', label: 'Flat rate' },
+      { price: '$1', unit: '1M', label: 'Output' },
+    ]);
+  });
+
+  it('returns an empty list for undefined or blank summaries', () => {
+    expect(parseDevinCostSummary(undefined)).toEqual([]);
+    expect(parseDevinCostSummary('   ')).toEqual([]);
+    expect(parseDevinCostSummary('')).toEqual([]);
   });
 });

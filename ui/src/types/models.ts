@@ -398,7 +398,7 @@ export interface WebSessionGoal {
   updatedAt: string;
 }
 
-export type WebSessionAgent = 'claude' | 'codex' | 'pi';
+export type WebSessionAgent = 'claude' | 'codex' | 'pi' | 'devin';
 
 export interface WebSessionAgentPermissionModeCapability {
   id: 'unrestricted' | 'approval' | 'sandbox' | string;
@@ -429,6 +429,24 @@ export interface WebSessionPiModelInfo {
   maxTokens: number;
 }
 
+export interface WebSessionDevinModelInfo {
+  model: string;
+  displayName: string;
+  family?: string;
+  defaultReasoningEffort?: WebSessionReasoningEffort;
+  supportedReasoningEfforts?: WebSessionReasoningEffort[];
+  maxContextTokens?: number;
+  maxOutputTokens?: number;
+  costTier?: string;
+  costSummary?: string;
+  description?: string;
+  recommended?: boolean;
+  isNew?: boolean;
+  isBeta?: boolean;
+  isPromo?: boolean;
+  supportsImages?: boolean;
+}
+
 export interface WebSessionCCRModelInfo {
   model: string;
   provider: string;
@@ -443,11 +461,14 @@ export interface WebSessionRuntimeConfig {
   compactLimitTokens: number;
   source: WebSessionContextWindowSource;
   models: WebSessionCodexModelInfo[];
+  devinModels?: WebSessionDevinModelInfo[];
   piModels?: WebSessionPiModelInfo[];
   ccrModels?: WebSessionCCRModelInfo[];
   hasCodex: boolean;
   hasClaudeCode: boolean;
+  hasDevin?: boolean;
   codexVersion?: string | null;
+  devinVersion?: string | null;
   hasPi?: boolean;
   piVersion?: string | null;
   supportsPiWebSession?: boolean;
@@ -455,6 +476,7 @@ export interface WebSessionRuntimeConfig {
   piMinVersion?: string;
   piDiagnostics?: string;
   supportsWebSession: boolean;
+  supportsDevinWebSession?: boolean;
   webSessionMinCodexVersion: string;
   supportsMultiAgentV2?: boolean;
   multiAgentV2MinCodexVersion?: string;
@@ -483,7 +505,7 @@ export interface WebSessionSummary {
   orderIndex: number;
   agent: WebSessionAgent;
   claudeRuntime?: 'claude' | 'ccr';
-  backend?: 'legacy_exec' | 'codex_app_server' | 'pi_rpc';
+  backend?: 'legacy_exec' | 'codex_app_server' | 'pi_rpc' | 'devin_acp';
   title: string;
   model: string;
   reasoningEffort: WebSessionReasoningEffort;

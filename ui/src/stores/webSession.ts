@@ -62,7 +62,7 @@ type WireSession = {
   oi?: number;
   ag: WebSessionAgent;
   cr?: 'claude' | 'ccr';
-  be?: 'legacy_exec' | 'codex_app_server' | 'pi_rpc' | string;
+  be?: 'legacy_exec' | 'codex_app_server' | 'pi_rpc' | 'devin_acp' | string;
   md: string;
   re?: WebSessionReasoningEffort;
   wm: 'default' | 'plan';
@@ -765,9 +765,9 @@ export interface WebSessionDraftAttachmentUploadBatchResult {
 }
 
 type WebSessionAssistantDescriptor = {
-  type: 'claude-code' | 'codex';
-  name: 'Claude Code' | 'Codex';
-  displayName: 'Claude Code' | 'Codex';
+  type: 'claude-code' | 'codex' | 'devin';
+  name: 'Claude Code' | 'Codex' | 'Devin';
+  displayName: 'Claude Code' | 'Codex' | 'Devin';
 };
 
 export interface WebSessionAIEvent {
@@ -1377,14 +1377,18 @@ function normalizeSubAgent(
   const hasExplicitActive = typeof record.act === 'boolean' || typeof record.active === 'boolean';
   const active = hasExplicitActive
     ? Boolean(record.act ?? record.active)
-    : normalizedStatus === 'pending_init' || (normalizedStatus === 'running' && Boolean(currentTurnId));
+    : normalizedStatus === 'pending_init' ||
+      (normalizedStatus === 'running' && Boolean(currentTurnId));
   return {
     id,
     parentThreadId: String(record.ptid ?? record.parentThreadId ?? '').trim() || null,
     path,
     nickname,
     role,
-    status: normalizedStatus === 'running' && !hasExplicitActive && !currentTurnId ? 'idle' : normalizedStatus,
+    status:
+      normalizedStatus === 'running' && !hasExplicitActive && !currentTurnId
+        ? 'idle'
+        : normalizedStatus,
     active,
     title: subAgentDisplayTitle({ id, nickname, role, path }),
     summary: String(record.sm ?? record.summary ?? '').trim(),
@@ -3252,7 +3256,10 @@ export const useWebSessionStore = defineStore('web-session', () => {
       agent: session.ag,
       claudeRuntime: session.cr === 'ccr' ? 'ccr' : 'claude',
       backend:
-        session.be === 'legacy_exec' || session.be === 'codex_app_server' || session.be === 'pi_rpc'
+        session.be === 'legacy_exec' ||
+        session.be === 'codex_app_server' ||
+        session.be === 'pi_rpc' ||
+        session.be === 'devin_acp'
           ? session.be
           : undefined,
       title: session.ttl,
@@ -3563,9 +3570,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
           : Date.now(),
       sentAt: Number.isFinite(sentAt) ? sentAt : null,
       canceledAt: Number.isFinite(canceledAt) ? canceledAt : null,
-      ...(contextWindowSettingSnapshot !== undefined
-        ? { contextWindowSettingSnapshot }
-        : {}),
+      ...(contextWindowSettingSnapshot !== undefined ? { contextWindowSettingSnapshot } : {}),
     };
   }
 
@@ -5414,11 +5419,17 @@ export const useWebSessionStore = defineStore('web-session', () => {
           name: 'Claude Code',
           displayName: 'Claude Code',
         }
-      : {
-          type: 'codex',
-          name: 'Codex',
-          displayName: 'Codex',
-        };
+      : session.agent === 'devin'
+        ? {
+            type: 'devin',
+            name: 'Devin',
+            displayName: 'Devin',
+          }
+        : {
+            type: 'codex',
+            name: 'Codex',
+            displayName: 'Codex',
+          };
   }
 
   function getApprovalForNotification(
@@ -7509,8 +7520,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
         typeof payload?.dst === 'string' ? payload.dst : options.dependsOnId ? 'waiting' : 'none',
       action: typeof payload?.a === 'string' ? payload.a : 'message',
       targetId: typeof payload?.tid === 'string' ? payload.tid : '',
-      contextWindowSettingSnapshot:
-        typeof payload?.cws === 'number' ? payload.cws : null,
+      contextWindowSettingSnapshot: typeof payload?.cws === 'number' ? payload.cws : null,
       mode: typeof payload?.m === 'string' ? payload.m : '',
       exitPlanMode: typeof payload?.epm === 'boolean' ? payload.epm : options.exitPlanMode === true,
       status: typeof payload?.st === 'string' ? payload.st : '',
@@ -7584,8 +7594,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
         typeof payload?.dst === 'string' ? payload.dst : options.dependsOnId ? 'waiting' : 'none',
       action: typeof payload?.a === 'string' ? payload.a : 'execute_plan',
       targetId: typeof payload?.tid === 'string' ? payload.tid : target.planItemId,
-      contextWindowSettingSnapshot:
-        typeof payload?.cws === 'number' ? payload.cws : null,
+      contextWindowSettingSnapshot: typeof payload?.cws === 'number' ? payload.cws : null,
       mode: typeof payload?.m === 'string' ? payload.m : 'send',
       status: typeof payload?.st === 'string' ? payload.st : '',
       lastError: typeof payload?.err === 'string' ? payload.err : '',

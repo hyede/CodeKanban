@@ -8,6 +8,7 @@ const (
 	AgentClaude Agent = "claude"
 	AgentCodex  Agent = "codex"
 	AgentPi     Agent = "pi"
+	AgentDevin  Agent = "devin"
 )
 
 type ClaudeRuntime string
@@ -23,6 +24,7 @@ const (
 	SessionBackendLegacyExec     SessionBackend = "legacy_exec"
 	SessionBackendCodexAppServer SessionBackend = "codex_app_server"
 	SessionBackendPiRPC          SessionBackend = "pi_rpc"
+	SessionBackendDevinACP       SessionBackend = "devin_acp"
 )
 
 type CodexAppServerState string

@@ -53,6 +53,7 @@ type activeRun struct {
 	piResponseHistoryErr      error
 	piResponseRequest         *pendingServerRequest
 	app                       *codexAppServerClient
+	devinApp                  *devinACPClient
 	codexThreadID             string
 	codexTurnID               string
 	assistantDeltaSeen        map[string]bool
@@ -239,6 +240,24 @@ func (r *activeRun) codexAppServer() *codexAppServerClient {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.app
+}
+
+func (r *activeRun) setDevinACP(client *devinACPClient) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.devinApp = client
+	r.mu.Unlock()
+}
+
+func (r *activeRun) devinACP() *devinACPClient {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.devinApp
 }
 
 func (r *activeRun) setCodexSteerTarget(threadID string, turnID string) {

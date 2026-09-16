@@ -132,6 +132,9 @@ func Init(ctx context.Context, cfg *utils.AppConfig, assets embed.FS, info *AppI
 		ActiveCallTimeoutConfig: func() utils.WebSessionActiveCallTimeoutConfig {
 			return cfg.Developer.WebSessionActiveCallTimeout
 		},
+		TerminalShell: func() utils.TerminalShellConfig {
+			return cfg.Terminal.Shell
+		},
 	}, theLogger)
 	if err != nil {
 		theLogger.Error("failed to initialize web session manager", zap.Error(err))

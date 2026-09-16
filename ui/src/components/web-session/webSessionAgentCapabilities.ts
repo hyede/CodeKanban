@@ -98,5 +98,17 @@ export function resolveWebSessionAgentCapability(
       supportsFollowUp: config.supportsPiWebSession === true,
     };
   }
+  if (agent === 'devin') {
+    return {
+      ...fallback,
+      installed: config.hasDevin === true,
+      version: config.devinVersion,
+      supportsWebSession: config.hasDevin === true && config.supportsDevinWebSession !== false,
+      supportsImages: true,
+      supportsCompaction: false,
+      supportsSteer: false,
+      supportsFollowUp: true,
+    };
+  }
   return fallback;
 }

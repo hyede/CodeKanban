@@ -1423,7 +1423,8 @@
                       <pre
                         v-if="historyInteractionCommand(item)"
                         class="approval-command history-interaction-command"
-                      >{{ historyInteractionCommand(item) }}</pre>
+                        >{{ historyInteractionCommand(item) }}</pre
+                      >
 
                       <div
                         v-if="item.detail.questions?.length"
@@ -2132,12 +2133,20 @@
                     :style="modelSelectStyle"
                     :menu-props="modelSelectMenuProps"
                     :render-option="renderModelOption"
+                    :virtual-scroll="selectedAgent === 'pi'"
                     size="small"
                     :options="modelOptions"
                   >
-                    <template v-if="selectedAgent === 'pi' && showAllPiModels" #header>
+                    <template
+                      v-if="
+                        (selectedAgent === 'pi' && showAllPiModels) ||
+                        (selectedAgent === 'devin' && showAllDevinModels)
+                      "
+                      #header
+                    >
                       <div class="pi-model-search-header">
                         <n-input
+                          v-if="selectedAgent === 'pi'"
                           ref="piModelSearchInputRef"
                           v-model:value="piModelSearchQuery"
                           clearable
@@ -2154,9 +2163,112 @@
                             <n-icon size="15" aria-hidden="true"><SearchOutline /></n-icon>
                           </template>
                         </n-input>
+                        <n-input
+                          v-else
+                          ref="devinModelSearchInputRef"
+                          v-model:value="devinModelSearchQuery"
+                          clearable
+                          size="small"
+                          :placeholder="t('webSession.modelSearchPlaceholder')"
+                          :aria-label="t('webSession.modelSearchPlaceholder')"
+                          @focus="handleDevinModelSearchFocus"
+                          @blur="handleDevinModelSearchBlur"
+                        >
+                          <template #prefix>
+                            <n-icon size="15" aria-hidden="true"><SearchOutline /></n-icon>
+                          </template>
+                        </n-input>
                       </div>
                     </template>
                   </n-select>
+                  <n-popover
+                    v-if="isDevinFusionModel"
+                    trigger="click"
+                    placement="top-start"
+                    :show-arrow="false"
+                  >
+                    <template #trigger>
+                      <button
+                        type="button"
+                        class="fusion-config-trigger"
+                        aria-label="Fusion settings"
+                      >
+                        <n-icon><FunnelOutline /></n-icon>
+                      </button>
+                    </template>
+                    <div class="fusion-config-panel">
+                      <div class="fusion-config-title">Fusion</div>
+                      <div v-if="fusionSelectedMeta?.description" class="fusion-config-description">
+                        {{ fusionSelectedMeta.description }}
+                      </div>
+                      <div v-if="fusionContextLabel" class="fusion-config-description">
+                        {{ fusionContextLabel }}
+                      </div>
+                      <div class="fusion-config-row">
+                        <span>{{ t('webSession.fusionLead') }}</span>
+                        <n-select
+                          v-model:value="fusionLead"
+                          size="small"
+                          :bordered="false"
+                          :consistent-menu-width="false"
+                          :options="fusionLeadOptions"
+                        />
+                      </div>
+                      <div class="fusion-config-row">
+                        <span>{{ t('webSession.fusionEffort') }}</span>
+                        <n-select
+                          v-model:value="fusionEffort"
+                          size="small"
+                          :bordered="false"
+                          :consistent-menu-width="false"
+                          :options="fusionEffortOptions"
+                        />
+                      </div>
+                      <div class="fusion-config-row">
+                        <span>{{ t('webSession.fusionSidekick') }}</span>
+                        <n-select
+                          v-model:value="fusionSidekick"
+                          size="small"
+                          :bordered="false"
+                          :consistent-menu-width="false"
+                          :options="fusionSidekickOptions"
+                        />
+                      </div>
+                      <div v-if="fusionSidekickEffortOptions.length > 0" class="fusion-config-row">
+                        <span>{{ t('webSession.fusionSidekickEffort') }}</span>
+                        <n-select
+                          v-model:value="fusionSidekickEffort"
+                          size="small"
+                          :bordered="false"
+                          :consistent-menu-width="false"
+                          :options="fusionSidekickEffortOptions"
+                        />
+                      </div>
+                      <div class="fusion-config-row">
+                        <span>{{ t('webSession.fusionFastMode') }}</span>
+                        <n-switch v-model:value="fusionFast" size="small" />
+                      </div>
+                      <template v-if="fusionCostItems.length > 0">
+                        <div class="fusion-config-divider" />
+                        <div class="fusion-config-section-title">
+                          {{ t('webSession.fusionCost') }}
+                        </div>
+                        <div class="fusion-config-cost-grid">
+                          <div
+                            v-for="item in fusionCostItems"
+                            :key="item.label"
+                            class="fusion-config-cost-item"
+                          >
+                            <span class="fusion-config-cost-label">{{ item.label }}</span>
+                            <span class="fusion-config-cost-price">
+                              <strong>{{ item.price }}</strong>
+                              <template v-if="item.unit"> / {{ item.unit }}</template>
+                            </span>
+                          </div>
+                        </div>
+                      </template>
+                    </div>
+                  </n-popover>
                   <n-select
                     v-if="selectedAgent === 'claude'"
                     v-model:value="selectedClaudeRuntime"
@@ -2167,7 +2279,12 @@
                     :options="claudeRuntimeOptions"
                   />
                   <n-select
-                    v-if="selectedAgent === 'codex' || selectedAgent === 'pi'"
+                    v-if="
+                      (selectedAgent === 'codex' ||
+                        selectedAgent === 'pi' ||
+                        selectedAgent === 'devin') &&
+                      !isDevinFusionModel
+                    "
                     :show="isMobile ? undefined : showReasoningSelector"
                     v-model:value="selectedReasoningEffort"
                     @update:show="handleReasoningSelectorShowChange"
@@ -3433,6 +3550,7 @@ import {
   NCheckbox,
   NIcon,
   NInput,
+  NPopover,
   useDialog,
   useMessage,
   type DialogReactive,
@@ -3598,16 +3716,27 @@ import {
   CODEX_ADDITIONAL_MODEL_OPTIONS,
   CODEX_MODEL_OPTIONS,
   CODEX_PRIMARY_MODEL_OPTIONS,
+  DEVIN_MODEL_OPTIONS,
   CUSTOM_MODEL_VALUE,
   MORE_MODELS_VALUE,
   defaultModelForAgent as resolveDefaultModelForAgent,
   defaultPermissionLevelForAgent as resolveDefaultPermissionLevelForAgent,
   defaultReasoningEffortForAgent as resolveDefaultReasoningEffortForAgent,
   filterPiModelOptionGroups,
+  parseDevinCostSummary,
   rememberCustomModel,
   rememberPiFrequentModel,
   removeCustomModel,
   resolveCodexReasoningEfforts,
+  resolveDevinModelOptions,
+  resolveDevinModelForReasoning,
+  resolveDevinModelOptionGroups,
+  resolveDevinSpecialModelOptions,
+  resolveDevinFusionModel,
+  resolveDevinFusionModelConfigs,
+  resolveDevinReasoningEfforts,
+  resolveDevinSelectedReasoningEffort,
+  filterDevinModelOptionGroups,
   resolveCustomModelOptions,
   shouldSuppressPiModelMenuClose,
   resolvePiModelOptionGroups,
@@ -4563,6 +4692,7 @@ const runtimeCapabilityFor = (agent: WebSessionAgent) =>
 const runtimeCodexCapability = computed(() => runtimeCapabilityFor('codex'));
 const runtimeClaudeCapability = computed(() => runtimeCapabilityFor('claude'));
 const runtimePiCapability = computed(() => runtimeCapabilityFor('pi'));
+const runtimeDevinCapability = computed(() => runtimeCapabilityFor('devin'));
 const piRuntimeCapabilitiesLoading = computed(() =>
   isPiRuntimeCapabilityPending(codexRuntimeConfigReady.value, runtimeConfig.value)
 );
@@ -4596,6 +4726,7 @@ const piUnavailableAgentLabel = computed(() => {
 });
 const runtimeHasCodex = computed(() => runtimeCodexCapability.value.supportsWebSession);
 const runtimeHasClaudeCode = computed(() => runtimeClaudeCapability.value.supportsWebSession);
+const runtimeHasDevin = computed(() => runtimeDevinCapability.value.supportsWebSession);
 const runtimeCodexVersion = computed(() => codexRuntimeConfig.value?.codexVersion?.trim() || '');
 const runtimeMultiAgentV2MinVersion = computed(
   () =>
@@ -5840,10 +5971,7 @@ const filteredTimelineBlocks = computed(() =>
   })
 );
 const visibleBlocks = computed(() =>
-  projectWebSessionVisibleTimelineBlocks(
-    filteredTimelineBlocks.value,
-    currentSession.value?.agent
-  )
+  projectWebSessionVisibleTimelineBlocks(filteredTimelineBlocks.value, currentSession.value?.agent)
 );
 const {
   inputRef: timelineSearchInputRef,
@@ -7319,6 +7447,9 @@ const composerHint = computed(() => {
   }
   if (codexRuntimeConfig.value && selectedAgent.value === 'claude' && !runtimeHasClaudeCode.value) {
     return t('webSession.composerHintClaudeMissing');
+  }
+  if (codexRuntimeConfig.value && selectedAgent.value === 'devin' && !runtimeHasDevin.value) {
+    return t('webSession.composerHintDevinMissing');
   }
   if (selectedAgent.value === 'pi' && piRuntimeCapabilitiesLoading.value) {
     return t('webSession.composerHintPiChecking');
@@ -9305,7 +9436,9 @@ function normalizeDraftSession(
     return null;
   }
   const agent: WebSessionAgent =
-    session.agent === 'claude' || session.agent === 'pi' ? session.agent : 'codex';
+    session.agent === 'claude' || session.agent === 'pi' || session.agent === 'devin'
+      ? session.agent
+      : 'codex';
   const requestedWorktreeId =
     typeof session.worktreeId === 'string' ? session.worktreeId || null : null;
   const presentation = resolveDraftProjectPresentation(agent, requestedWorktreeId, projectId);
@@ -9841,7 +9974,9 @@ function createDraftSession(forceAgent?: WebSessionAgent, options?: { title?: st
         ? 'codex_app_server'
         : nextAgent === 'pi'
           ? 'pi_rpc'
-          : 'claude_stream_json',
+          : nextAgent === 'devin'
+            ? 'devin_acp'
+            : 'claude_stream_json',
     syncState: 'missing',
     sourceCreatedAt: null,
     sourceUpdatedAt: null,
@@ -10913,25 +11048,34 @@ const agentOptions: Array<{ label: string; value: WebSessionAgent }> = [
   { label: 'Codex', value: 'codex' },
   { label: 'Claude', value: 'claude' },
   { label: 'Pi', value: 'pi' },
+  { label: 'Devin', value: 'devin' },
 ];
 const showAdditionalCodexModels = ref(false);
 const showAllPiModels = ref(false);
+const showAllDevinModels = ref(false);
 const showModelSelector = ref(false);
 const showReasoningSelector = ref(false);
 const keepAdditionalCodexModelsForNextOpen = ref(false);
 const keepAllPiModelsForNextOpen = ref(false);
 const piModelSearchQuery = ref('');
+const devinModelSearchQuery = ref('');
 const piModelSearchInputRef = ref<InstanceType<typeof NInput> | null>(null);
+const devinModelSearchInputRef = ref<InstanceType<typeof NInput> | null>(null);
 const piModelSearchFocused = ref(false);
 const piModelSearchComposing = ref(false);
+const devinModelSearchFocused = ref(false);
 const piFrequentModelValues = useStorage<string[]>('codekanban-web-session-pi-frequent-models', []);
-type WebSessionCustomModelAgent = Extract<WebSessionAgent, 'claude' | 'codex'>;
+const devinFrequentModelValues = useStorage<string[]>(
+  'codekanban-web-session-devin-frequent-models',
+  []
+);
+type WebSessionCustomModelAgent = Extract<WebSessionAgent, 'claude' | 'codex' | 'devin'>;
 const customModelValuesByAgent = useStorage<Partial<Record<WebSessionCustomModelAgent, string[]>>>(
   'codekanban-web-session-custom-models',
   {}
 );
 type ComposerHoverSelector = 'model' | 'reasoning';
-const COMPOSER_SELECTOR_HOVER_CLOSE_DELAY = 120;
+const COMPOSER_SELECTOR_HOVER_CLOSE_DELAY = 360;
 const composerSelectorHoverCloseTimers: Record<ComposerHoverSelector, number | null> = {
   model: null,
   reasoning: null,
@@ -10940,19 +11084,44 @@ const MODEL_SELECT_MIN_WIDTH = 66;
 const MODEL_SELECT_MAX_WIDTH = 176;
 const MODEL_SELECT_BASE_WIDTH = 48;
 const MODEL_SELECT_CHAR_WIDTH = 7;
+const modelMenuHovered = ref(false);
+const modelOptionPopoverValues = ref<Set<string>>(new Set());
 const modelSelectMenuProps = computed(() => {
-  const piCatalogOpen = selectedAgent.value === 'pi' && showAllPiModels.value;
+  const piCatalogOpen =
+    (selectedAgent.value === 'pi' && showAllPiModels.value) ||
+    (selectedAgent.value === 'devin' && showAllDevinModels.value);
   return {
     class: piCatalogOpen
       ? 'web-session-model-select-menu is-pi-model-catalog'
       : 'web-session-model-select-menu',
     style: piCatalogOpen
-      ? { width: 'min(340px, calc(100vw - 64px))', maxWidth: 'calc(100vw - 64px)' }
+      ? { width: 'min(280px, calc(100vw - 64px))', maxWidth: 'calc(100vw - 64px)' }
       : { minWidth: '132px', maxWidth: '180px' },
-    onMouseenter: () => handleComposerSelectorPointerEnter('model'),
-    onMouseleave: () => handleComposerSelectorPointerLeave('model'),
+    placement: 'top-start',
+    flip: false,
+    onMouseenter: () => {
+      modelMenuHovered.value = true;
+      handleComposerSelectorPointerEnter('model');
+    },
+    onMouseleave: () => {
+      modelMenuHovered.value = false;
+      handleComposerSelectorPointerLeave('model');
+    },
   };
 });
+
+function handleModelOptionPopoverShow(value: string, show: boolean) {
+  const next = new Set(modelOptionPopoverValues.value);
+  if (show) {
+    next.add(value);
+  } else {
+    next.delete(value);
+  }
+  modelOptionPopoverValues.value = next;
+  if (!show && next.size === 0 && !modelMenuHovered.value && showModelSelector.value) {
+    handleModelSelectorShowChange(false);
+  }
+}
 const reasoningSelectMenuProps = {
   class: 'web-session-reasoning-select-menu',
   onMouseenter: () => handleComposerSelectorPointerEnter('reasoning'),
@@ -10984,7 +11153,9 @@ const agentDropdownOptions = computed<DropdownOption[]>(() =>
             !piRuntimeCapabilitiesLoading.value &&
             !runtimePiCapability.value.supportsWebSession
           ? piUnavailableAgentLabel.value
-          : option.label,
+          : option.value === 'devin' && codexRuntimeConfig.value && !runtimeHasDevin.value
+            ? t('webSession.devinNotInstalledAgentLabel')
+            : option.label,
     key: option.value,
     value: option.value,
   }))
@@ -10996,11 +11167,17 @@ function getAgentIcon(agent: WebSessionAgent | string) {
   if (agent === 'claude') {
     return getAssistantIconByType('claude-code');
   }
-  return getAssistantIconByType(agent === 'pi' ? 'pi' : 'codex');
+  if (agent === 'pi') {
+    return getAssistantIconByType('pi');
+  }
+  return getAssistantIconByType(agent === 'devin' ? 'devin' : 'codex');
 }
 
 function getAgentDisplayName(agent: WebSessionAgent) {
-  return agent === 'claude' ? 'Claude Code' : agent === 'pi' ? 'Pi' : 'Codex';
+  if (agent === 'claude') return 'Claude Code';
+  if (agent === 'pi') return 'Pi';
+  if (agent === 'devin') return 'Devin';
+  return 'Codex';
 }
 
 const selectedAgentTitle = computed(() =>
@@ -11013,7 +11190,7 @@ async function handleAgentDropdownSelect(key: string | number) {
     return;
   }
   const next = String(key);
-  if (next !== 'claude' && next !== 'codex' && next !== 'pi') {
+  if (next !== 'claude' && next !== 'codex' && next !== 'pi' && next !== 'devin') {
     return;
   }
   if (next === 'pi' && !(await ensurePiProjectTrust(true))) {
@@ -11068,6 +11245,7 @@ function getKnownModelLabel(value?: string | null) {
       ...CLAUDE_MODEL_OPTIONS,
       ...resolveCCRModelOptions(runtimeConfig.value?.ccrModels ?? []),
       ...CODEX_MODEL_OPTIONS,
+      ...resolveDevinModelOptions(runtimeConfig.value?.devinModels ?? []),
       ...resolvePiModelOptions(runtimeConfig.value?.piModels ?? []),
     ].find(option => option.value === normalizedModel)?.label ?? normalizedModel
   );
@@ -11075,30 +11253,150 @@ function getKnownModelLabel(value?: string | null) {
 
 function renderModelOption(info: {
   node: VNode;
-  option: { type?: unknown; label?: unknown; menuLabel?: unknown };
+  option: {
+    type?: unknown;
+    label?: unknown;
+    value?: unknown;
+    menuLabel?: unknown;
+    accentLabel?: unknown;
+    description?: unknown;
+    removable?: unknown;
+    badges?: unknown;
+    inputPrice?: unknown;
+    detail?: {
+      title?: string;
+      description?: string;
+      cost?: string;
+      contextTokens?: number;
+      outputTokens?: number;
+      efforts?: WebSessionReasoningEffort[];
+    };
+  };
   selected: boolean;
 }) {
   if (info.option.type === 'group') {
     return info.node;
   }
-  return h('div', info.node.props ?? {}, [
-    h(
-      'div',
-      {
-        class: 'n-base-select-option__content',
-      },
-      String(info.option.menuLabel ?? info.option.label ?? '')
-    ),
-    info.selected
-      ? h(
-          'div',
-          {
-            class: 'n-base-select-option__check',
-          },
-          '✓'
-        )
-      : null,
-  ]);
+  const description = String(info.option.description || '');
+  const menuLabel = String(info.option.menuLabel ?? info.option.label ?? '');
+  const accentLabel = String(info.option.accentLabel || '').trim();
+  const inputPrice = String(info.option.inputPrice || '').trim();
+  const removable = info.option.removable === true;
+  const badgeLabels: Record<string, string> = {
+    new: 'New',
+    promo: 'Promotion',
+    beta: 'Beta',
+  };
+  const badges = Array.isArray(info.option.badges)
+    ? info.option.badges.map(badge => String(badge)).filter(badge => badge in badgeLabels)
+    : [];
+  const optionNode = h(
+    'div',
+    {
+      ...(info.node.props ?? {}),
+      ...(removable ? { 'data-devin-recent': 'true' } : {}),
+    },
+    [
+      h('div', { class: 'n-base-select-option__content' }, [
+        accentLabel
+          ? h('span', [menuLabel, h('span', { class: 'model-option-accent' }, accentLabel)])
+          : h('span', menuLabel),
+        ...badges.map(badge =>
+          h('span', { class: `model-option-badge is-${badge}` }, badgeLabels[badge])
+        ),
+        description.toLowerCase() === 'free'
+          ? h('span', { class: 'model-option-description is-free' }, description)
+          : null,
+      ]),
+      description.toLowerCase() !== 'free' && inputPrice
+        ? h('span', { class: 'model-option-price' }, inputPrice)
+        : null,
+      removable
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'model-option-remove',
+              'aria-label': t('webSession.removeRecentModel'),
+              'data-devin-recent': 'true',
+              onClick: (event: MouseEvent) => {
+                event.stopPropagation();
+                event.preventDefault();
+                removeRecentDevinModel(String(info.option.value ?? ''));
+              },
+              onMousedown: (event: MouseEvent) => {
+                event.stopPropagation();
+                event.preventDefault();
+              },
+            },
+            '✕'
+          )
+        : null,
+      info.selected
+        ? h(
+            'div',
+            {
+              class: 'n-base-select-option__check',
+            },
+            '✓'
+          )
+        : null,
+    ]
+  );
+  const detail = info.option.detail;
+  if (!detail || isMobile.value) {
+    return optionNode;
+  }
+  const costLabel =
+    detail.cost && ['free', 'promotion'].includes(detail.cost.toLowerCase())
+      ? detail.cost[0].toUpperCase() + detail.cost.slice(1).toLowerCase()
+      : detail.cost;
+  const metaParts = [
+    costLabel,
+    detail.contextTokens
+      ? t('webSession.modelDetailContext', {
+          count: formatWebSessionTokenCount(detail.contextTokens),
+        })
+      : '',
+    detail.outputTokens
+      ? t('webSession.modelDetailOutput', {
+          count: formatWebSessionTokenCount(detail.outputTokens),
+        })
+      : '',
+  ].filter(Boolean);
+  if (detail.efforts?.length) {
+    metaParts.push(
+      t('webSession.modelDetailEfforts', {
+        list: detail.efforts.map(effort => reasoningEffortLabel(effort)).join(' / '),
+      })
+    );
+  }
+  return h(
+    NPopover,
+    {
+      trigger: 'hover',
+      placement: 'right-start',
+      showArrow: false,
+      delay: 200,
+      duration: 300,
+      keepAliveOnHover: true,
+      'onUpdate:show': (show: boolean) =>
+        handleModelOptionPopoverShow(String(info.option.value ?? ''), show),
+    },
+    {
+      trigger: () => optionNode,
+      default: () =>
+        h('div', { class: 'model-option-detail' }, [
+          detail.title ? h('div', { class: 'model-option-detail-title' }, detail.title) : null,
+          detail.description
+            ? h('div', { class: 'model-option-detail-description' }, detail.description)
+            : null,
+          metaParts.length
+            ? h('div', { class: 'model-option-detail-meta' }, metaParts.join(' · '))
+            : null,
+        ]),
+    }
+  );
 }
 
 function withCurrentModelOption(
@@ -11217,6 +11515,13 @@ function reasoningEffortForModel(
   model: string,
   currentEffort: WebSessionReasoningEffort
 ): WebSessionReasoningEffort {
+  if (selectedAgent.value === 'devin') {
+    return resolveDevinSelectedReasoningEffort(
+      runtimeConfig.value?.devinModels ?? [],
+      model,
+      currentEffort
+    );
+  }
   const supported = supportedCodexReasoningEfforts(model);
   if (!supported || currentEffort === 'default' || supported.includes(currentEffort)) {
     return currentEffort;
@@ -11248,8 +11553,10 @@ function withCurrentReasoningEffortOption(
 
 function piModelMenuInteractionState() {
   return {
-    catalogOpen: selectedAgent.value === 'pi' && showAllPiModels.value,
-    searchFocused: piModelSearchFocused.value,
+    catalogOpen:
+      (selectedAgent.value === 'pi' && showAllPiModels.value) ||
+      (selectedAgent.value === 'devin' && showAllDevinModels.value),
+    searchFocused: piModelSearchFocused.value || devinModelSearchFocused.value,
     searchComposing: piModelSearchComposing.value,
   };
 }
@@ -11257,6 +11564,16 @@ function piModelMenuInteractionState() {
 function resetPiModelSearchInteraction() {
   piModelSearchFocused.value = false;
   piModelSearchComposing.value = false;
+  devinModelSearchFocused.value = false;
+}
+
+function handleDevinModelSearchFocus() {
+  devinModelSearchFocused.value = true;
+  clearComposerSelectorHoverCloseTimer('model');
+}
+
+function handleDevinModelSearchBlur() {
+  devinModelSearchFocused.value = false;
 }
 
 function refocusPiModelSearch() {
@@ -11295,6 +11612,32 @@ function handlePiModelSearchEscape(event: KeyboardEvent) {
   handleModelSelectorShowChange(false);
 }
 
+function removeRecentDevinModel(model: string) {
+  const value = model.trim();
+  if (!value) {
+    return;
+  }
+  devinFrequentModelValues.value = devinFrequentModelValues.value.filter(item => item !== value);
+}
+
+function scrollDevinModelMenuToRecent() {
+  const menu = document.querySelector<HTMLElement>(
+    '.web-session-model-select-menu.is-pi-model-catalog'
+  );
+  if (!menu) {
+    return;
+  }
+  const target = menu.querySelector<HTMLElement>('[data-devin-recent="true"]');
+  if (target) {
+    target.scrollIntoView({ block: 'nearest' });
+    return;
+  }
+  const scroller = menu.querySelector<HTMLElement>('.n-scrollbar-container');
+  if (scroller) {
+    scroller.scrollTop = 0;
+  }
+}
+
 function handleModelSelectorShowChange(show: boolean) {
   if (!show && shouldSuppressPiModelMenuClose('show-change', piModelMenuInteractionState())) {
     return;
@@ -11307,6 +11650,11 @@ function handleModelSelectorShowChange(show: boolean) {
     piModelSearchQuery.value = '';
     resetPiModelSearchInteraction();
   }
+  if (show && selectedAgent.value === 'devin') {
+    showAllDevinModels.value = true;
+    devinModelSearchQuery.value = '';
+    nextTick(() => window.setTimeout(scrollDevinModelMenuToRecent, 40));
+  }
   if (show) {
     keepAdditionalCodexModelsForNextOpen.value = false;
     keepAllPiModelsForNextOpen.value = false;
@@ -11315,8 +11663,13 @@ function handleModelSelectorShowChange(show: boolean) {
     }
   } else {
     resetPiModelSearchInteraction();
+    devinModelSearchQuery.value = '';
   }
   showModelSelector.value = show;
+  if (!show) {
+    modelMenuHovered.value = false;
+    modelOptionPopoverValues.value = new Set();
+  }
 }
 
 function handleReasoningSelectorShowChange(show: boolean) {
@@ -11354,6 +11707,9 @@ function handleComposerSelectorPointerLeave(selector: ComposerHoverSelector) {
     return;
   }
   clearComposerSelectorHoverCloseTimer(selector);
+  if (selector === 'model' && modelOptionPopoverValues.value.size > 0) {
+    return;
+  }
   if (
     selector === 'model' &&
     shouldSuppressPiModelMenuClose('pointer-leave', piModelMenuInteractionState())
@@ -11362,13 +11718,19 @@ function handleComposerSelectorPointerLeave(selector: ComposerHoverSelector) {
   }
   composerSelectorHoverCloseTimers[selector] = window.setTimeout(() => {
     composerSelectorHoverCloseTimers[selector] = null;
+    if (selector === 'model' && modelOptionPopoverValues.value.size > 0) {
+      return;
+    }
     setComposerSelectorShow(selector, false);
   }, COMPOSER_SELECTOR_HOVER_CLOSE_DELAY);
 }
 
 const selectedModelDisplayLabel = computed(() => getKnownModelLabel(selectedModel.value));
 const modelSelectStyle = computed<CSSProperties>(() => ({
-  width: `${resolveModelSelectWidth(selectedModelDisplayLabel.value)}px`,
+  width:
+    selectedAgent.value === 'devin'
+      ? '176px'
+      : `${resolveModelSelectWidth(selectedModelDisplayLabel.value)}px`,
 }));
 const claudeRuntimeOptions = computed(() =>
   CLAUDE_RUNTIME_OPTIONS.map(option => ({
@@ -11388,6 +11750,124 @@ const piDefaultPrimaryModelOptions = computed(() =>
 );
 const piPrimaryModelOptions = computed(() =>
   resolvePiPrimaryModelOptions(runtimeConfig.value?.piModels ?? [], piFrequentModelValues.value)
+);
+const devinModelOptionGroups = computed(() =>
+  resolveDevinModelOptionGroups(
+    runtimeConfig.value?.devinModels ?? [],
+    devinFrequentModelValues.value,
+    currentSession.value?.model ?? draftModel.value,
+    {
+      recent: t('webSession.recentlyUsedModels'),
+      recommended: t('webSession.recommendedModels'),
+      all: t('webSession.allModels'),
+    }
+  )
+);
+const devinSpecialModelOptions = computed(() =>
+  resolveDevinSpecialModelOptions(
+    runtimeConfig.value?.devinModels ?? [],
+    currentSession.value?.model ?? draftModel.value
+  )
+);
+const fusionModelConfigs = computed(() =>
+  resolveDevinFusionModelConfigs(runtimeConfig.value?.devinModels ?? [])
+);
+const fusionSelectedMeta = computed(
+  () => runtimeConfig.value?.devinModels?.find(model => model.model === selectedModel.value) ?? null
+);
+const fusionCostItems = computed(() =>
+  parseDevinCostSummary(fusionSelectedMeta.value?.costSummary)
+);
+const fusionContextLabel = computed(() =>
+  fusionSelectedMeta.value?.maxContextTokens
+    ? t('webSession.modelDetailContext', {
+        count: formatWebSessionTokenCount(fusionSelectedMeta.value.maxContextTokens),
+      })
+    : ''
+);
+const fusionSelectedConfig = computed(
+  () => fusionModelConfigs.value.find(config => config.model === selectedModel.value) ?? null
+);
+const isDevinFusionModel = computed(
+  () => selectedAgent.value === 'devin' && selectedModel.value.startsWith('fusion-')
+);
+const fusionLeadOptions = computed(() =>
+  [...new Set(fusionModelConfigs.value.map(config => config.lead))].map(value => ({
+    label: value,
+    value,
+  }))
+);
+const fusionEffortOptions = computed(() =>
+  [
+    ...new Set(
+      fusionModelConfigs.value
+        .filter(config => config.lead === fusionSelectedConfig.value?.lead)
+        .map(config => config.effort)
+    ),
+  ].map(value => ({ label: value, value }))
+);
+const fusionSidekickOptions = computed(() =>
+  [...new Set(fusionModelConfigs.value.map(config => config.sidekick))].map(value => ({
+    label: value,
+    value,
+  }))
+);
+const fusionSidekickEffortOptions = computed(() =>
+  [
+    ...new Set(
+      fusionModelConfigs.value
+        .filter(
+          config =>
+            config.lead === fusionSelectedConfig.value?.lead &&
+            config.effort === fusionSelectedConfig.value?.effort &&
+            config.sidekick === fusionSelectedConfig.value?.sidekick
+        )
+        .map(config => config.sidekickEffort)
+        .filter(Boolean)
+    ),
+  ].map(value => ({ label: value, value }))
+);
+function applyFusionSelection(
+  patch: Partial<{
+    lead: string;
+    effort: string;
+    sidekick: string;
+    sidekickEffort: string;
+    fast: boolean;
+  }>
+) {
+  const current = fusionSelectedConfig.value;
+  if (!current) return;
+  selectedModel.value = resolveDevinFusionModel(fusionModelConfigs.value, {
+    lead: patch.lead ?? current.lead,
+    effort: patch.effort ?? current.effort,
+    sidekick: patch.sidekick ?? current.sidekick,
+    sidekickEffort: patch.sidekickEffort ?? current.sidekickEffort,
+    fast: patch.fast ?? current.fast,
+  });
+}
+const fusionLead = computed({
+  get: () => fusionSelectedConfig.value?.lead ?? '',
+  set: value => applyFusionSelection({ lead: value }),
+});
+const fusionEffort = computed({
+  get: () => fusionSelectedConfig.value?.effort ?? '',
+  set: value => applyFusionSelection({ effort: value }),
+});
+const fusionSidekick = computed({
+  get: () => fusionSelectedConfig.value?.sidekick ?? '',
+  set: value => applyFusionSelection({ sidekick: value }),
+});
+const fusionSidekickEffort = computed({
+  get: () => fusionSelectedConfig.value?.sidekickEffort ?? '',
+  set: value => applyFusionSelection({ sidekickEffort: value }),
+});
+const fusionFast = computed({
+  get: () => fusionSelectedConfig.value?.fast ?? false,
+  set: value => applyFusionSelection({ fast: value }),
+});
+const filteredDevinModelOptionGroups = computed(() =>
+  filterDevinModelOptionGroups(devinModelOptionGroups.value, devinModelSearchQuery.value)
 );
 
 function customModelsForAgent(agent: WebSessionCustomModelAgent) {
@@ -11413,7 +11893,26 @@ function builtinModelValuesForAgent(agent: WebSessionAgent) {
   if (agent === 'codex') {
     return CODEX_MODEL_OPTIONS.map(option => option.value);
   }
+  if (agent === 'devin') {
+    return [
+      ...DEVIN_MODEL_OPTIONS.map(option => option.value),
+      ...resolveDevinModelOptions(runtimeConfig.value?.devinModels ?? []).map(
+        option => option.value
+      ),
+    ];
+  }
   return resolvePiModelOptions(runtimeConfig.value?.piModels ?? []).map(option => option.value);
+}
+
+function recordUsedDevinModel(session?: Pick<WebSessionSummary, 'agent' | 'model'> | null) {
+  if (session?.agent !== 'devin') {
+    return;
+  }
+  const model = String(session.model || '').trim();
+  if (!model) {
+    return;
+  }
+  devinFrequentModelValues.value = rememberPiFrequentModel(devinFrequentModelValues.value, model);
 }
 
 function rememberCustomModelForAgent(agent: WebSessionCustomModelAgent, model: string) {
@@ -11421,21 +11920,15 @@ function rememberCustomModelForAgent(agent: WebSessionCustomModelAgent, model: s
   if (!normalizedModel || builtinModelValuesForAgent(agent).includes(normalizedModel)) {
     return;
   }
-  setCustomModelsForAgent(
-    agent,
-    rememberCustomModel(customModelsForAgent(agent), normalizedModel)
-  );
+  setCustomModelsForAgent(agent, rememberCustomModel(customModelsForAgent(agent), normalizedModel));
 }
 
 const customModelOptions = computed(() => {
   const agent = selectedAgent.value;
-  if (agent !== 'claude' && agent !== 'codex') {
+  if (agent !== 'claude' && agent !== 'codex' && agent !== 'devin') {
     return [];
   }
-  return resolveCustomModelOptions(
-    customModelsForAgent(agent),
-    builtinModelValuesForAgent(agent)
-  );
+  return resolveCustomModelOptions(customModelsForAgent(agent), builtinModelValuesForAgent(agent));
 });
 
 const modelOptions = computed(() => {
@@ -11448,6 +11941,32 @@ const modelOptions = computed(() => {
     const builtinOptions = ccrOptions.length > 0 ? ccrOptions : [...CLAUDE_MODEL_OPTIONS];
     return [
       ...withCurrentModelOption([...builtinOptions, ...customModelOptions.value], activeModel),
+      { label: t('webSession.customModel'), value: CUSTOM_MODEL_VALUE },
+    ];
+  }
+  if (selectedAgent.value === 'devin') {
+    const dynamicOptions = resolveDevinModelOptions(runtimeConfig.value?.devinModels ?? []);
+    if (dynamicOptions.length > 0) {
+      const groups = filteredDevinModelOptionGroups.value;
+      const specialOptions = devinSpecialModelOptions.value.filter(option =>
+        devinModelSearchQuery.value.trim()
+          ? [option.label, option.value, option.description, option.modelDescription]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase()
+              .includes(devinModelSearchQuery.value.trim().toLowerCase())
+          : true
+      );
+      return [...specialOptions, ...groups];
+    }
+    return [
+      ...withCurrentModelOption(
+        [
+          ...(dynamicOptions.length ? dynamicOptions : DEVIN_MODEL_OPTIONS),
+          ...customModelOptions.value,
+        ],
+        activeModel
+      ),
       { label: t('webSession.customModel'), value: CUSTOM_MODEL_VALUE },
     ];
   }
@@ -11493,6 +12012,12 @@ const reasoningEffortOptions = computed(() => {
       selectedModel.value
     );
     return values.map(value => ({ label: reasoningEffortLabel(value), value }));
+  }
+  if (selectedAgent.value === 'devin') {
+    return resolveDevinReasoningEfforts(
+      runtimeConfig.value?.devinModels ?? [],
+      selectedModel.value
+    ).map(value => ({ label: reasoningEffortLabel(value), value }));
   }
   const supported =
     selectedAgent.value === 'codex' ? supportedCodexReasoningEfforts(selectedModel.value) : null;
@@ -11587,9 +12112,15 @@ const selectedModel = computed({
     }
     const currentEffort = currentSession.value?.reasoningEffort ?? draftReasoningEffort.value;
     const nextEffort =
-      selectedAgent.value === 'codex'
-        ? reasoningEffortForModel(next, currentEffort)
-        : currentEffort;
+      selectedAgent.value === 'devin'
+        ? resolveDevinSelectedReasoningEffort(
+            runtimeConfig.value?.devinModels ?? [],
+            next,
+            'default'
+          )
+        : selectedAgent.value === 'codex'
+          ? reasoningEffortForModel(next, currentEffort)
+          : currentEffort;
     draftModel.value = next;
     draftReasoningEffort.value = nextEffort;
     if (isDraftSession(currentSession.value)) {
@@ -11644,13 +12175,32 @@ const selectedClaudeRuntime = computed<WebSessionClaudeRuntimeOption>({
 });
 
 const selectedReasoningEffort = computed<WebSessionReasoningEffort>({
-  get: () => currentSession.value?.reasoningEffort ?? draftReasoningEffort.value,
+  get: () => {
+    const current = currentSession.value?.reasoningEffort ?? draftReasoningEffort.value;
+    return selectedAgent.value === 'devin'
+      ? resolveDevinSelectedReasoningEffort(
+          runtimeConfig.value?.devinModels ?? [],
+          selectedModel.value,
+          current
+        )
+      : current;
+  },
   set: value => {
     const next = value as WebSessionReasoningEffort;
+    const nextModel =
+      selectedAgent.value === 'devin'
+        ? resolveDevinModelForReasoning(
+            runtimeConfig.value?.devinModels ?? [],
+            selectedModel.value,
+            next
+          )
+        : selectedModel.value;
+    draftModel.value = nextModel;
     draftReasoningEffort.value = next;
     if (isDraftSession(currentSession.value)) {
       updateActiveDraftSession(current => ({
         ...current,
+        model: nextModel,
         reasoningEffort: next,
         updatedAt: new Date().toISOString(),
       }));
@@ -11658,8 +12208,12 @@ const selectedReasoningEffort = computed<WebSessionReasoningEffort>({
     }
     if (currentRealSession.value) {
       const noticeKey = getRuntimeSwitchNoticeKey();
-      void webSessionStore
-        .updateReasoningEffort(currentRealSession.value.id, next)
+      void (async () => {
+        if (nextModel !== selectedModel.value) {
+          await webSessionStore.updateModel(currentRealSession.value!.id, nextModel);
+        }
+        await webSessionStore.updateReasoningEffort(currentRealSession.value!.id, next);
+      })()
         .then(() => showRuntimeSwitchNotice(noticeKey))
         .catch(error => {
           message.error(error instanceof Error ? error.message : t('common.error'));
@@ -11852,7 +12406,11 @@ function openCustomModelDialog() {
   const inputValue = ref((currentSession.value?.model ?? draftModel.value).trim());
   const selectedAgentValue = selectedAgent.value;
   const customModelAgent: WebSessionCustomModelAgent | null =
-    selectedAgentValue === 'claude' || selectedAgentValue === 'codex' ? selectedAgentValue : null;
+    selectedAgentValue === 'claude' ||
+    selectedAgentValue === 'codex' ||
+    selectedAgentValue === 'devin'
+      ? selectedAgentValue
+      : null;
   dialog.create({
     title: t('webSession.customModelTitle'),
     content: () =>
@@ -11904,7 +12462,7 @@ function openCustomModelDialog() {
       }
       const currentEffort = currentSession.value?.reasoningEffort ?? draftReasoningEffort.value;
       const nextEffort =
-        selectedAgent.value === 'codex'
+        selectedAgent.value === 'codex' || selectedAgent.value === 'devin'
           ? reasoningEffortForModel(nextModel, currentEffort)
           : currentEffort;
       draftModel.value = nextModel;
@@ -12443,10 +13001,7 @@ function historyInteractionPrompt(item: WebSessionBlock) {
 }
 
 function historyInteractionCommand(item: WebSessionBlock) {
-  if (
-    item.detail?.type !== 'approval_request' &&
-    item.detail?.type !== 'approval_response'
-  ) {
+  if (item.detail?.type !== 'approval_request' && item.detail?.type !== 'approval_response') {
     return '';
   }
   const direct = item.detail.command?.trim() || '';
@@ -13910,6 +14465,7 @@ async function handleRetryTimelineUserMessage(item: WebSessionBlock) {
       attachments: item.attachments,
       freshContext: item.freshContext,
     });
+    recordUsedDevinModel(prepared.session);
     recordSubmittedPrompt(item.text, prepared.session.projectId || props.projectId);
     if (prepared.navigateProjectId && isCurrentVisibleSession(prepared.session.id)) {
       projectStore.addRecentProject(prepared.navigateProjectId);
@@ -13940,6 +14496,7 @@ async function continueErroredSession(session: WebSessionSummary) {
     shouldActivate: () => isCurrentVisibleSession(sourceSessionId),
   });
   await webSessionStore.sendMessage(prepared.session.id, 'continue', []);
+  recordUsedDevinModel(prepared.session);
   if (prepared.navigateProjectId && isCurrentVisibleSession(prepared.session.id)) {
     projectStore.addRecentProject(prepared.navigateProjectId);
     await router.push(buildProjectRouteLocation(prepared.navigateProjectId, prepared.session.id));
@@ -14090,6 +14647,7 @@ async function handleSubmit() {
       beginAwaitingRuntime(session.id, submitKind, submitStartedAt);
     }
     submissionSucceeded = true;
+    recordUsedDevinModel(session);
     recordSubmittedPrompt(draftText, session.projectId || submitProjectId);
     const isCurrentSubmissionSession = isCurrentVisibleSession(session.id);
     if (prepared.navigateProjectId && isCurrentSubmissionSession) {
@@ -14183,6 +14741,7 @@ async function handleConfirmScheduledSend() {
         dependsOnId: scheduledDependsOnId.value || undefined,
       }
     );
+    recordUsedDevinModel(session);
     recordSubmittedPrompt(draftText, session.projectId || submitProjectId);
     clearComposerDraftAfterSubmit(draftSessionId, submitProjectId);
     const isCurrentSubmissionSession = isCurrentVisibleSession(session.id);
@@ -14348,6 +14907,7 @@ async function handlePreinput(mode: 'redirect' | 'queue') {
       { attachments }
     );
     submissionSucceeded = true;
+    recordUsedDevinModel(session);
     recordSubmittedPrompt(draftText, session.projectId || submitProjectId);
     if (isCurrentVisibleSession(session.id)) {
       isMobileComposerSettingsExpanded.value = false;
@@ -15181,6 +15741,9 @@ async function handlePlanCardImplement() {
         'Implement the plan.',
         []
       );
+      if (sendResult.accepted) {
+        recordUsedDevinModel(targetSession);
+      }
       if (sendResult.accepted && !sendResult.runtimeObserved) {
         beginAwaitingRuntime(targetSession.id, 'execute_plan', submitStartedAt);
       }
@@ -15220,6 +15783,9 @@ async function handlePlanCardImplementFreshContext() {
     const sendResult = await webSessionStore.sendMessage(sourceSession.id, prompt, [], undefined, {
       freshContext: true,
     });
+    if (sendResult.accepted) {
+      recordUsedDevinModel(sourceSession);
+    }
     if (sendResult.accepted && !sendResult.runtimeObserved) {
       beginAwaitingRuntime(sourceSession.id, 'execute_plan', submitStartedAt);
     }
@@ -17352,7 +17918,11 @@ useResizeObserver(timelineScrollRef, entries => {
 watch(
   () => selectedAgent.value,
   value => {
-    if (!draftModel.value || (value === 'claude' && draftModel.value.startsWith('gpt-'))) {
+    if (
+      !draftModel.value ||
+      (value === 'claude' && draftModel.value.startsWith('gpt-')) ||
+      (value === 'devin' && !builtinModelValuesForAgent('devin').includes(draftModel.value))
+    ) {
       draftModel.value = defaultModelForAgent(value);
     }
     if (value === 'codex' && !draftModel.value.startsWith('gpt-')) {
