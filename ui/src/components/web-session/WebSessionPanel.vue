@@ -2178,6 +2178,7 @@
                           ref="piModelSearchInputRef"
                           v-model:value="piModelSearchQuery"
                           clearable
+                          :bordered="false"
                           size="small"
                           :placeholder="t('webSession.modelSearchPlaceholder')"
                           :aria-label="t('webSession.modelSearchPlaceholder')"
@@ -2196,6 +2197,7 @@
                           ref="devinModelSearchInputRef"
                           v-model:value="devinModelSearchQuery"
                           clearable
+                          :bordered="false"
                           size="small"
                           :placeholder="t('webSession.modelSearchPlaceholder')"
                           :aria-label="t('webSession.modelSearchPlaceholder')"
@@ -3759,6 +3761,8 @@ import {
   resolveDevinModelOptions,
   resolveDevinModelForReasoning,
   resolveDevinModelOptionGroups,
+  duplicateDevinModelOptionValue,
+  normalizeDevinModelOptionValue,
   resolveDevinSpecialModelOptions,
   resolveDevinFusionModel,
   resolveDevinFusionModelConfigs,
@@ -11732,7 +11736,14 @@ function scrollDevinModelMenuToRecent() {
   if (!menu) {
     return;
   }
-  const target = menu.querySelector<HTMLElement>('[data-devin-recent="true"]');
+  const pending = menu.querySelector<HTMLElement>('.n-base-select-option--pending');
+  if (pending) {
+    pending.scrollIntoView({ block: 'nearest' });
+    return;
+  }
+  const target = menu.querySelector<HTMLElement>(
+    '.n-base-select-option[data-devin-recent="true"]'
+  );
   if (target) {
     target.scrollIntoView({ block: 'nearest' });
     return;
@@ -12053,15 +12064,26 @@ const modelOptions = computed(() => {
     const dynamicOptions = resolveDevinModelOptions(runtimeConfig.value?.devinModels ?? []);
     if (dynamicOptions.length > 0) {
       const groups = filteredDevinModelOptionGroups.value;
-      const specialOptions = devinSpecialModelOptions.value.filter(option =>
-        devinModelSearchQuery.value.trim()
-          ? [option.label, option.value, option.description, option.modelDescription]
-              .filter(Boolean)
-              .join(' ')
-              .toLowerCase()
-              .includes(devinModelSearchQuery.value.trim().toLowerCase())
-          : true
+      const recentValues = new Set(
+        groups
+          .find(group => group.key === 'devin-recent')
+          ?.children.map(option => option.value) ?? []
       );
+      const specialOptions = devinSpecialModelOptions.value
+        .filter(option =>
+          devinModelSearchQuery.value.trim()
+            ? [option.label, option.value, option.description, option.modelDescription]
+                .filter(Boolean)
+                .join(' ')
+                .toLowerCase()
+                .includes(devinModelSearchQuery.value.trim().toLowerCase())
+            : true
+        )
+        .map(option =>
+          recentValues.has(option.value)
+            ? { ...option, value: duplicateDevinModelOptionValue(option.value) }
+            : option
+        );
       return [...specialOptions, ...groups];
     }
     return [
@@ -12192,7 +12214,7 @@ const selectedAgent = computed({
 const selectedModel = computed({
   get: () => currentSession.value?.model ?? draftModel.value,
   set: value => {
-    const next = String(value);
+    const next = normalizeDevinModelOptionValue(String(value));
     if (next === MORE_MODELS_VALUE) {
       if (selectedAgent.value === 'pi') {
         showAllPiModels.value = true;

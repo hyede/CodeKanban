@@ -11,7 +11,9 @@ import {
   defaultModelForAgent,
   defaultPermissionLevelForAgent,
   defaultReasoningEffortForAgent,
+  duplicateDevinModelOptionValue,
   filterPiModelOptionGroups,
+  normalizeDevinModelOptionValue,
   parseDevinCostSummary,
   rememberCustomModel,
   rememberPiFrequentModel,
@@ -159,10 +161,45 @@ describe('webSessionModelOptions', () => {
     const recent = groups.find(group => group.key === 'devin-recent');
     expect(recent?.label).toBe('Recently Used');
     expect(recent?.children.map(option => option.value)).toEqual(['swe-2-low', 'swe-2-high']);
-    expect(recent?.children[0].label).toBe('SWE-2 Low');
+    expect(recent?.children[0].label).toBe('SWE-2');
     expect(recent?.children[0].menuLabel).toBe('SWE-2');
     expect(recent?.children[0].accentLabel).toBe('Low');
     expect(recent?.children[0].removable).toBe(true);
+  });
+
+  it('keeps a recently used Devin model as the only option carrying its value', () => {
+    const models = [
+      {
+        model: 'swe-2-high',
+        displayName: 'SWE-2 High',
+        family: 'SWE-2',
+        defaultReasoningEffort: 'high' as const,
+      },
+      {
+        model: 'swe-2-low',
+        displayName: 'SWE-2 Low',
+        family: 'SWE-2',
+        defaultReasoningEffort: 'low' as const,
+      },
+      {
+        model: 'glm-5-2-max',
+        displayName: 'GLM-5.2 Max',
+        family: 'GLM-5.2',
+        defaultReasoningEffort: 'max' as const,
+      },
+    ];
+    const groups = resolveDevinModelOptionGroups(models, ['swe-2-low'], 'swe-2-low');
+    const all = groups.find(group => group.key === 'devin-all');
+    const values = groups.flatMap(group => group.children.map(option => option.value));
+    expect(values.filter(value => value === 'swe-2-low')).toHaveLength(1);
+    expect(all?.children.map(option => option.value)).toEqual([
+      duplicateDevinModelOptionValue('swe-2-low'),
+      'glm-5-2-max',
+    ]);
+    expect(normalizeDevinModelOptionValue(duplicateDevinModelOptionValue('swe-2-low'))).toBe(
+      'swe-2-low'
+    );
+    expect(normalizeDevinModelOptionValue('swe-2-low')).toBe('swe-2-low');
   });
 
   it('marks removable Devin recent options without an accent for special families', () => {

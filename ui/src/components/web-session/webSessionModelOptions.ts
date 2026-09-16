@@ -487,6 +487,18 @@ export type DevinModelGroupLabels = {
   all?: string;
 };
 
+export const DEVIN_DUPLICATE_MODEL_VALUE_SUFFIX = '#dup';
+
+export function duplicateDevinModelOptionValue(value: string) {
+  return `${value}${DEVIN_DUPLICATE_MODEL_VALUE_SUFFIX}`;
+}
+
+export function normalizeDevinModelOptionValue(value: string) {
+  return value.endsWith(DEVIN_DUPLICATE_MODEL_VALUE_SUFFIX)
+    ? value.slice(0, -DEVIN_DUPLICATE_MODEL_VALUE_SUFFIX.length)
+    : value;
+}
+
 const DEVIN_EFFORT_DISPLAY_ORDER: WebSessionReasoningEffort[] = [
   'none',
   'minimal',
@@ -580,7 +592,13 @@ export function resolveDevinModelOptionGroups(
       recentMenuLabel = family;
       accentLabel = remainder || effortLabel || undefined;
     }
-    recent.push({ ...option, menuLabel: recentMenuLabel, accentLabel, removable: true });
+    recent.push({
+      ...option,
+      label: recentMenuLabel ?? option.label,
+      menuLabel: recentMenuLabel,
+      accentLabel,
+      removable: true,
+    });
   }
   const recentFamilies = new Set(
     recent
@@ -592,9 +610,14 @@ export function resolveDevinModelOptionGroups(
   );
   const recommended = recommendedEntries.map(entry => entry.option);
   const recommendedFamilies = new Set(recommendedEntries.map(entry => entry.family));
+  const recentOptionValues = new Set(recent.map(option => option.value));
   const allModels = familyEntries
     .filter(entry => !recommendedFamilies.has(entry.family))
-    .map(entry => entry.option);
+    .map(entry =>
+      recentOptionValues.has(entry.option.value)
+        ? { ...entry.option, value: duplicateDevinModelOptionValue(entry.option.value) }
+        : entry.option
+    );
   const groups: WebSessionModelOptionGroup[] = [];
   if (recent.length) {
     groups.push({
