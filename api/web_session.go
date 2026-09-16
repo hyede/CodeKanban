@@ -717,6 +717,42 @@ func (c *webSessionController) registerHTTP(app *fiber.App, group *huma.Group) {
 		op.Tags = []string{webSessionTag}
 	})
 
+	huma.Post(group, "/projects/{projectId}/web-sessions/{sessionId}/messages/{itemId}/fork", func(
+		ctx context.Context,
+		input *struct {
+			ProjectID string `path:"projectId"`
+			SessionID string `path:"sessionId"`
+			ItemID    string `path:"itemId"`
+		},
+	) (*h.ItemResponse[websession.SessionHydrationTarget], error) {
+		record, err := c.manager.GetSession(ctx, input.SessionID)
+		if err != nil || record.ProjectID != input.ProjectID {
+			return nil, huma.Error404NotFound("session not found")
+		}
+		item, err := c.manager.ForkDevinSession(ctx, input.SessionID, input.ItemID)
+		if err != nil {
+			switch {
+			case errors.Is(err, websession.ErrDevinForkTargetNotFound):
+				return nil, huma.Error404NotFound(err.Error())
+			case errors.Is(err, websession.ErrDevinForkSessionActive),
+				errors.Is(err, websession.ErrDevinForkPendingInput),
+				errors.Is(err, websession.ErrDevinForkHistoryConflict):
+				return nil, huma.Error409Conflict(err.Error())
+			case errors.Is(err, websession.ErrDevinForkUnsupported):
+				return nil, huma.Error400BadRequest(err.Error())
+			default:
+				return nil, huma.Error500InternalServerError("failed to fork Devin session", err)
+			}
+		}
+		resp := h.NewItemResponse(websession.NewSessionHydrationTarget(item.Session))
+		resp.Status = http.StatusCreated
+		return resp, nil
+	}, func(op *huma.Operation) {
+		op.OperationID = "web-session-fork-devin-session"
+		op.Summary = "从指定消息分叉 Devin 会话"
+		op.Tags = []string{webSessionTag}
+	})
+
 	huma.Post(group, "/projects/{projectId}/web-sessions/import", func(
 		ctx context.Context,
 		input *struct {

@@ -284,17 +284,7 @@ func (m *Manager) runDevinACPSession(ctx context.Context, run *activeRun, sessio
 	run.setCommand(client.cmd)
 	defer client.close()
 
-	initialize, err := client.request(ctx, "initialize", map[string]any{
-		"protocolVersion": devinACPProtocolVersion,
-		"clientCapabilities": map[string]any{
-			"terminal": true,
-		},
-		"clientInfo": map[string]any{
-			"name":    "codekanban",
-			"title":   "CodeKanban",
-			"version": "devin-acp",
-		},
-	})
+	initialize, err := client.request(ctx, "initialize", m.devinACPInitializeParams())
 	if err != nil {
 		m.handleRunFailure(session.ID, session, run, fmt.Errorf("Devin ACP initialize failed: %w", err))
 		return
@@ -302,6 +292,7 @@ func (m *Manager) runDevinACPSession(ctx context.Context, run *activeRun, sessio
 	var initializeResult map[string]any
 	_ = json.Unmarshal(initialize, &initializeResult)
 
+	proj := newDevinRunProjection()
 	nativeSessionID := pointerString(session.NativeSessionID)
 	if nativeSessionID == "" {
 		result, requestErr := client.request(ctx, "session/new", map[string]any{
@@ -325,18 +316,35 @@ func (m *Manager) runDevinACPSession(ctx context.Context, run *activeRun, sessio
 			"native_session_id": nativeSessionID,
 			"updated_at":        time.Now(),
 		})
-	} else if capabilitiesContain(initializeResult["agentCapabilities"], "loadSession") {
-		if _, requestErr := client.request(ctx, "session/load", map[string]any{
-			"sessionId":  nativeSessionID,
-			"cwd":        session.Cwd,
-			"mcpServers": []any{},
-		}); requestErr != nil {
-			m.handleRunFailure(session.ID, session, run, fmt.Errorf("Devin ACP session/load failed: %w", requestErr))
+	} else {
+		agentCapabilities := initializeResult["agentCapabilities"]
+		resumed := false
+		var resumeErr error
+		if sessionCapabilitiesContain(agentCapabilities, "resume") {
+			// session/resume restores context without replaying history.
+			if _, requestErr := client.request(ctx, "session/resume", map[string]any{
+				"sessionId":  nativeSessionID,
+				"cwd":        session.Cwd,
+				"mcpServers": []any{},
+			}); requestErr == nil {
+				resumed = true
+			} else {
+				resumeErr = requestErr
+			}
+		}
+		switch {
+		case resumed:
+		case capabilitiesContain(agentCapabilities, "loadSession"):
+			if requestErr := m.loadDevinACPSession(ctx, client, session, run, proj, nativeSessionID); requestErr != nil {
+				m.handleRunFailure(session.ID, session, run, fmt.Errorf("Devin ACP session/load failed: %w", requestErr))
+				return
+			}
+		case resumeErr != nil:
+			m.handleRunFailure(session.ID, session, run, fmt.Errorf("Devin ACP session/resume failed: %w", resumeErr))
 			return
 		}
 	}
 
-	proj := newDevinRunProjection()
 	eventsDone := make(chan struct{})
 	go func() {
 		defer close(eventsDone)
@@ -366,6 +374,59 @@ func (m *Manager) runDevinACPSession(ctx context.Context, run *activeRun, sessio
 	client.close()
 	<-eventsDone
 	m.finishDevinRun(session, run, proj)
+}
+
+// devinACPInitializeParams builds the ACP initialize request. clientInfo
+// mirrors what Devin Desktop's ACP connector sends so the agent treats this
+// like a first-party session. The only declared clientCapability is the
+// revert extension opt-in under _meta — elicitation/fs stay undeclared, and
+// terminal is omitted like the desktop so the agent uses its native tools.
+func (m *Manager) devinACPInitializeParams() map[string]any {
+	return map[string]any{
+		"protocolVersion": devinACPProtocolVersion,
+		"clientCapabilities": map[string]any{
+			"_meta": map[string]any{
+				"cognition.ai/revert": true,
+			},
+		},
+		"clientInfo": map[string]any{
+			"name":    "windsurf",
+			"version": m.devinACPClientVersion(),
+		},
+	}
+}
+
+// devinAgentSupportsRevert reports whether agentCapabilities advertises the
+// private revert extension via _meta["cognition.ai/revert"] === true. The
+// agent only enables listSteps/forkFromStep when the client opted in during
+// initialize, which devinACPInitializeParams does.
+func devinAgentSupportsRevert(raw any) bool {
+	values, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	meta, ok := values["_meta"].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, ok := meta["cognition.ai/revert"].(bool)
+	return ok && enabled
+}
+
+var devinClientVersion struct {
+	once    sync.Once
+	version string
+}
+
+// devinACPClientVersion reports the Devin CLI version, probed once per process
+// and sent as clientInfo.version in the ACP initialize handshake.
+func (m *Manager) devinACPClientVersion() string {
+	devinClientVersion.once.Do(func() {
+		if version := detectDevinVersion(m.cfg.DevinPath); version != nil {
+			devinClientVersion.version = *version
+		}
+	})
+	return devinClientVersion.version
 }
 
 func (m *Manager) terminalShellConfig() utils.TerminalShellConfig {
@@ -398,6 +459,63 @@ func capabilitiesContain(raw any, key string) bool {
 	return ok && value != nil
 }
 
+// sessionCapabilitiesContain reports whether agentCapabilities advertises the
+// named sessionCapabilities entry (e.g. "resume").
+func sessionCapabilitiesContain(raw any, key string) bool {
+	values, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	scoped, ok := values["sessionCapabilities"].(map[string]any)
+	if !ok {
+		return false
+	}
+	value, ok := scoped[key]
+	return ok && value != nil
+}
+
+// loadDevinACPSession performs session/load while draining client.events. Per
+// the ACP spec the agent replays the entire conversation as session/update
+// notifications before responding; those replays are discarded here so prior
+// replies are not appended to the run again. Draining during the call also
+// keeps the buffered events channel from filling up and deadlocking the load.
+func (m *Manager) loadDevinACPSession(ctx context.Context, client *devinACPClient, session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, nativeSessionID string) error {
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.request(ctx, "session/load", map[string]any{
+			"sessionId":  nativeSessionID,
+			"cwd":        session.Cwd,
+			"mcpServers": []any{},
+		})
+		done <- err
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-done:
+			// The response is ordered after every replayed notification on
+			// the wire, so whatever is still queued is history — discard it.
+			for {
+				select {
+				case message, ok := <-client.events:
+					if !ok {
+						return err
+					}
+					m.dispatchDevinACPMessage(client, session, run, proj, message, devinACPDispatchReplay)
+				default:
+					return err
+				}
+			}
+		case message, ok := <-client.events:
+			if !ok {
+				return errors.New("Devin ACP process closed")
+			}
+			m.dispatchDevinACPMessage(client, session, run, proj, message, devinACPDispatchReplay)
+		}
+	}
+}
+
 func (m *Manager) consumeDevinACPEvents(ctx context.Context, client *devinACPClient, session tables.WebSessionTable, run *activeRun, proj *devinRunProjection) {
 	for {
 		select {
@@ -407,22 +525,60 @@ func (m *Manager) consumeDevinACPEvents(ctx context.Context, client *devinACPCli
 			if !ok {
 				return
 			}
-			if message.Method == "session/update" {
-				m.handleDevinACPUpdate(session, run, proj, message.Params)
-				continue
-			}
-			if message.Method == "session/request_permission" {
-				m.handleDevinPermissionRequest(client, session, run, message)
-				continue
-			}
-			if strings.HasPrefix(message.Method, "terminal/") {
-				m.handleDevinTerminalRequest(client, session, run, message)
-				continue
-			}
-			if message.ID != nil && strings.TrimSpace(message.Method) != "" {
-				_ = client.respondError(message.ID, -32601, "unsupported method: "+message.Method)
-			}
+			m.dispatchDevinACPMessage(client, session, run, proj, message, devinACPDispatchLive)
 		}
+	}
+}
+
+// devinACPDispatchMode controls how dispatchDevinACPMessage treats incoming
+// agent→client traffic outside of an ordinary live run.
+type devinACPDispatchMode int
+
+const (
+	// devinACPDispatchLive projects session/update into history and answers
+	// terminal/permission requests normally.
+	devinACPDispatchLive devinACPDispatchMode = iota
+	// devinACPDispatchReplay drops session/update (session/load history
+	// replay — codekanban already persisted those turns) but still answers
+	// terminal/permission requests on the attached run.
+	devinACPDispatchReplay
+	// devinACPDispatchDetached drops session/update and refuses terminal and
+	// permission requests: the ACP process is attached to a session only to
+	// issue extension calls, so no operator exists to service requests.
+	devinACPDispatchDetached
+	// devinACPDispatchCapture projects session/update into history (used to
+	// materialize a forked session's replay) while refusing terminal and
+	// permission requests — replaying history must not execute commands or
+	// block on prompts.
+	devinACPDispatchCapture
+)
+
+// dispatchDevinACPMessage routes one agent→client message.
+func (m *Manager) dispatchDevinACPMessage(client *devinACPClient, session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, message devinACPMessage, mode devinACPDispatchMode) {
+	if message.Method == "session/update" {
+		if mode == devinACPDispatchLive || mode == devinACPDispatchCapture {
+			m.handleDevinACPUpdate(session, run, proj, message.Params)
+		}
+		return
+	}
+	if message.Method == "session/request_permission" {
+		if mode == devinACPDispatchLive || mode == devinACPDispatchReplay {
+			m.handleDevinPermissionRequest(client, session, run, message)
+		} else if message.ID != nil {
+			_ = client.respond(message.ID, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
+		}
+		return
+	}
+	if strings.HasPrefix(message.Method, "terminal/") {
+		if mode == devinACPDispatchLive || mode == devinACPDispatchReplay {
+			m.handleDevinTerminalRequest(client, session, run, message)
+		} else if message.ID != nil {
+			_ = client.respondError(message.ID, -32601, "unsupported method: "+message.Method)
+		}
+		return
+	}
+	if message.ID != nil && strings.TrimSpace(message.Method) != "" {
+		_ = client.respondError(message.ID, -32601, "unsupported method: "+message.Method)
 	}
 }
 
@@ -473,6 +629,13 @@ type devinRunProjection struct {
 	thinkingIndex  int
 	lastThinkEmit  time.Time
 	tools          map[string]*devinToolState // by ACP toolCallId
+
+	// captureHistory marks the projection as materializing a session/load
+	// replay (used when hydrating a forked session). In this mode
+	// user_message_chunk updates are buffered into pendingUserText so the
+	// caller can emit them as msg_u events at message boundaries.
+	captureHistory  bool
+	pendingUserText strings.Builder
 }
 
 type devinToolState struct {
@@ -485,6 +648,30 @@ type devinToolState struct {
 
 func newDevinRunProjection() *devinRunProjection {
 	return &devinRunProjection{tools: make(map[string]*devinToolState)}
+}
+
+// takeDevinCapturedUserText drains user_message_chunk text buffered during
+// history capture. Empty means no user message is pending emission.
+func (p *devinRunProjection) takeDevinCapturedUserText() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	text := p.pendingUserText.String()
+	p.pendingUserText.Reset()
+	return text
+}
+
+// devinACPSessionUpdateKind extracts update.sessionUpdate from a
+// session/update notification payload without projecting it.
+func devinACPSessionUpdateKind(raw json.RawMessage) string {
+	var payload struct {
+		Update struct {
+			SessionUpdate string `json:"sessionUpdate"`
+		} `json:"update"`
+	}
+	if json.Unmarshal(raw, &payload) != nil {
+		return ""
+	}
+	return payload.Update.SessionUpdate
 }
 
 // devinToolHistoryKind maps the raw ACP tool kind to a history kind the UI
@@ -611,6 +798,17 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 	update, _ := payload["update"].(map[string]any)
 	kind := stringValue(update["sessionUpdate"])
 	switch kind {
+	case "user_message_chunk":
+		// Only history capture consumes replayed user messages; live runs
+		// already recorded the user's message when it was sent.
+		if !proj.captureHistory {
+			return
+		}
+		content, _ := update["content"].(map[string]any)
+		text := firstNonEmpty(stringValue(content["text"]), stringValue(update["text"]))
+		proj.mu.Lock()
+		proj.pendingUserText.WriteString(text)
+		proj.mu.Unlock()
 	case "agent_thought_chunk":
 		content, _ := update["content"].(map[string]any)
 		text := firstNonEmpty(stringValue(content["text"]), stringValue(update["text"]))

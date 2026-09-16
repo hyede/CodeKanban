@@ -946,6 +946,34 @@
                         </template>
                         {{ timelineUserMessageEditTitle }}
                       </n-tooltip>
+                      <n-tooltip
+                        v-if="canForkTimelineUserMessage(item)"
+                        trigger="hover"
+                        placement="top"
+                        :delay="100"
+                      >
+                        <template #trigger>
+                          <n-button
+                            quaternary
+                            circle
+                            size="small"
+                            class="user-message-navigation-button user-message-fork-button"
+                            :loading="devinForkPendingItemId === item.id"
+                            :disabled="
+                              isRunActive ||
+                              (devinForkPendingItemId !== '' && devinForkPendingItemId !== item.id)
+                            "
+                            :title="timelineUserMessageForkTitle"
+                            :aria-label="timelineUserMessageForkTitle"
+                            @click.stop="forkTimelineUserMessage(item)"
+                          >
+                            <template #icon>
+                              <n-icon><GitBranchOutline /></n-icon>
+                            </template>
+                          </n-button>
+                        </template>
+                        {{ timelineUserMessageForkTitle }}
+                      </n-tooltip>
                       <n-tooltip trigger="hover" placement="top" :delay="100">
                         <template #trigger>
                           <n-button
@@ -6884,6 +6912,60 @@ function openTimelineUserMessageEdit(block: WebSessionBlock) {
   showMessageEditDialog.value = true;
 }
 
+const devinForkPendingItemId = ref('');
+const timelineUserMessageForkTitle = computed(() =>
+  isRunActive.value ? t('webSession.forkUserMessageRunning') : t('webSession.forkUserMessage')
+);
+
+function canForkTimelineUserMessage(block: WebSessionBlock) {
+  const session = currentRealSession.value;
+  return Boolean(
+    block.kind === 'user' &&
+      !block.deliveryState &&
+      session?.agent === 'devin' &&
+      session.nativeSessionId &&
+      runtimeDevinCapability.value.supportsFork === true
+  );
+}
+
+async function forkTimelineUserMessage(block: WebSessionBlock) {
+  const session = currentRealSession.value;
+  if (
+    !session ||
+    !canForkTimelineUserMessage(block) ||
+    isRunActive.value ||
+    devinForkPendingItemId.value !== ''
+  ) {
+    return;
+  }
+  devinForkPendingItemId.value = block.id;
+  try {
+    const target = await webSessionStore.forkSessionMessage(session.projectId, session.id, block.id);
+    const branch = target.session;
+    if (!branch) {
+      throw new Error(t('common.error'));
+    }
+    if (session.projectId !== props.projectId) {
+      projectStore.addRecentProject(session.projectId);
+      await router.push(buildProjectRouteLocation(session.projectId, branch.id));
+    } else {
+      clearArchivedPreviewSession();
+      activeArchivedPreviewId.value = '';
+      await nextTick();
+      insertTabAfter(branch.id, session.id);
+      await activateTabById(branch.id, { connectReal: false });
+      await syncWebSessionRouteSessionId(branch.id);
+      autoFollowBottom.value = true;
+      scrollToBottom(true);
+    }
+    message.success(t('webSession.forkSessionSuccess'));
+  } catch (error) {
+    message.error(formatSessionInteractionError(error));
+  } finally {
+    devinForkPendingItemId.value = '';
+  }
+}
+
 function handleMessageEditDialogVisibilityChange(show: boolean) {
   if (!show && messageEditSubmitting.value) {
     return;
@@ -11466,15 +11548,38 @@ function resolveModelSelectWidth(label: string) {
   return clamp(MODEL_SELECT_MIN_WIDTH, width, MODEL_SELECT_MAX_WIDTH);
 }
 
+function configuredDefaultModelFor(agent: WebSessionAgent) {
+  switch (agent) {
+    case 'claude':
+      return developerConfig.value.webSessionClaudeDefaultModel;
+    case 'pi':
+      return developerConfig.value.webSessionPiDefaultModel;
+    case 'devin':
+      return developerConfig.value.webSessionDevinDefaultModel;
+    default:
+      return developerConfig.value.webSessionCodexDefaultModel;
+  }
+}
+
+function configuredDefaultReasoningEffortFor(agent: WebSessionAgent) {
+  switch (agent) {
+    case 'claude':
+      return developerConfig.value.webSessionClaudeDefaultReasoningEffort;
+    case 'pi':
+      return developerConfig.value.webSessionPiDefaultReasoningEffort;
+    case 'devin':
+      return developerConfig.value.webSessionDevinDefaultReasoningEffort;
+    default:
+      return developerConfig.value.webSessionCodexDefaultReasoningEffort;
+  }
+}
+
 function defaultModelForAgent(agent: WebSessionAgent) {
-  return resolveDefaultModelForAgent(agent, developerConfig.value.webSessionCodexDefaultModel);
+  return resolveDefaultModelForAgent(agent, configuredDefaultModelFor(agent));
 }
 
 function defaultReasoningEffortForAgent(agent: WebSessionAgent): WebSessionReasoningEffort {
-  return resolveDefaultReasoningEffortForAgent(
-    agent,
-    developerConfig.value.webSessionCodexDefaultReasoningEffort
-  );
+  return resolveDefaultReasoningEffortForAgent(agent, configuredDefaultReasoningEffortFor(agent));
 }
 
 function defaultPermissionLevelForAgent(agent: WebSessionAgent): 'default' | 'elevated' | 'yolo' {
@@ -12047,7 +12152,9 @@ const selectedAgent = computed({
   set: value => {
     const next = value as WebSessionAgent;
     const firstPiModel = piPrimaryModelOptions.value[0]?.value;
-    const nextModel = next === 'pi' && firstPiModel ? firstPiModel : defaultModelForAgent(next);
+    const configuredDefault = defaultModelForAgent(next);
+    const nextModel =
+      next === 'pi' && !configuredDefault && firstPiModel ? firstPiModel : configuredDefault;
     const nextReasoningEffort = defaultReasoningEffortForAgent(next);
     const nextPermissionLevel = defaultPermissionLevelForAgent(next);
     draftAgent.value = next;

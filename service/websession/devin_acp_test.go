@@ -88,6 +88,47 @@ func devinACPUpdatePayload(sessionUpdate string, extra map[string]any) json.RawM
 	return encoded
 }
 
+func TestDevinACPDispatchDropsReplayedUpdates(t *testing.T) {
+	manager, session := newTextDeltaTestManager(t)
+	run := &activeRun{runID: "devin-replay"}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	replayed := devinACPMessage{
+		Method: "session/update",
+		Params: devinACPUpdatePayload("agent_message_chunk", map[string]any{
+			"content": map[string]any{"text": "old reply"},
+		}),
+	}
+	manager.dispatchDevinACPMessage(nil, sess, run, proj, replayed, devinACPDispatchReplay)
+	if events := readTextDeltaTestEvents(t, manager, session.ID); len(events) != 0 {
+		t.Fatalf("replayed session/update produced %d events, want 0", len(events))
+	}
+
+	manager.dispatchDevinACPMessage(nil, sess, run, proj, replayed, devinACPDispatchLive)
+	if events := readTextDeltaTestEvents(t, manager, session.ID); len(events) == 0 {
+		t.Fatal("live session/update produced no events")
+	}
+}
+
+func TestSessionCapabilitiesContain(t *testing.T) {
+	caps := map[string]any{
+		"loadSession": true,
+		"sessionCapabilities": map[string]any{
+			"resume": map[string]any{},
+		},
+	}
+	if !sessionCapabilitiesContain(caps, "resume") {
+		t.Fatal("sessionCapabilitiesContain should detect resume")
+	}
+	if sessionCapabilitiesContain(caps, "close") {
+		t.Fatal("sessionCapabilitiesContain should reject missing entry")
+	}
+	if sessionCapabilitiesContain(map[string]any{"loadSession": true}, "resume") {
+		t.Fatal("sessionCapabilitiesContain should reject missing sessionCapabilities")
+	}
+}
+
 func TestDevinToolHistoryKind(t *testing.T) {
 	tests := map[string]string{
 		"execute": "command_execution",

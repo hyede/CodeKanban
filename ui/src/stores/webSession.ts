@@ -7146,6 +7146,18 @@ export const useWebSessionStore = defineStore('web-session', () => {
     return target;
   }
 
+  async function forkSessionMessage(projectId: string, sessionId: string, itemId: string) {
+    const target = await webSessionApi.forkMessage(projectId, sessionId, itemId);
+    const branchId = target.session.id;
+    await hydrateSessionTarget(projectId, target);
+    rememberActiveSession(projectId, branchId);
+    emitter.emit('web-session:created', {
+      projectId,
+      sessionId: branchId,
+    });
+    return target;
+  }
+
   async function syncSession(
     projectId: string,
     sessionId: string,
@@ -8484,6 +8496,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
     markSessionRead,
     createSession: createSessionViaHttp,
     editUserMessage,
+    forkSessionMessage,
     importSession,
     renameSession,
     archiveSession,

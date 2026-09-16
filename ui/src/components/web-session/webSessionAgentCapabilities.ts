@@ -18,6 +18,7 @@ function unavailableCapability(): WebSessionAgentCapability {
     supportsImages: false,
     supportsCompaction: false,
     supportsSteer: false,
+    supportsFork: false,
     supportsFollowUp: false,
     supportsGoal: false,
     supportsSubAgentRegistry: false,
@@ -107,6 +108,10 @@ export function resolveWebSessionAgentCapability(
       supportsImages: true,
       supportsCompaction: false,
       supportsSteer: false,
+      supportsFork:
+        config.hasDevin === true &&
+        config.supportsDevinWebSession !== false &&
+        config.supportsDevinSessionFork === true,
       supportsFollowUp: true,
     };
   }

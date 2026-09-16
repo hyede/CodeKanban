@@ -548,6 +548,23 @@ export const webSessionApi = {
     return body.item;
   },
 
+  async forkMessage(
+    projectId: string,
+    sessionId: string,
+    itemId: string
+  ): Promise<WebSessionHydrationTarget> {
+    const body =
+      (await http
+        .Post<
+          ItemResponse<WebSessionHydrationTarget>
+        >(`/projects/${projectId}/web-sessions/${sessionId}/messages/${itemId}/fork`, {})
+        .send()) ?? {};
+    if (!body.item?.session) {
+      throw new Error('failed to fork AI session');
+    }
+    return body.item;
+  },
+
   async importSession(
     projectId: string,
     data: {
