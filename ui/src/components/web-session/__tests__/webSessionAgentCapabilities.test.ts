@@ -90,6 +90,12 @@ describe('web session agent capabilities', () => {
       supportsWebSession: true,
       supportsSteer: false,
       supportsFollowUp: true,
+      supportsSubAgentRegistry: false,
+    });
+
+    config.supportsDevinSubAgents = true;
+    expect(resolveWebSessionAgentCapability(config, 'devin')).toMatchObject({
+      supportsSubAgentRegistry: true,
     });
 
     config.hasPi = true;

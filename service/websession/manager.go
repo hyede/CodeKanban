@@ -5122,6 +5122,7 @@ func (m *Manager) finishAbortedRun(sessionID string, session tables.WebSessionTa
 	if normalizeAgent(Agent(session.Agent)) == AgentPi {
 		_ = m.closePendingPiDialog(session, run, "Pi extension input was canceled because the run was aborted")
 	}
+	m.interruptActiveDevinSubAgents(session, run)
 	now := time.Now()
 	_, _ = m.appendAndBroadcast(context.Background(), sessionID, session, Event{
 		ID:        utils.NewID(),
@@ -5162,6 +5163,7 @@ func (m *Manager) handleRunFailureWithCode(
 		if normalizeAgent(Agent(session.Agent)) == AgentPi {
 			_ = m.closePendingPiDialog(session, run, "Pi extension input ended because the runtime failed")
 		}
+		m.interruptActiveDevinSubAgents(session, run)
 	}
 	message := strings.TrimSpace(err.Error())
 	if message == "" {
@@ -6722,7 +6724,7 @@ func (m *Manager) respondToApproval(sessionID, action string) error {
 				return err
 			}
 			now := time.Now()
-			_, _ = m.appendAndBroadcast(context.Background(), sessionID, record, Event{ID: utils.NewID(), Type: "approval_res", RunID: run.runID, ParentID: run.assistantMessageID, Timestamp: now, Payload: map[string]any{"act": action}})
+			_, _ = m.appendAndBroadcast(context.Background(), sessionID, record, Event{ID: utils.NewID(), Type: "approval_res", RunID: run.runID, ParentID: run.assistantMessageID, Timestamp: now, Payload: map[string]any{"act": action, "prompt": pending.Prompt, "command": pending.Command}})
 			_ = m.updateRuntimeState(context.Background(), sessionID, applyAssistantStateUpdates(map[string]any{"updated_at": now}, AssistantStateWorking, now))
 			m.broadcastSessionSummary(context.Background(), sessionID)
 			return nil

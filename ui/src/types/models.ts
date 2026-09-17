@@ -487,6 +487,7 @@ export interface WebSessionRuntimeConfig {
   supportsWebSession: boolean;
   supportsDevinWebSession?: boolean;
   supportsDevinSessionFork?: boolean;
+  supportsDevinSubAgents?: boolean;
   webSessionMinCodexVersion: string;
   supportsMultiAgentV2?: boolean;
   multiAgentV2MinCodexVersion?: string;

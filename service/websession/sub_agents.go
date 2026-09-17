@@ -262,7 +262,8 @@ func (m *Manager) applySubAgentHistoryItemDB(
 	event Event,
 	item HistoryItem,
 ) (WebSessionSubAgent, bool, error) {
-	if normalizeAgent(Agent(session.Agent)) != AgentCodex {
+	agent := normalizeAgent(Agent(session.Agent))
+	if agent != AgentCodex && agent != AgentDevin {
 		return WebSessionSubAgent{}, false, nil
 	}
 	if !historyItemUpdatesSubAgentActivity(item) {

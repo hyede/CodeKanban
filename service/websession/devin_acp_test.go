@@ -1,11 +1,17 @@
 package websession
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"code-kanban/model"
+	"code-kanban/model/tables"
+
+	"go.uber.org/zap"
 )
 
 func TestDevinACPHelpers(t *testing.T) {
@@ -73,6 +79,19 @@ func TestDevinReasoningEffortFromModel(t *testing.T) {
 			t.Fatalf("devinReasoningEffortFromModel(%q) = %q, want %q", model, got, want)
 		}
 	}
+}
+
+func newDevinSubAgentTestManager(t *testing.T) (*Manager, *tables.WebSessionTable) {
+	t.Helper()
+	cleanup := initTestDB(t)
+	t.Cleanup(cleanup)
+	project := seedProject(t)
+	session := seedWebSessionWithAgent(t, project.ID, "Devin sub-agents", 1, AgentDevin)
+	manager, err := NewManager(Config{DataDir: t.TempDir()}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+	return manager, session
 }
 
 func devinACPUpdatePayload(sessionUpdate string, extra map[string]any) json.RawMessage {
@@ -378,5 +397,300 @@ func TestDevinACPProjectionSeparatesThinkingToolsAndText(t *testing.T) {
 	}
 	if runDoneIndex == 0 || events[runDoneIndex-1].Type != "txt_end" {
 		t.Fatalf("event before run_done is %q, want txt_end", events[runDoneIndex-1].Type)
+	}
+}
+
+func TestDevinAgentSupportsSubAgents(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  any
+		want bool
+	}{
+		{
+			name: "advertised",
+			raw:  map[string]any{"_meta": map[string]any{"cognition.ai/subagentControl": true}},
+			want: true,
+		},
+		{
+			name: "explicit false",
+			raw:  map[string]any{"_meta": map[string]any{"cognition.ai/subagentControl": false}},
+			want: false,
+		},
+		{
+			name: "missing meta key",
+			raw:  map[string]any{"_meta": map[string]any{"cognition.ai/revert": true}},
+			want: false,
+		},
+		{name: "no meta", raw: map[string]any{"loadSession": true}, want: false},
+		{name: "nil", raw: nil, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := devinAgentSupportsSubAgents(test.raw); got != test.want {
+				t.Fatalf("devinAgentSupportsSubAgents(%#v) = %v, want %v", test.raw, got, test.want)
+			}
+		})
+	}
+}
+
+func TestDevinACPInitializeParamsDeclaresSubAgents(t *testing.T) {
+	manager := &Manager{}
+	params := manager.devinACPInitializeParams()
+	capabilities, ok := params["clientCapabilities"].(map[string]any)
+	if !ok {
+		t.Fatal("clientCapabilities missing")
+	}
+	meta, ok := capabilities["_meta"].(map[string]any)
+	if !ok {
+		t.Fatal("clientCapabilities._meta missing")
+	}
+	for _, key := range []string{"cognition.ai/revert", "cognition.ai/subagentSupport", "cognition.ai/subagentControl"} {
+		if meta[key] != true {
+			t.Fatalf("clientCapabilities._meta[%q] = %#v, want true", key, meta[key])
+		}
+	}
+}
+
+func TestParseDevinSubAgentMeta(t *testing.T) {
+	started := parseDevinSubAgentStartedMeta(map[string]any{
+		"cognition.ai/subagent_started": map[string]any{
+			"agentId":      "agent-1",
+			"title":        "Explorer",
+			"task":         "find things",
+			"profile":      "subagent_explore",
+			"depth":        1,
+			"isBackground": true,
+			"runId":        "run-9",
+		},
+	})
+	if started == nil || started.AgentID != "agent-1" || started.Title != "Explorer" ||
+		started.Task != "find things" || started.Profile != "subagent_explore" ||
+		started.Depth != 1 || !started.IsBackground || started.RunID != "run-9" {
+		t.Fatalf("unexpected started meta: %#v", started)
+	}
+	if parseDevinSubAgentStartedMeta(map[string]any{
+		"cognition.ai/subagent_started": map[string]any{"title": "no id"},
+	}) != nil {
+		t.Fatal("started meta without agentId must be nil")
+	}
+	if parseDevinSubAgentStartedMeta(map[string]any{"other": true}) != nil {
+		t.Fatal("missing started meta must be nil")
+	}
+
+	completed := parseDevinSubAgentCompletedMeta(map[string]any{
+		"cognition.ai/subagent_completed": map[string]any{
+			"agentId": "agent-1",
+			"success": false,
+			"summary": "failed hard",
+		},
+	})
+	if completed == nil || completed.AgentID != "agent-1" || completed.Success == nil ||
+		*completed.Success || completed.Summary != "failed hard" {
+		t.Fatalf("unexpected completed meta: %#v", completed)
+	}
+	if parseDevinSubAgentCompletedMeta(map[string]any{
+		"cognition.ai/subagent_completed": map[string]any{"success": true},
+	}) != nil {
+		t.Fatal("completed meta without agentId must be nil")
+	}
+
+	if got := parseDevinSubAgentContextMeta(map[string]any{
+		"cognition.ai/subagent_context": map[string]any{"parentAgentId": "agent-1", "runId": "r"},
+	}); got != "agent-1" {
+		t.Fatalf("context meta = %q, want agent-1", got)
+	}
+	if got := parseDevinSubAgentContextMeta(map[string]any{}); got != "" {
+		t.Fatalf("empty context meta = %q, want \"\"", got)
+	}
+}
+
+func TestDevinACPSubAgentLifecycle(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	run := &activeRun{runID: "devin-subagent-run"}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	feed := func(sessionUpdate string, extra map[string]any) {
+		manager.handleDevinACPUpdate(sess, run, proj, devinACPUpdatePayload(sessionUpdate, extra))
+	}
+
+	feed("tool_call", map[string]any{
+		"toolCallId": "call-spawn",
+		"title":      "Subagent",
+		"kind":       "other",
+		"_meta": map[string]any{
+			"cognition.ai/subagent_started": map[string]any{
+				"agentId": "agent-1",
+				"title":   "Explorer",
+				"task":    "find the thing",
+				"profile": "subagent_explore",
+			},
+		},
+	})
+
+	events := readTextDeltaTestEvents(t, manager, session.ID)
+	var stateEvent *Event
+	for index := range events {
+		if events[index].Type == "sub_agent_state" && events[index].ThreadID == "agent-1" {
+			stateEvent = &events[index]
+		}
+	}
+	if stateEvent == nil {
+		t.Fatal("missing sub_agent_state event for agent-1")
+	}
+	if got := stringValue(stateEvent.Payload["status"]); got != string(WebSessionSubAgentRunning) {
+		t.Fatalf("sub_agent_state status = %q, want %q", got, WebSessionSubAgentRunning)
+	}
+	if got := stringValue(stateEvent.Payload["summary"]); got != "find the thing" {
+		t.Fatalf("sub_agent_state summary = %q", got)
+	}
+	var activityEvent *Event
+	for index := range events {
+		if events[index].Type == "sub_agent_activity" &&
+			stringValue(events[index].Payload["agentThreadId"]) == "agent-1" {
+			activityEvent = &events[index]
+		}
+	}
+	if activityEvent == nil {
+		t.Fatal("missing sub_agent_activity started marker for agent-1")
+	}
+
+	// Child-owned updates carry subagent_context and must tag the projected
+	// events with the sub-agent's thread id.
+	feed("agent_message_chunk", map[string]any{
+		"content": map[string]any{"text": "child says hi"},
+		"_meta":   map[string]any{"cognition.ai/subagent_context": map[string]any{"parentAgentId": "agent-1"}},
+	})
+	feed("tool_call", map[string]any{
+		"toolCallId": "call-child",
+		"title":      "Ran grep",
+		"kind":       "execute",
+		"_meta":      map[string]any{"cognition.ai/subagent_context": map[string]any{"parentAgentId": "agent-1"}},
+	})
+
+	events = readTextDeltaTestEvents(t, manager, session.ID)
+	var childText, childTool *Event
+	for index := range events {
+		if events[index].Type == "txt_d" && events[index].ThreadID == "agent-1" {
+			childText = &events[index]
+		}
+		if events[index].Type == "tool_st" && events[index].ThreadID == "agent-1" &&
+			stringValue(events[index].Payload["tid"]) == "call-child" {
+			childTool = &events[index]
+		}
+	}
+	if childText == nil {
+		t.Fatal("child agent_message_chunk was not tagged with the sub-agent thread")
+	}
+	if childTool == nil {
+		t.Fatal("child tool_call was not tagged with the sub-agent thread")
+	}
+
+	feed("tool_call_update", map[string]any{
+		"toolCallId": "call-spawn",
+		"status":     "completed",
+		"_meta": map[string]any{
+			"cognition.ai/subagent_completed": map[string]any{
+				"agentId": "agent-1",
+				"success": true,
+				"summary": "found it",
+			},
+		},
+	})
+
+	agents, err := manager.sessionSubAgents(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("sessionSubAgents: %v", err)
+	}
+	if len(agents) != 1 || agents[0].ThreadID != "agent-1" {
+		t.Fatalf("expected a single agent-1 registry row, got %#v", agents)
+	}
+	if agents[0].Status != WebSessionSubAgentCompleted || agents[0].Active {
+		t.Fatalf("agent-1 status = %q active=%v, want completed/inactive", agents[0].Status, agents[0].Active)
+	}
+	if agents[0].Summary != "found it" {
+		t.Fatalf("agent-1 summary = %q, want %q", agents[0].Summary, "found it")
+	}
+	if agents[0].LatestItemID == nil {
+		t.Fatal("devin sub-agent activity must backfill latestItemId in the registry")
+	}
+	if agents[0].Role != "subagent_explore" || agents[0].Nickname != "Explorer" {
+		t.Fatalf("agent-1 role/nickname = %q/%q", agents[0].Role, agents[0].Nickname)
+	}
+}
+
+func TestDevinSubAgentInterruptedOnRunFinish(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	run := &activeRun{runID: "devin-subagent-finish"}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	manager.handleDevinACPUpdate(sess, run, proj, devinACPUpdatePayload("tool_call", map[string]any{
+		"toolCallId": "call-bg",
+		"title":      "Subagent",
+		"_meta": map[string]any{
+			"cognition.ai/subagent_started": map[string]any{
+				"agentId":      "agent-bg",
+				"title":        "Background",
+				"isBackground": true,
+			},
+		},
+	}))
+
+	manager.finishDevinRun(sess, run, proj)
+
+	var row tables.WebSessionSubAgentTable
+	if err := model.GetDB().
+		Where("web_session_id = ? AND thread_id = ?", session.ID, "agent-bg").
+		First(&row).Error; err != nil {
+		t.Fatalf("read sub-agent row: %v", err)
+	}
+	if row.Status != string(WebSessionSubAgentInterrupted) || row.IsActive {
+		t.Fatalf("unfinished background sub-agent = %q active=%v, want interrupted/inactive", row.Status, row.IsActive)
+	}
+}
+
+func TestDevinNestedSubAgentParenting(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	run := &activeRun{runID: "devin-subagent-nested"}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	feed := func(sessionUpdate string, extra map[string]any) {
+		manager.handleDevinACPUpdate(sess, run, proj, devinACPUpdatePayload(sessionUpdate, extra))
+	}
+
+	feed("tool_call", map[string]any{
+		"toolCallId": "call-outer",
+		"title":      "Subagent",
+		"_meta": map[string]any{
+			"cognition.ai/subagent_started": map[string]any{"agentId": "agent-outer", "title": "Outer"},
+		},
+	})
+	feed("tool_call", map[string]any{
+		"toolCallId": "call-inner",
+		"title":      "Subagent",
+		"_meta": map[string]any{
+			"cognition.ai/subagent_context": map[string]any{"parentAgentId": "agent-outer"},
+			"cognition.ai/subagent_started": map[string]any{"agentId": "agent-inner", "title": "Inner", "depth": 1},
+		},
+	})
+
+	var outer, inner tables.WebSessionSubAgentTable
+	if err := model.GetDB().
+		Where("web_session_id = ? AND thread_id = ?", session.ID, "agent-outer").
+		First(&outer).Error; err != nil {
+		t.Fatalf("read outer sub-agent row: %v", err)
+	}
+	if err := model.GetDB().
+		Where("web_session_id = ? AND thread_id = ?", session.ID, "agent-inner").
+		First(&inner).Error; err != nil {
+		t.Fatalf("read inner sub-agent row: %v", err)
+	}
+	if outer.ParentThreadID != nil {
+		t.Fatalf("outer parent = %v, want nil", outer.ParentThreadID)
+	}
+	if inner.ParentThreadID == nil || *inner.ParentThreadID != "agent-outer" {
+		t.Fatalf("inner parent = %v, want agent-outer", inner.ParentThreadID)
 	}
 }

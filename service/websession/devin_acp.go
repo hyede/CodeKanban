@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"code-kanban/model"
 	"code-kanban/model/tables"
 	"code-kanban/utils"
 )
@@ -378,15 +379,19 @@ func (m *Manager) runDevinACPSession(ctx context.Context, run *activeRun, sessio
 
 // devinACPInitializeParams builds the ACP initialize request. clientInfo
 // mirrors what Devin Desktop's ACP connector sends so the agent treats this
-// like a first-party session. The only declared clientCapability is the
-// revert extension opt-in under _meta — elicitation/fs stay undeclared, and
-// terminal is omitted like the desktop so the agent uses its native tools.
+// like a first-party session. The declared clientCapabilities are the revert
+// and sub-agent extension opt-ins under _meta — the agent only advertises
+// subagent support back when both subagent keys are declared. elicitation/fs
+// stay undeclared, and terminal is omitted like the desktop so the agent uses
+// its native tools.
 func (m *Manager) devinACPInitializeParams() map[string]any {
 	return map[string]any{
 		"protocolVersion": devinACPProtocolVersion,
 		"clientCapabilities": map[string]any{
 			"_meta": map[string]any{
-				"cognition.ai/revert": true,
+				"cognition.ai/revert":          true,
+				"cognition.ai/subagentSupport": true,
+				"cognition.ai/subagentControl": true,
 			},
 		},
 		"clientInfo": map[string]any{
@@ -396,11 +401,9 @@ func (m *Manager) devinACPInitializeParams() map[string]any {
 	}
 }
 
-// devinAgentSupportsRevert reports whether agentCapabilities advertises the
-// private revert extension via _meta["cognition.ai/revert"] === true. The
-// agent only enables listSteps/forkFromStep when the client opted in during
-// initialize, which devinACPInitializeParams does.
-func devinAgentSupportsRevert(raw any) bool {
+// devinAgentMetaCapability reports whether agentCapabilities advertises the
+// named private extension via _meta[key] === true.
+func devinAgentMetaCapability(raw any, key string) bool {
 	values, ok := raw.(map[string]any)
 	if !ok {
 		return false
@@ -409,8 +412,25 @@ func devinAgentSupportsRevert(raw any) bool {
 	if !ok {
 		return false
 	}
-	enabled, ok := meta["cognition.ai/revert"].(bool)
+	enabled, ok := meta[key].(bool)
 	return ok && enabled
+}
+
+// devinAgentSupportsRevert reports whether agentCapabilities advertises the
+// private revert extension via _meta["cognition.ai/revert"] === true. The
+// agent only enables listSteps/forkFromStep when the client opted in during
+// initialize, which devinACPInitializeParams does.
+func devinAgentSupportsRevert(raw any) bool {
+	return devinAgentMetaCapability(raw, "cognition.ai/revert")
+}
+
+// devinAgentSupportsSubAgents reports whether agentCapabilities advertises
+// the private sub-agent extension via _meta["cognition.ai/subagentControl"]
+// === true. The agent only emits subagent_started/completed/context metadata
+// when the client opted in during initialize, which
+// devinACPInitializeParams does.
+func devinAgentSupportsSubAgents(raw any) bool {
+	return devinAgentMetaCapability(raw, "cognition.ai/subagentControl")
 }
 
 var devinClientVersion struct {
@@ -617,18 +637,28 @@ func (m *Manager) handleDevinTerminalRequest(client *devinACPClient, session tab
 	_ = client.respond(message.ID, result)
 }
 
-// devinRunProjection tracks the Devin ACP run's open assistant message and
-// thinking/tool state so the projection can emit Pi-shaped events: a single
-// assistant message per turn that owns its thinking blocks and tool calls.
-type devinRunProjection struct {
-	mu             sync.Mutex
+// devinMessageState tracks one streaming context's open assistant message and
+// thinking block. Contexts are keyed by the sub-agent id taken from
+// _meta["cognition.ai/subagent_context"].parentAgentId ("" = the main agent)
+// so a background sub-agent interleaving updates never shares message or
+// thinking state with its parent.
+type devinMessageState struct {
 	messageID      string // currently open assistant message ("" = none)
 	messageHasText bool
 	thinkingID     string
 	thinkingText   strings.Builder
 	thinkingIndex  int
 	lastThinkEmit  time.Time
-	tools          map[string]*devinToolState // by ACP toolCallId
+}
+
+// devinRunProjection tracks the Devin ACP run's per-context assistant message
+// and thinking/tool state so the projection can emit Pi-shaped events: a
+// single assistant message per turn that owns its thinking blocks and tool
+// calls.
+type devinRunProjection struct {
+	mu       sync.Mutex
+	messages map[string]*devinMessageState // by sub-agent context id ("" = main)
+	tools    map[string]*devinToolState    // by ACP toolCallId
 
 	// captureHistory marks the projection as materializing a session/load
 	// replay (used when hydrating a forked session). In this mode
@@ -647,7 +677,21 @@ type devinToolState struct {
 }
 
 func newDevinRunProjection() *devinRunProjection {
-	return &devinRunProjection{tools: make(map[string]*devinToolState)}
+	return &devinRunProjection{
+		messages: make(map[string]*devinMessageState),
+		tools:    make(map[string]*devinToolState),
+	}
+}
+
+// messageState returns the streaming state for a sub-agent context.
+// p.mu must be held.
+func (p *devinRunProjection) messageState(contextID string) *devinMessageState {
+	state := p.messages[contextID]
+	if state == nil {
+		state = &devinMessageState{}
+		p.messages[contextID] = state
+	}
+	return state
 }
 
 // takeDevinCapturedUserText drains user_message_chunk text buffered during
@@ -722,47 +766,58 @@ func devinToolOutputText(update map[string]any) string {
 	return truncateToolOutput(kind, strings.Join(parts, "\n"))
 }
 
-// ensureDevinMessage opens an assistant message if none is open and returns its
-// id. It mirrors startPiAssistantMessage: msg_a_st + run.setAssistantMessageID.
-func (m *Manager) ensureDevinMessage(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection) string {
+// ensureDevinMessage opens an assistant message for the context if none is
+// open and returns its id. It mirrors startPiAssistantMessage: msg_a_st +
+// run.setAssistantMessageID (main context only — the run-level field tracks
+// the primary agent's message).
+func (m *Manager) ensureDevinMessage(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, contextID string) string {
 	proj.mu.Lock()
-	if proj.messageID != "" {
-		id := proj.messageID
+	state := proj.messageState(contextID)
+	if state.messageID != "" {
+		id := state.messageID
 		proj.mu.Unlock()
 		return id
 	}
 	id := utils.NewID()
-	proj.messageID = id
-	proj.messageHasText = false
+	state.messageID = id
+	state.messageHasText = false
 	proj.mu.Unlock()
-	run.setAssistantMessageID(id)
+	if contextID == "" {
+		run.setAssistantMessageID(id)
+	}
 	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-		ID: utils.NewID(), Type: "msg_a_st", RunID: run.runID, ParentID: id,
+		ID: utils.NewID(), Type: "msg_a_st", RunID: run.runID, ParentID: id, ThreadID: contextID,
 		Timestamp: time.Now(), Payload: map[string]any{"mid": id},
 	})
 	return id
 }
 
-// finishDevinThinking emits the final reasoning tool_end for an open thinking
-// block and resets the thinking state. Text or a tool call ends thinking.
-func (m *Manager) finishDevinThinking(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection) {
+// finishDevinThinking emits the final reasoning tool_end for the context's
+// open thinking block and resets the thinking state. Text or a tool call ends
+// thinking.
+func (m *Manager) finishDevinThinking(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, contextID string) {
 	proj.mu.Lock()
-	thinkingID := proj.thinkingID
-	if thinkingID == "" {
+	state := proj.messages[contextID]
+	if state == nil || state.thinkingID == "" {
 		proj.mu.Unlock()
 		return
 	}
-	text := proj.thinkingText.String()
-	messageID := proj.messageID
-	proj.thinkingID = ""
-	proj.thinkingText.Reset()
-	proj.lastThinkEmit = time.Time{}
+	thinkingID := state.thinkingID
+	text := state.thinkingText.String()
+	messageID := state.messageID
+	state.thinkingID = ""
+	state.thinkingText.Reset()
+	state.lastThinkEmit = time.Time{}
 	proj.mu.Unlock()
 	if messageID == "" {
-		messageID = run.assistantMessageIDSnapshot()
+		if contextID == "" {
+			messageID = run.assistantMessageIDSnapshot()
+		} else {
+			messageID = m.ensureDevinMessage(session, run, proj, contextID)
+		}
 	}
 	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-		ID: utils.NewID(), Type: "tool_end", RunID: run.runID, ParentID: messageID,
+		ID: utils.NewID(), Type: "tool_end", RunID: run.runID, ParentID: messageID, ThreadID: contextID,
 		Timestamp: time.Now(), Payload: map[string]any{
 			"tid": thinkingID, "name": "Reasoning", "kind": "reasoning",
 			"out": truncateToolOutput("reasoning", text), "ok": true,
@@ -770,24 +825,233 @@ func (m *Manager) finishDevinThinking(session tables.WebSessionTable, run *activ
 	})
 }
 
-// closeDevinMessage finishes any open thinking and emits txt_end when the open
-// message produced text, then clears the message so the next turn opens a new
-// bubble (mirrors Pi: text + tool calls belong to one message).
-func (m *Manager) closeDevinMessage(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection) {
-	m.finishDevinThinking(session, run, proj)
+// closeDevinMessage finishes any open thinking and emits txt_end when the
+// context's open message produced text, then clears the message so the next
+// turn opens a new bubble (mirrors Pi: text + tool calls belong to one
+// message).
+func (m *Manager) closeDevinMessage(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, contextID string) {
+	m.finishDevinThinking(session, run, proj, contextID)
 	proj.mu.Lock()
-	messageID := proj.messageID
-	hasText := proj.messageHasText
-	proj.messageID = ""
-	proj.messageHasText = false
+	state := proj.messages[contextID]
+	if state == nil {
+		proj.mu.Unlock()
+		return
+	}
+	messageID := state.messageID
+	hasText := state.messageHasText
+	state.messageID = ""
+	state.messageHasText = false
 	proj.mu.Unlock()
 	if messageID == "" || !hasText {
 		return
 	}
 	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-		ID: utils.NewID(), Type: "txt_end", RunID: run.runID, ParentID: messageID,
+		ID: utils.NewID(), Type: "txt_end", RunID: run.runID, ParentID: messageID, ThreadID: contextID,
 		Timestamp: time.Now(), Payload: map[string]any{"mid": messageID},
 	})
+}
+
+// closeAllDevinMessages closes every open message across all sub-agent
+// contexts; used when the run ends.
+func (m *Manager) closeAllDevinMessages(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection) {
+	proj.mu.Lock()
+	contextIDs := make([]string, 0, len(proj.messages))
+	for contextID := range proj.messages {
+		contextIDs = append(contextIDs, contextID)
+	}
+	proj.mu.Unlock()
+	for _, contextID := range contextIDs {
+		m.closeDevinMessage(session, run, proj, contextID)
+	}
+}
+
+// Devin's private sub-agent extension rides on session/update _meta when the
+// client opts in via cognition.ai/subagentSupport + subagentControl (both are
+// declared in devinACPInitializeParams). The shapes mirror Devin Desktop's
+// ACP connector: subagent_started/subagent_completed carry lifecycle
+// transitions on the spawning tool call's updates, and subagent_context tags
+// updates emitted by the child agent itself.
+type devinSubAgentStartedMeta struct {
+	AgentID      string
+	Title        string
+	Task         string
+	Profile      string
+	Depth        int
+	IsBackground bool
+	RunID        string
+}
+
+type devinSubAgentCompletedMeta struct {
+	AgentID string
+	Success *bool
+	Summary string
+	RunID   string
+}
+
+func parseDevinSubAgentStartedMeta(meta map[string]any) *devinSubAgentStartedMeta {
+	raw := decodeRawObject(meta["cognition.ai/subagent_started"])
+	if len(raw) == 0 {
+		return nil
+	}
+	agentID := strings.TrimSpace(stringValue(raw["agentId"]))
+	if agentID == "" {
+		return nil
+	}
+	return &devinSubAgentStartedMeta{
+		AgentID:      agentID,
+		Title:        strings.TrimSpace(stringValue(raw["title"])),
+		Task:         strings.TrimSpace(stringValue(raw["task"])),
+		Profile:      strings.TrimSpace(stringValue(raw["profile"])),
+		Depth:        int(numberValue(raw["depth"])),
+		IsBackground: raw["isBackground"] == true,
+		RunID:        strings.TrimSpace(stringValue(raw["runId"])),
+	}
+}
+
+func parseDevinSubAgentCompletedMeta(meta map[string]any) *devinSubAgentCompletedMeta {
+	raw := decodeRawObject(meta["cognition.ai/subagent_completed"])
+	if len(raw) == 0 {
+		return nil
+	}
+	agentID := strings.TrimSpace(stringValue(raw["agentId"]))
+	if agentID == "" {
+		return nil
+	}
+	completed := &devinSubAgentCompletedMeta{
+		AgentID: agentID,
+		Summary: strings.TrimSpace(stringValue(raw["summary"])),
+		RunID:   strings.TrimSpace(stringValue(raw["runId"])),
+	}
+	if success, ok := raw["success"].(bool); ok {
+		completed.Success = &success
+	}
+	return completed
+}
+
+// parseDevinSubAgentContextMeta returns the id of the sub-agent that owns the
+// update ("" when the update belongs to the main agent).
+func parseDevinSubAgentContextMeta(meta map[string]any) string {
+	raw := decodeRawObject(meta["cognition.ai/subagent_context"])
+	return strings.TrimSpace(stringValue(raw["parentAgentId"]))
+}
+
+// applyDevinSubAgentMeta projects sub-agent lifecycle metadata from an
+// update's _meta into sub_agent_state/sub_agent_activity events and returns
+// the owning sub-agent's context id for the update itself.
+func (m *Manager) applyDevinSubAgentMeta(session tables.WebSessionTable, run *activeRun, meta map[string]any) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	contextID := parseDevinSubAgentContextMeta(meta)
+	if started := parseDevinSubAgentStartedMeta(meta); started != nil {
+		m.appendDevinSubAgentStarted(session, run, *started, contextID)
+	}
+	if completed := parseDevinSubAgentCompletedMeta(meta); completed != nil {
+		m.appendDevinSubAgentCompleted(session, run, *completed)
+	}
+	return contextID
+}
+
+// appendDevinSubAgentState emits a sub_agent_state event; the projection
+// pipeline persists it into web_session_sub_agents and broadcasts the
+// sub_agent wire frame.
+func (m *Manager) appendDevinSubAgentState(session tables.WebSessionTable, run *activeRun, agentID string, payload map[string]any) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" || run == nil {
+		return
+	}
+	if session.NativeSessionID != nil && agentID == strings.TrimSpace(*session.NativeSessionID) {
+		return
+	}
+	nextPayload := cloneMap(payload)
+	if nextPayload == nil {
+		nextPayload = map[string]any{}
+	}
+	nextPayload["threadId"] = agentID
+	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
+		ID:        utils.NewID(),
+		Type:      "sub_agent_state",
+		RunID:     run.runID,
+		ThreadID:  agentID,
+		Timestamp: time.Now(),
+		Payload:   nextPayload,
+	})
+}
+
+func (m *Manager) appendDevinSubAgentStarted(session tables.WebSessionTable, run *activeRun, started devinSubAgentStartedMeta, parentAgentID string) {
+	path := firstNonEmpty(started.Profile, started.Title)
+	payload := map[string]any{
+		"status": string(WebSessionSubAgentRunning),
+		"active": true,
+	}
+	if path != "" {
+		payload["path"] = path
+	}
+	if started.Title != "" {
+		payload["nickname"] = started.Title
+	}
+	if started.Profile != "" {
+		payload["role"] = started.Profile
+	}
+	if started.Task != "" {
+		payload["summary"] = started.Task
+	}
+	if parentAgentID != "" {
+		payload["parentThreadId"] = parentAgentID
+	}
+	m.appendDevinSubAgentState(session, run, started.AgentID, payload)
+	// Mirror Codex's spawn marker so the timeline shows "Agent X started".
+	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
+		ID:        utils.NewID(),
+		Type:      "sub_agent_activity",
+		RunID:     run.runID,
+		ThreadID:  strings.TrimSpace(parentAgentID),
+		Timestamp: time.Now(),
+		Payload: map[string]any{
+			"agentThreadId": started.AgentID,
+			"path":          path,
+			"kind":          "started",
+		},
+	})
+}
+
+func (m *Manager) appendDevinSubAgentCompleted(session tables.WebSessionTable, run *activeRun, completed devinSubAgentCompletedMeta) {
+	status := WebSessionSubAgentCompleted
+	if completed.Success != nil && !*completed.Success {
+		status = WebSessionSubAgentErrored
+	}
+	payload := map[string]any{
+		"status": string(status),
+		"active": false,
+	}
+	if completed.Summary != "" {
+		payload["summary"] = completed.Summary
+	}
+	m.appendDevinSubAgentState(session, run, completed.AgentID, payload)
+}
+
+// interruptActiveDevinSubAgents marks every still-active Devin sub-agent row
+// as interrupted. The ACP process is per-run, so a sub-agent that is still
+// running when the run ends (abort, failure, or a background agent whose
+// completion never arrived) is torn down with it.
+func (m *Manager) interruptActiveDevinSubAgents(session tables.WebSessionTable, run *activeRun) {
+	if run == nil || normalizeAgent(Agent(session.Agent)) != AgentDevin {
+		return
+	}
+	db := model.GetDB()
+	if db == nil {
+		return
+	}
+	var rows []tables.WebSessionSubAgentTable
+	if err := db.Where("web_session_id = ? AND is_active = ?", session.ID, true).Find(&rows).Error; err != nil {
+		return
+	}
+	for _, row := range rows {
+		m.appendDevinSubAgentState(session, run, row.ThreadID, map[string]any{
+			"status": string(WebSessionSubAgentInterrupted),
+			"active": false,
+		})
+	}
 }
 
 func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, raw json.RawMessage) {
@@ -797,6 +1061,10 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 	}
 	update, _ := payload["update"].(map[string]any)
 	kind := stringValue(update["sessionUpdate"])
+	// The private sub-agent extension rides on update._meta: started/completed
+	// feed the sub-agent registry, and context tags every event projected from
+	// this update with the owning sub-agent's id.
+	contextID := m.applyDevinSubAgentMeta(session, run, decodeRawObject(update["_meta"]))
 	switch kind {
 	case "user_message_chunk":
 		// Only history capture consumes replayed user messages; live runs
@@ -815,28 +1083,29 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 		if strings.TrimSpace(text) == "" {
 			return
 		}
-		messageID := m.ensureDevinMessage(session, run, proj)
+		messageID := m.ensureDevinMessage(session, run, proj, contextID)
 		proj.mu.Lock()
-		if proj.thinkingID == "" {
-			proj.thinkingIndex++
-			proj.thinkingID = fmt.Sprintf("devin-thinking:%s:%s:%d", run.runID, messageID, proj.thinkingIndex)
-			proj.thinkingText.Reset()
-			proj.lastThinkEmit = time.Time{}
+		state := proj.messageState(contextID)
+		if state.thinkingID == "" {
+			state.thinkingIndex++
+			state.thinkingID = fmt.Sprintf("devin-thinking:%s:%s:%d", run.runID, messageID, state.thinkingIndex)
+			state.thinkingText.Reset()
+			state.lastThinkEmit = time.Time{}
 		}
-		proj.thinkingText.WriteString(text)
-		thinkingID := proj.thinkingID
-		snapshot := proj.thinkingText.String()
+		state.thinkingText.WriteString(text)
+		thinkingID := state.thinkingID
+		snapshot := state.thinkingText.String()
 		now := time.Now()
-		emit := proj.lastThinkEmit.IsZero() || now.Sub(proj.lastThinkEmit) >= piToolProgressInterval
+		emit := state.lastThinkEmit.IsZero() || now.Sub(state.lastThinkEmit) >= piToolProgressInterval
 		if emit {
-			proj.lastThinkEmit = now
+			state.lastThinkEmit = now
 		}
 		proj.mu.Unlock()
 		if !emit {
 			return
 		}
 		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-			ID: utils.NewID(), Type: "tool_st", RunID: run.runID, ParentID: messageID,
+			ID: utils.NewID(), Type: "tool_st", RunID: run.runID, ParentID: messageID, ThreadID: contextID,
 			Timestamp: time.Now(), Payload: map[string]any{
 				"tid": thinkingID, "name": "Reasoning", "kind": "reasoning",
 				"out": truncateToolOutput("reasoning", snapshot), "ok": true,
@@ -848,19 +1117,19 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 		if strings.TrimSpace(text) == "" {
 			return
 		}
-		m.finishDevinThinking(session, run, proj)
-		messageID := m.ensureDevinMessage(session, run, proj)
+		m.finishDevinThinking(session, run, proj, contextID)
+		messageID := m.ensureDevinMessage(session, run, proj, contextID)
 		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-			ID: utils.NewID(), Type: "txt_d", RunID: run.runID, ParentID: messageID,
+			ID: utils.NewID(), Type: "txt_d", RunID: run.runID, ParentID: messageID, ThreadID: contextID,
 			Timestamp: time.Now(), Payload: map[string]any{"mid": messageID, "txt": text},
 		})
 		run.markAssistantDeltaSeen(messageID)
 		proj.mu.Lock()
-		proj.messageHasText = true
+		proj.messageState(contextID).messageHasText = true
 		proj.mu.Unlock()
 	case "tool_call":
-		m.finishDevinThinking(session, run, proj)
-		messageID := m.ensureDevinMessage(session, run, proj)
+		m.finishDevinThinking(session, run, proj, contextID)
+		messageID := m.ensureDevinMessage(session, run, proj, contextID)
 		toolID := firstNonEmpty(stringValue(update["toolCallId"]), utils.NewID())
 		title := firstNonEmpty(stringValue(update["title"]), "Tool")
 		rawKind := stringValue(update["kind"])
@@ -877,21 +1146,24 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 		meta := tool.meta
 		proj.mu.Unlock()
 		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-			ID: utils.NewID(), Type: "tool_st", RunID: run.runID, ParentID: messageID,
+			ID: utils.NewID(), Type: "tool_st", RunID: run.runID, ParentID: messageID, ThreadID: contextID,
 			Timestamp: time.Now(), Payload: map[string]any{
 				"tid": toolID, "name": title, "kind": mappedKind,
 				"in": update["rawInput"], "meta": meta, "ok": true,
 			},
 		})
-		m.closeDevinMessage(session, run, proj)
+		m.closeDevinMessage(session, run, proj, contextID)
 	case "tool_call_update":
 		toolID := firstNonEmpty(stringValue(update["toolCallId"]), utils.NewID())
 		status := strings.ToLower(strings.TrimSpace(stringValue(update["status"])))
 		proj.mu.Lock()
 		tool := proj.tools[toolID]
 		if tool == nil {
-			parentID := proj.messageID
-			if parentID == "" {
+			parentID := ""
+			if state := proj.messages[contextID]; state != nil {
+				parentID = state.messageID
+			}
+			if parentID == "" && contextID == "" {
 				parentID = run.assistantMessageIDSnapshot()
 			}
 			tool = &devinToolState{parentID: parentID, meta: map[string]any{}}
@@ -919,7 +1191,7 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 		}
 		output := devinToolOutputText(update)
 		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-			ID: utils.NewID(), Type: "tool_end", RunID: run.runID, ParentID: parentID,
+			ID: utils.NewID(), Type: "tool_end", RunID: run.runID, ParentID: parentID, ThreadID: contextID,
 			Timestamp: time.Now(), Payload: map[string]any{
 				"tid": toolID, "name": name, "kind": mappedKind,
 				"in": input, "out": output, "ok": status == "completed",
@@ -928,7 +1200,7 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 		})
 	case "plan":
 		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-			ID: utils.NewID(), Type: "plan", RunID: run.runID, ParentID: run.assistantMessageIDSnapshot(),
+			ID: utils.NewID(), Type: "plan", RunID: run.runID, ParentID: run.assistantMessageIDSnapshot(), ThreadID: contextID,
 			Timestamp: time.Now(), Payload: update,
 		})
 	}
@@ -943,13 +1215,14 @@ func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session t
 		request := &pendingServerRequest{
 			RawID:       append(json.RawMessage(nil), message.ID...),
 			Kind:        pendingServerRequestCommandApproval,
-			Prompt:      firstNonEmpty(stringValue(params["reason"]), "Devin is waiting for permission to continue."),
+			Prompt:      devinPermissionPrompt(params),
+			Command:     devinPermissionCommand(params),
 			RequestedAt: &now,
 			Permissions: params,
 		}
 		run.setPendingServerRequest(request)
 		m.pauseActiveCallTimeout(run)
-		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{ID: utils.NewID(), Type: "approval_req", RunID: run.runID, ParentID: run.assistantMessageID, Timestamp: now, Payload: map[string]any{"kind": string(request.Kind), "prompt": request.Prompt}})
+		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{ID: utils.NewID(), Type: "approval_req", RunID: run.runID, ParentID: run.assistantMessageID, Timestamp: now, Payload: map[string]any{"kind": string(request.Kind), "prompt": request.Prompt, "command": request.Command}})
 		_ = m.updateRuntimeState(context.Background(), session.ID, applyAssistantStateUpdates(map[string]any{"updated_at": now}, AssistantStateWaitingApproval, now))
 		m.broadcastSessionSummary(context.Background(), session.ID)
 		return
@@ -957,11 +1230,7 @@ func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session t
 	selected := ""
 	for _, raw := range options {
 		option, _ := raw.(map[string]any)
-		kind := stringValue(option["kind"])
-		if effectivePermissionLevel(session) == PermissionLevelDefault && strings.Contains(kind, "allow") {
-			continue
-		}
-		if strings.Contains(kind, "allow") {
+		if strings.Contains(stringValue(option["kind"]), "allow") {
 			selected = stringValue(option["optionId"])
 			break
 		}
@@ -971,7 +1240,21 @@ func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session t
 		outcome = map[string]any{"outcome": "selected", "optionId": selected}
 	}
 	_ = client.respond(message.ID, map[string]any{"outcome": outcome})
-	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{ID: utils.NewID(), Type: "approval_res", RunID: run.runID, ParentID: run.assistantMessageID, Timestamp: time.Now(), Payload: map[string]any{"act": selected}})
+}
+
+func devinPermissionPrompt(params map[string]any) string {
+	if reason := strings.TrimSpace(stringValue(params["reason"])); reason != "" {
+		return reason
+	}
+	if title := strings.TrimSpace(stringValue(decodeRawObject(params["toolCall"])["title"])); title != "" {
+		return title
+	}
+	return "Devin is waiting for permission to continue."
+}
+
+func devinPermissionCommand(params map[string]any) string {
+	rawInput := decodeRawObject(decodeRawObject(params["toolCall"])["rawInput"])
+	return strings.TrimSpace(firstNonEmpty(stringValue(rawInput["command"]), stringValue(rawInput["cmd"])))
 }
 
 func devinPermissionResponsePayload(action string, request *pendingServerRequest) any {
@@ -997,7 +1280,8 @@ func devinPermissionResponsePayload(action string, request *pendingServerRequest
 }
 
 func (m *Manager) finishDevinRun(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection) {
-	m.closeDevinMessage(session, run, proj)
+	m.interruptActiveDevinSubAgents(session, run)
+	m.closeAllDevinMessages(session, run, proj)
 	finalStatus, finalAssistantState := m.completedRunState(context.Background(), session, run)
 	now := time.Now()
 	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{ID: utils.NewID(), Type: "run_done", RunID: run.runID, Timestamp: now, Payload: map[string]any{"ok": true, "st": string(finalStatus)}})

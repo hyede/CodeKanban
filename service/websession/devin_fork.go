@@ -37,26 +37,28 @@ var (
 	errDevinForkHistoryUnavailable = errors.New("forked Devin session history is unavailable")
 )
 
-// probeDevinACPSessionFork reports whether the installed Devin CLI's ACP
-// agent advertises the private revert extension (_meta["cognition.ai/revert"])
-// that backs session forking. Best-effort: any failure reports no support.
-func (m *Manager) probeDevinACPSessionFork() bool {
+// probeDevinACPAgentCapabilities runs a single initialize handshake against
+// the installed Devin CLI's ACP agent and returns its advertised
+// agentCapabilities (private extensions live under _meta). Best-effort: any
+// failure reports nil so every caller-side check reads as unsupported.
+func (m *Manager) probeDevinACPAgentCapabilities() map[string]any {
 	ctx, cancel := context.WithTimeout(context.Background(), devinForkProbeTimeout)
 	defer cancel()
 	client, err := startDevinACP(ctx, m.cfg.DevinPath, "", "")
 	if err != nil {
-		return false
+		return nil
 	}
 	defer client.close()
 	result, err := client.request(ctx, "initialize", m.devinACPInitializeParams())
 	if err != nil {
-		return false
+		return nil
 	}
 	var initializeResult map[string]any
 	if json.Unmarshal(result, &initializeResult) != nil {
-		return false
+		return nil
 	}
-	return devinAgentSupportsRevert(initializeResult["agentCapabilities"])
+	capabilities, _ := initializeResult["agentCapabilities"].(map[string]any)
+	return capabilities
 }
 
 // devinRevertStep mirrors zRevertStepInfo from the Devin ACP schema.
@@ -461,7 +463,7 @@ func (m *Manager) captureDevinForkedHistory(ctx context.Context, branch tables.W
 		if strings.TrimSpace(text) == "" {
 			return
 		}
-		m.closeDevinMessage(branch, currentRun, proj)
+		m.closeAllDevinMessages(branch, currentRun, proj)
 		currentRun = &activeRun{sessionID: branch.ID, runID: utils.NewID()}
 		userCount++
 		m.emitDevinCapturedUserMessage(branch, currentRun, text)
@@ -474,7 +476,8 @@ func (m *Manager) captureDevinForkedHistory(ctx context.Context, branch tables.W
 	}
 	finish := func() {
 		flushUser()
-		m.closeDevinMessage(branch, currentRun, proj)
+		m.interruptActiveDevinSubAgents(branch, currentRun)
+		m.closeAllDevinMessages(branch, currentRun, proj)
 	}
 
 	done := make(chan error, 1)

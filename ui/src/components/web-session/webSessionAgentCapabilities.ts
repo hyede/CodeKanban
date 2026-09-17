@@ -113,6 +113,10 @@ export function resolveWebSessionAgentCapability(
         config.supportsDevinWebSession !== false &&
         config.supportsDevinSessionFork === true,
       supportsFollowUp: true,
+      supportsSubAgentRegistry:
+        config.hasDevin === true &&
+        config.supportsDevinWebSession !== false &&
+        config.supportsDevinSubAgents === true,
     };
   }
   return fallback;

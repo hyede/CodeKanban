@@ -144,11 +144,16 @@ type WebSessionRuntimeConfig struct {
 	SupportsDevinWebSession bool                      `json:"supportsDevinWebSession"`
 	// SupportsDevinSessionFork reports whether the installed Devin CLI's ACP
 	// agent advertises the private revert extension that backs session forks.
-	SupportsDevinSessionFork bool   `json:"supportsDevinSessionFork"`
-	SupportsPiWebSession     bool   `json:"supportsPiWebSession"`
-	PiRPCCompatible          bool   `json:"piRpcCompatible"`
-	PiMinVersion             string `json:"piMinVersion"`
-	PiDiagnostics            string `json:"piDiagnostics,omitempty"`
+	SupportsDevinSessionFork bool `json:"supportsDevinSessionFork"`
+	// SupportsDevinSubAgents reports whether the installed Devin CLI's ACP
+	// agent advertises the private sub-agent extension
+	// (_meta["cognition.ai/subagentControl"]) that feeds the sub-agent
+	// registry.
+	SupportsDevinSubAgents bool   `json:"supportsDevinSubAgents"`
+	SupportsPiWebSession   bool   `json:"supportsPiWebSession"`
+	PiRPCCompatible        bool   `json:"piRpcCompatible"`
+	PiMinVersion           string `json:"piMinVersion"`
+	PiDiagnostics          string `json:"piDiagnostics,omitempty"`
 	// SupportsWebSession reports whether ordinary Codex web sessions can run.
 	SupportsWebSession   bool   `json:"supportsWebSession"`
 	WebSessionMinVersion string `json:"webSessionMinCodexVersion"`
@@ -411,7 +416,7 @@ func runtimeAgentCapabilities(config WebSessionRuntimeConfig) map[Agent]AgentCap
 			SupportsFork:             config.SupportsDevinWebSession && config.SupportsDevinSessionFork,
 			SupportsFollowUp:         true,
 			SupportsGoal:             false,
-			SupportsSubAgentRegistry: false,
+			SupportsSubAgentRegistry: config.SupportsDevinWebSession && config.SupportsDevinSubAgents,
 			PermissionModes:          availablePermissionModes(true, true, false),
 		},
 	}
@@ -530,6 +535,7 @@ func mergeCodexBinaryCapabilities(config, binaryConfig WebSessionRuntimeConfig) 
 	config.DevinVersion = binaryConfig.DevinVersion
 	config.SupportsDevinWebSession = binaryConfig.SupportsDevinWebSession
 	config.SupportsDevinSessionFork = binaryConfig.SupportsDevinSessionFork
+	config.SupportsDevinSubAgents = binaryConfig.SupportsDevinSubAgents
 	return config
 }
 
@@ -556,6 +562,7 @@ func (m *Manager) probeCodexBinaryCapabilities() (result WebSessionRuntimeConfig
 	supportsMultiAgentV2 := false
 	supportsGoalMode := false
 	supportsDevinFork := false
+	supportsDevinSubAgents := false
 	if hasCodex {
 		if version := detectCodexVersion(m.cfg.CodexPath); version != nil {
 			copied := *version
@@ -568,7 +575,9 @@ func (m *Manager) probeCodexBinaryCapabilities() (result WebSessionRuntimeConfig
 	}
 	if hasDevin {
 		devinVersion = detectDevinVersion(m.cfg.DevinPath)
-		supportsDevinFork = m.probeDevinACPSessionFork()
+		agentCapabilities := m.probeDevinACPAgentCapabilities()
+		supportsDevinFork = devinAgentSupportsRevert(agentCapabilities)
+		supportsDevinSubAgents = devinAgentSupportsSubAgents(agentCapabilities)
 	}
 
 	return WebSessionRuntimeConfig{
@@ -585,6 +594,7 @@ func (m *Manager) probeCodexBinaryCapabilities() (result WebSessionRuntimeConfig
 		DevinVersion:             devinVersion,
 		SupportsDevinWebSession:  hasDevin,
 		SupportsDevinSessionFork: supportsDevinFork,
+		SupportsDevinSubAgents:   supportsDevinSubAgents,
 	}, probeErr
 }
 
