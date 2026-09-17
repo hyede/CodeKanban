@@ -11843,10 +11843,7 @@ function handleComposerSelectorPointerLeave(selector: ComposerHoverSelector) {
 
 const selectedModelDisplayLabel = computed(() => getKnownModelLabel(selectedModel.value));
 const modelSelectStyle = computed<CSSProperties>(() => ({
-  width:
-    selectedAgent.value === 'devin'
-      ? '176px'
-      : `${resolveModelSelectWidth(selectedModelDisplayLabel.value)}px`,
+  width: `${resolveModelSelectWidth(selectedModelDisplayLabel.value)}px`,
 }));
 const claudeRuntimeOptions = computed(() =>
   CLAUDE_RUNTIME_OPTIONS.map(option => ({

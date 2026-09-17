@@ -387,10 +387,6 @@
   flex-shrink: 0;
 }
 
-.model-select {
-  width: 176px;
-}
-
 .claude-runtime-select {
   width: 72px;
 }
@@ -542,12 +538,22 @@
 }
 
 :global(.pi-model-search-header) {
-  padding: 4px 8px;
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--n-action-divider-color);
 }
 
 :global(.pi-model-search-header .n-input),
 :global(.pi-model-search-header .n-input.n-input--focus) {
   background-color: transparent;
+  --n-height: 24px !important;
+  --n-font-size: 12px !important;
+  --n-padding-left: 6px !important;
+  --n-padding-right: 6px !important;
+}
+
+:global(.web-session-model-select-menu.is-pi-model-catalog .n-base-select-menu-option-wrapper),
+:global(.web-session-model-select-menu.is-pi-model-catalog .v-vl-visible-items) {
+  padding-top: 2px !important;
 }
 
 .reasoning-select {
