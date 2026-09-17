@@ -9150,12 +9150,23 @@ function buildSessionActionOptions(session: SessionTab | null): DropdownOption[]
     },
   ];
 
-  if (copyableSessionId) {
-    options.splice(2, 0, {
-      label: t('terminal.copyAISessionId'),
+  const sessionIdOptions: DropdownOption[] = [];
+  if (session && copyableSessionId) {
+    sessionIdOptions.push({
+      label: t('terminal.copyAgentSessionId', { agent: getAgentDisplayName(session.agent) }),
       key: 'copy-session-id',
       icon: renderDropdownIcon(CopyOutline),
     });
+  }
+  if (session && !isDraftSession(session)) {
+    sessionIdOptions.push({
+      label: t('terminal.copyCkbSessionId'),
+      key: 'copy-ckb-session-id',
+      icon: renderDropdownIcon(CopyOutline),
+    });
+  }
+  if (sessionIdOptions.length) {
+    options.splice(2, 0, ...sessionIdOptions);
   }
 
   if (canPiTree) {
@@ -9253,7 +9264,16 @@ async function handleSessionActionSelect(action: string, session: SessionTab | n
     }
     await copyText(sessionId, {
       failureMessage: t('terminal.copyFailed'),
-      successMessage: t('terminal.aiSessionIdCopied'),
+      successMessage: t('terminal.agentSessionIdCopied', {
+        agent: getAgentDisplayName(session.agent),
+      }),
+    });
+    return;
+  }
+  if (action === 'copy-ckb-session-id') {
+    await copyText(session.id, {
+      failureMessage: t('terminal.copyFailed'),
+      successMessage: t('terminal.ckbSessionIdCopied'),
     });
     return;
   }
