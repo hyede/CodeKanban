@@ -21,6 +21,8 @@ import (
 	"code-kanban/model"
 	"code-kanban/model/tables"
 	"code-kanban/utils"
+
+	"go.uber.org/zap"
 )
 
 const devinACPProtocolVersion = 1
@@ -71,6 +73,64 @@ type devinACPClient struct {
 	// shell is the resolved shell command (binary + startup args) used to run
 	// terminal/create commands, mirroring how interactive terminals resolve it.
 	shell []string
+
+	// modeMu guards the attached session's advertised modes, its ACP session
+	// id, and whether the mode we mapped from the session record was applied.
+	modeMu       sync.Mutex
+	acpSessionID string
+	modes        *devinACPSessionModes
+	modeApplied  bool
+}
+
+// devinACPSessionModes mirrors the `modes` object returned by session/new,
+// session/load, and session/resume.
+type devinACPSessionModes struct {
+	CurrentModeID    string
+	AvailableModeIDs map[string]bool
+}
+
+func parseDevinSessionModes(raw json.RawMessage) *devinACPSessionModes {
+	var result struct {
+		Modes *struct {
+			CurrentModeID  string `json:"currentModeId"`
+			AvailableModes []struct {
+				ID string `json:"id"`
+			} `json:"availableModes"`
+		} `json:"modes"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &result) != nil || result.Modes == nil {
+		return nil
+	}
+	modes := &devinACPSessionModes{
+		CurrentModeID:    strings.TrimSpace(result.Modes.CurrentModeID),
+		AvailableModeIDs: make(map[string]bool, len(result.Modes.AvailableModes)),
+	}
+	for _, mode := range result.Modes.AvailableModes {
+		if id := strings.TrimSpace(mode.ID); id != "" {
+			modes.AvailableModeIDs[id] = true
+		}
+	}
+	return modes
+}
+
+func (c *devinACPClient) setSessionModes(sessionID string, modes *devinACPSessionModes, applied bool) {
+	c.modeMu.Lock()
+	defer c.modeMu.Unlock()
+	c.acpSessionID = sessionID
+	c.modes = modes
+	c.modeApplied = applied
+}
+
+func (c *devinACPClient) modeAppliedSnapshot() bool {
+	c.modeMu.Lock()
+	defer c.modeMu.Unlock()
+	return c.modeApplied
+}
+
+func (c *devinACPClient) sessionModesSnapshot() (*devinACPSessionModes, string) {
+	c.modeMu.Lock()
+	defer c.modeMu.Unlock()
+	return c.modes, c.acpSessionID
 }
 
 type devinACPTerminal struct {
@@ -295,6 +355,7 @@ func (m *Manager) runDevinACPSession(ctx context.Context, run *activeRun, sessio
 
 	proj := newDevinRunProjection()
 	nativeSessionID := pointerString(session.NativeSessionID)
+	var sessionModes *devinACPSessionModes
 	if nativeSessionID == "" {
 		result, requestErr := client.request(ctx, "session/new", map[string]any{
 			"cwd":        session.Cwd,
@@ -313,6 +374,7 @@ func (m *Manager) runDevinACPSession(ctx context.Context, run *activeRun, sessio
 		}
 		nativeSessionID = created.SessionID
 		session.NativeSessionID = &nativeSessionID
+		sessionModes = parseDevinSessionModes(result)
 		_ = m.updateRuntimeState(context.Background(), session.ID, map[string]any{
 			"native_session_id": nativeSessionID,
 			"updated_at":        time.Now(),
@@ -323,12 +385,13 @@ func (m *Manager) runDevinACPSession(ctx context.Context, run *activeRun, sessio
 		var resumeErr error
 		if sessionCapabilitiesContain(agentCapabilities, "resume") {
 			// session/resume restores context without replaying history.
-			if _, requestErr := client.request(ctx, "session/resume", map[string]any{
+			if result, requestErr := client.request(ctx, "session/resume", map[string]any{
 				"sessionId":  nativeSessionID,
 				"cwd":        session.Cwd,
 				"mcpServers": []any{},
 			}); requestErr == nil {
 				resumed = true
+				sessionModes = parseDevinSessionModes(result)
 			} else {
 				resumeErr = requestErr
 			}
@@ -336,15 +399,19 @@ func (m *Manager) runDevinACPSession(ctx context.Context, run *activeRun, sessio
 		switch {
 		case resumed:
 		case capabilitiesContain(agentCapabilities, "loadSession"):
-			if requestErr := m.loadDevinACPSession(ctx, client, session, run, proj, nativeSessionID); requestErr != nil {
+			result, requestErr := m.loadDevinACPSession(ctx, client, session, run, proj, nativeSessionID)
+			if requestErr != nil {
 				m.handleRunFailure(session.ID, session, run, fmt.Errorf("Devin ACP session/load failed: %w", requestErr))
 				return
 			}
+			sessionModes = parseDevinSessionModes(result)
 		case resumeErr != nil:
 			m.handleRunFailure(session.ID, session, run, fmt.Errorf("Devin ACP session/resume failed: %w", resumeErr))
 			return
 		}
 	}
+
+	m.applyDevinSessionMode(ctx, client, session, nativeSessionID, sessionModes)
 
 	eventsDone := make(chan struct{})
 	go func() {
@@ -499,37 +566,41 @@ func sessionCapabilitiesContain(raw any, key string) bool {
 // notifications before responding; those replays are discarded here so prior
 // replies are not appended to the run again. Draining during the call also
 // keeps the buffered events channel from filling up and deadlocking the load.
-func (m *Manager) loadDevinACPSession(ctx context.Context, client *devinACPClient, session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, nativeSessionID string) error {
-	done := make(chan error, 1)
+func (m *Manager) loadDevinACPSession(ctx context.Context, client *devinACPClient, session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, nativeSessionID string) (json.RawMessage, error) {
+	type loadResult struct {
+		raw json.RawMessage
+		err error
+	}
+	done := make(chan loadResult, 1)
 	go func() {
-		_, err := client.request(ctx, "session/load", map[string]any{
+		raw, err := client.request(ctx, "session/load", map[string]any{
 			"sessionId":  nativeSessionID,
 			"cwd":        session.Cwd,
 			"mcpServers": []any{},
 		})
-		done <- err
+		done <- loadResult{raw: raw, err: err}
 	}()
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		case err := <-done:
+			return nil, ctx.Err()
+		case res := <-done:
 			// The response is ordered after every replayed notification on
 			// the wire, so whatever is still queued is history — discard it.
 			for {
 				select {
 				case message, ok := <-client.events:
 					if !ok {
-						return err
+						return res.raw, res.err
 					}
 					m.dispatchDevinACPMessage(client, session, run, proj, message, devinACPDispatchReplay)
 				default:
-					return err
+					return res.raw, res.err
 				}
 			}
 		case message, ok := <-client.events:
 			if !ok {
-				return errors.New("Devin ACP process closed")
+				return nil, errors.New("Devin ACP process closed")
 			}
 			m.dispatchDevinACPMessage(client, session, run, proj, message, devinACPDispatchReplay)
 		}
@@ -1232,11 +1303,90 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 	}
 }
 
+// devinSessionModeID maps the session's workflow mode and permission level
+// onto the agent's ACP session modes. Plan mode overrides the permission
+// level, matching how Claude's --permission-mode plan wins over its flags.
+func devinSessionModeID(session tables.WebSessionTable) string {
+	if normalizeWorkflowMode(effectiveWorkflowMode(session)) == WorkflowModePlan {
+		return "plan"
+	}
+	switch normalizePermissionLevel(effectivePermissionLevel(session)) {
+	case PermissionLevelYolo:
+		return "bypass"
+	case PermissionLevelDefault:
+		return "accept-edits"
+	default:
+		return "smart"
+	}
+}
+
+// applyDevinSessionMode pushes the mapped mode to the agent via
+// session/set_mode. Unknown mode ids are silently reset to the agent default,
+// so the request is only sent when the target is in availableModes.
+func (m *Manager) applyDevinSessionMode(ctx context.Context, client *devinACPClient, session tables.WebSessionTable, nativeSessionID string, modes *devinACPSessionModes) {
+	if client == nil {
+		return
+	}
+	if modes == nil {
+		client.setSessionModes(nativeSessionID, nil, false)
+		return
+	}
+	target := devinSessionModeID(session)
+	applied := modes.CurrentModeID == target
+	if !applied && modes.AvailableModeIDs[target] {
+		if _, err := client.request(ctx, "session/set_mode", map[string]any{
+			"sessionId": nativeSessionID,
+			"modeId":    target,
+		}); err != nil {
+			if m.logger != nil {
+				m.logger.Warn("Devin ACP session/set_mode failed",
+					zap.String("sessionId", session.ID),
+					zap.String("modeId", target),
+					zap.Error(err))
+			}
+		} else {
+			applied = true
+			modes.CurrentModeID = target
+		}
+	}
+	client.setSessionModes(nativeSessionID, modes, applied)
+}
+
+// syncDevinSessionMode re-applies the mapped mode on a live ACP client after
+// the workflow mode or permission level changed mid-run.
+func (m *Manager) syncDevinSessionMode(ctx context.Context, sessionID string) {
+	m.mu.RLock()
+	run := m.runs[sessionID]
+	m.mu.RUnlock()
+	if run == nil || run.backend != SessionBackendDevinACP {
+		return
+	}
+	client := run.devinACP()
+	if client == nil {
+		return
+	}
+	modes, nativeSessionID := client.sessionModesSnapshot()
+	if modes == nil || strings.TrimSpace(nativeSessionID) == "" {
+		return
+	}
+	record, err := m.GetSession(ctx, sessionID)
+	if err != nil {
+		return
+	}
+	m.applyDevinSessionMode(ctx, client, record, nativeSessionID, modes)
+}
+
 func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session tables.WebSessionTable, run *activeRun, message devinACPMessage) {
 	var params map[string]any
 	_ = json.Unmarshal(message.Params, &params)
 	options, _ := params["options"].([]any)
-	if effectivePermissionLevel(session) == PermissionLevelDefault {
+	// Yolo keeps the client-side auto-answer as a safety net (bypass should
+	// not produce requests at all). Elevated falls back to it only when the
+	// agent-side smart mode could not be applied — without it every request
+	// would reach the user, the legacy behavior for agents without modes.
+	autoApprove := effectivePermissionLevel(session) == PermissionLevelYolo ||
+		(effectivePermissionLevel(session) == PermissionLevelElevated && !client.modeAppliedSnapshot())
+	if !autoApprove {
 		now := time.Now()
 		request := &pendingServerRequest{
 			RawID:       append(json.RawMessage(nil), message.ID...),

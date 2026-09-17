@@ -766,3 +766,64 @@ func TestDevinNestedSubAgentParenting(t *testing.T) {
 		t.Fatalf("inner parent = %v, want agent-outer", inner.ParentThreadID)
 	}
 }
+
+func TestDevinSessionModeID(t *testing.T) {
+	cases := []struct {
+		workflowMode    string
+		permissionLevel string
+		want            string
+	}{
+		{"default", "default", "accept-edits"},
+		{"default", "elevated", "smart"},
+		{"default", "yolo", "bypass"},
+		{"plan", "default", "plan"},
+		{"plan", "elevated", "plan"},
+		{"plan", "yolo", "plan"},
+		{"", "", "smart"},
+	}
+	for _, tc := range cases {
+		session := tables.WebSessionTable{
+			WorkflowMode:    tc.workflowMode,
+			PermissionLevel: tc.permissionLevel,
+		}
+		if got := devinSessionModeID(session); got != tc.want {
+			t.Fatalf("devinSessionModeID(%q, %q) = %q, want %q", tc.workflowMode, tc.permissionLevel, got, tc.want)
+		}
+	}
+}
+
+func TestParseDevinSessionModes(t *testing.T) {
+	modes := parseDevinSessionModes(json.RawMessage(`{
+		"sessionId": "abc",
+		"modes": {
+			"currentModeId": "accept-edits",
+			"availableModes": [
+				{"id": "accept-edits", "name": "Code"},
+				{"id": "smart", "name": "Smart"},
+				{"id": "ask", "name": "Ask"},
+				{"id": "plan", "name": "Plan"},
+				{"id": "bypass", "name": "Bypass Permissions"}
+			]
+		}
+	}`))
+	if modes == nil {
+		t.Fatal("expected modes")
+	}
+	if modes.CurrentModeID != "accept-edits" {
+		t.Fatalf("current mode = %q", modes.CurrentModeID)
+	}
+	for _, id := range []string{"accept-edits", "smart", "ask", "plan", "bypass"} {
+		if !modes.AvailableModeIDs[id] {
+			t.Fatalf("expected available mode %q", id)
+		}
+	}
+	if modes.AvailableModeIDs["yolo"] {
+		t.Fatal("unexpected available mode yolo")
+	}
+	if got := parseDevinSessionModes(json.RawMessage(`{"sessionId":"abc"}`)); got != nil {
+		t.Fatalf("expected nil modes, got %#v", got)
+	}
+	if got := parseDevinSessionModes(nil); got != nil {
+		t.Fatalf("expected nil modes, got %#v", got)
+	}
+}

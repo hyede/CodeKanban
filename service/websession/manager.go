@@ -2481,10 +2481,14 @@ func (m *Manager) UpdateWorkflowMode(
 	sessionID string,
 	mode WorkflowMode,
 ) (SessionSummary, error) {
-	return m.updateFields(ctx, sessionID, map[string]any{
+	summary, err := m.updateFields(ctx, sessionID, map[string]any{
 		"workflow_mode": string(normalizeWorkflowMode(mode)),
 		"updated_at":    time.Now(),
 	})
+	if err == nil {
+		m.syncDevinSessionMode(ctx, sessionID)
+	}
+	return summary, err
 }
 
 func (m *Manager) GetSessionGoal(ctx context.Context, sessionID string) (*SessionGoal, error) {
@@ -2722,10 +2726,14 @@ func (m *Manager) UpdatePermissionLevel(
 	if err := validateWebSessionPermissionLevel(Agent(record.Agent), level); err != nil {
 		return SessionSummary{}, err
 	}
-	return m.updateFields(ctx, sessionID, map[string]any{
+	summary, err := m.updateFields(ctx, sessionID, map[string]any{
 		"permission_level": string(normalizePermissionLevel(level)),
 		"updated_at":       time.Now(),
 	})
+	if err == nil {
+		m.syncDevinSessionMode(ctx, sessionID)
+	}
+	return summary, err
 }
 
 func (m *Manager) UpdateActiveCallTimeout(
