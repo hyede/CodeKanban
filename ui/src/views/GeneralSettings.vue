@@ -1009,6 +1009,7 @@
                       </n-space>
                     </n-form-item>
                     <n-form-item
+                      v-if="!isDevinFusionPresetModel"
                       :label="t('settings.webSessionAgentDefaultReasoningEffort')"
                       data-search-key="webSessionDevinDefaultReasoningEffort"
                     >
@@ -2217,10 +2218,13 @@ import {
   DEVIN_MODEL_OPTIONS,
   defaultModelForAgent,
   resolveCodexReasoningEfforts,
-  resolveDevinModelOptions,
+  resolveDevinModelForReasoning,
+  resolveDevinModelOptionGroups,
   resolveDevinReasoningEfforts,
+  resolveDevinSpecialModelOptions,
   resolvePiModelOptions,
   resolvePiReasoningEfforts,
+  type WebSessionModelOption,
 } from '@/components/web-session/webSessionModelOptions';
 import { GENERIC_CODEX_REASONING_EFFORTS } from '@/constants/webSessionDefaults';
 import {
@@ -3096,16 +3100,26 @@ const webSessionPiDefaultModelOptions = computed(() => [
   })),
 ]);
 const webSessionDevinDefaultModelOptions = computed(() => {
-  const catalogOptions = resolveDevinModelOptions(devinModelCatalog.value);
-  const options = catalogOptions.length ? catalogOptions : DEVIN_MODEL_OPTIONS;
-  return [
-    defaultAgentModelOption('SWE-2 High'),
-    ...options.map(option => ({
-      label: option.menuLabel || option.label,
-      value: option.value,
-    })),
-  ];
+  const toSelectOption = (option: WebSessionModelOption) => ({
+    label: option.menuLabel || option.label,
+    value: option.value,
+  });
+  const defaultOption = defaultAgentModelOption('SWE-2 High');
+  const catalog = devinModelCatalog.value;
+  if (!catalog.length) {
+    return [defaultOption, ...DEVIN_MODEL_OPTIONS.map(toSelectOption)];
+  }
+  const currentModel = developerForm.webSessionDevinDefaultModel;
+  const specialOptions = resolveDevinSpecialModelOptions(catalog, currentModel).map(toSelectOption);
+  const groups = resolveDevinModelOptionGroups(catalog, [], currentModel, {
+    recommended: t('webSession.recommendedModels'),
+    all: t('webSession.allModels'),
+  }).map(group => ({ ...group, children: group.children.map(toSelectOption) }));
+  return [defaultOption, ...specialOptions, ...groups];
 });
+const isDevinFusionPresetModel = computed(() =>
+  developerForm.webSessionDevinDefaultModel.trim().toLowerCase().startsWith('fusion-')
+);
 const webSessionClaudeDefaultReasoningEffortOptions = computed(() =>
   agentDefaultReasoningEffortOptions('claude', developerForm.webSessionClaudeDefaultModel)
 );
@@ -3299,6 +3313,36 @@ watch(
     }
   },
   { deep: true }
+);
+
+// Devin model ids encode the reasoning effort, so keep the stored preset model
+// pointing at the variant that matches the configured effort (same behavior as
+// the session composer's model/effort selectors). 'default'/'model_default'
+// follow whatever the selected variant encodes, so they never remap.
+watch(
+  [
+    () => developerForm.webSessionDevinDefaultModel,
+    () => developerForm.webSessionDevinDefaultReasoningEffort,
+    () => devinModelCatalog.value,
+  ],
+  ([model, effort], [previousModel, previousEffort]) => {
+    // Catalog refresh alone must not rewrite the stored preset.
+    if (model === previousModel && effort === previousEffort) {
+      return;
+    }
+    if (
+      effort === 'default' ||
+      effort === 'model_default' ||
+      !devinModelCatalog.value.length ||
+      model.trim().toLowerCase().startsWith('fusion-')
+    ) {
+      return;
+    }
+    const nextModel = resolveDevinModelForReasoning(devinModelCatalog.value, model, effort);
+    if (nextModel !== model) {
+      developerForm.webSessionDevinDefaultModel = nextModel;
+    }
+  }
 );
 
 watch(
