@@ -1028,3 +1028,59 @@ func TestDevinCompactionNotification(t *testing.T) {
 		t.Fatalf("unexpected context baseline: %#v", record)
 	}
 }
+
+// Devin sends an extra "completed" notification with an empty summary when the
+// history snapshot is dumped, long before the real summary arrives. That ping
+// must keep the compaction card open so both notifications render as one card.
+func TestDevinCompactionEmptySummaryCompletedStaysOpen(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	run := &activeRun{runID: "devin-compact-empty"}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	manager.dispatchDevinACPMessage(nil, sess, run, proj, devinACPMessage{
+		Method: "_cognition.ai/compaction",
+		Params: json.RawMessage(`{"status":"completed","sessionId":"native-1"}`),
+	}, devinACPDispatchLive)
+
+	compactionEvents := func() []Event {
+		var out []Event
+		events := readTextDeltaTestEvents(t, manager, session.ID)
+		for _, event := range events {
+			if stringValue(event.Payload["kind"]) == "context_compaction" {
+				out = append(out, event)
+			}
+		}
+		return out
+	}
+
+	events := compactionEvents()
+	if len(events) != 1 || events[0].Type != "tool_st" {
+		t.Fatalf("empty-summary completed should emit one tool_st, got %#v", events)
+	}
+	startTid := events[0].Payload["tid"]
+
+	record, err := manager.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if record.LastContextCompactionAt != nil {
+		t.Fatal("progress ping must not mark compaction completed")
+	}
+
+	manager.dispatchDevinACPMessage(nil, sess, run, proj, devinACPMessage{
+		Method: "_cognition.ai/compaction",
+		Params: json.RawMessage(`{"status":"completed","summary":"Compacted 3 messages","sessionId":"native-1"}`),
+	}, devinACPDispatchLive)
+
+	events = compactionEvents()
+	if len(events) != 2 || events[1].Type != "tool_end" {
+		t.Fatalf("expected one tool_st + one tool_end, got %#v", events)
+	}
+	if events[1].Payload["tid"] != startTid {
+		t.Fatalf("completion reused a different tid: %v vs %v", events[1].Payload["tid"], startTid)
+	}
+	if stringValue(events[1].Payload["out"]) != "Compacted 3 messages" {
+		t.Fatalf("unexpected tool_end payload: %#v", events[1].Payload)
+	}
+}

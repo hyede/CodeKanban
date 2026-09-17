@@ -1554,8 +1554,7 @@ func (m *Manager) handleDevinCompactionNotification(session tables.WebSessionTab
 	status := strings.ToLower(strings.TrimSpace(stringValue(params["status"])))
 	summary := strings.TrimSpace(stringValue(params["summary"]))
 	now := time.Now()
-	switch status {
-	case "started":
+	emitStart := func() {
 		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
 			ID: utils.NewID(), Type: "tool_st", RunID: run.runID, ParentID: run.assistantMessageIDSnapshot(),
 			Timestamp: now, Payload: map[string]any{
@@ -1563,7 +1562,18 @@ func (m *Manager) handleDevinCompactionNotification(session tables.WebSessionTab
 				"kind": "context_compaction", "ok": true,
 			},
 		})
+	}
+	switch status {
+	case "started":
+		emitStart()
 	case "completed", "failed":
+		// Devin also reports "completed" with an empty summary the moment the
+		// history snapshot is dumped, minutes before the real summary arrives.
+		// Surface that ping as progress so one logical compaction stays one card.
+		if status == "completed" && summary == "" {
+			emitStart()
+			return
+		}
 		toolID := firstNonEmpty(proj.takeDevinCompactionToolID(), utils.NewID())
 		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
 			ID: utils.NewID(), Type: "tool_end", RunID: run.runID, ParentID: run.assistantMessageIDSnapshot(),
