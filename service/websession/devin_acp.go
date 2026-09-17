@@ -704,6 +704,19 @@ func (p *devinRunProjection) takeDevinCapturedUserText() string {
 	return text
 }
 
+// devinChunkText extracts the text carried by a session/update chunk. The
+// content block is authoritative whenever it holds a string — including
+// whitespace-only values, which Devin streams as standalone chunks ("\n",
+// " ") and which must be relayed verbatim or markdown loses its newlines.
+func devinChunkText(update map[string]any) string {
+	if content, ok := update["content"].(map[string]any); ok {
+		if text, ok := content["text"].(string); ok {
+			return text
+		}
+	}
+	return stringValue(update["text"])
+}
+
 // devinACPSessionUpdateKind extracts update.sessionUpdate from a
 // session/update notification payload without projecting it.
 func devinACPSessionUpdateKind(raw json.RawMessage) string {
@@ -1072,15 +1085,21 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 		if !proj.captureHistory {
 			return
 		}
-		content, _ := update["content"].(map[string]any)
-		text := firstNonEmpty(stringValue(content["text"]), stringValue(update["text"]))
+		text := devinChunkText(update)
 		proj.mu.Lock()
 		proj.pendingUserText.WriteString(text)
 		proj.mu.Unlock()
 	case "agent_thought_chunk":
-		content, _ := update["content"].(map[string]any)
-		text := firstNonEmpty(stringValue(content["text"]), stringValue(update["text"]))
-		if strings.TrimSpace(text) == "" {
+		text := devinChunkText(update)
+		if text == "" {
+			return
+		}
+		proj.mu.Lock()
+		thinkingOpen := proj.messages[contextID] != nil && proj.messages[contextID].thinkingID != ""
+		proj.mu.Unlock()
+		if !thinkingOpen && strings.TrimSpace(text) == "" {
+			// Whitespace chunks are content inside an open thinking block, but
+			// a stray one must not materialize an empty block on its own.
 			return
 		}
 		messageID := m.ensureDevinMessage(session, run, proj, contextID)
@@ -1112,9 +1131,16 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 			},
 		})
 	case "agent_message_chunk":
-		content, _ := update["content"].(map[string]any)
-		text := firstNonEmpty(stringValue(content["text"]), stringValue(update["text"]))
-		if strings.TrimSpace(text) == "" {
+		text := devinChunkText(update)
+		if text == "" {
+			return
+		}
+		proj.mu.Lock()
+		messageHasText := proj.messages[contextID] != nil && proj.messages[contextID].messageHasText
+		proj.mu.Unlock()
+		if !messageHasText && strings.TrimSpace(text) == "" {
+			// Whitespace chunks only matter once the message has real text; a
+			// leading one must not materialize an empty assistant bubble.
 			return
 		}
 		m.finishDevinThinking(session, run, proj, contextID)

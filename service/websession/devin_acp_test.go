@@ -400,6 +400,78 @@ func TestDevinACPProjectionSeparatesThinkingToolsAndText(t *testing.T) {
 	}
 }
 
+// Devin streams token-sized chunks where newlines and lone spaces arrive as
+// whitespace-only updates. Dropping them merged paragraphs and ate the space
+// after markdown markers like "#".
+func TestDevinACPProjectionPreservesWhitespaceChunks(t *testing.T) {
+	manager, session := newTextDeltaTestManager(t)
+	run := &activeRun{runID: "devin-whitespace"}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	feed := func(sessionUpdate, text string) {
+		manager.handleDevinACPUpdate(sess, run, proj, devinACPUpdatePayload(sessionUpdate, map[string]any{
+			"content": map[string]any{"type": "text", "text": text},
+		}))
+	}
+
+	// A leading whitespace chunk carries no text yet; it must not open an
+	// empty assistant bubble.
+	feed("agent_message_chunk", "\n")
+	feed("agent_message_chunk", "  ")
+	for _, chunk := range []string{"#", " ", "标题", "\n\n", "-", " ", "列表项", "\n", "done"} {
+		feed("agent_message_chunk", chunk)
+	}
+	feed("agent_thought_chunk", "thinking ")
+	feed("agent_thought_chunk", "\n\n")
+	feed("agent_thought_chunk", "done")
+	manager.finishDevinRun(sess, run, proj)
+
+	events := readTextDeltaTestEvents(t, manager, session.ID)
+	var text strings.Builder
+	messageStarts := 0
+	for _, event := range events {
+		switch event.Type {
+		case "msg_a_st":
+			messageStarts++
+		case "txt_d":
+			text.WriteString(stringValue(event.Payload["txt"]))
+		}
+	}
+	if messageStarts != 1 {
+		t.Fatalf("expected exactly 1 assistant message, got %d", messageStarts)
+	}
+	if got, want := text.String(), "# 标题\n\n- 列表项\ndone"; got != want {
+		t.Fatalf("reconstructed message text = %q, want %q", got, want)
+	}
+	var reasoningOut string
+	for _, event := range events {
+		if event.Type == "tool_end" && stringValue(event.Payload["kind"]) == "reasoning" {
+			reasoningOut = stringValue(event.Payload["out"])
+		}
+	}
+	if reasoningOut != "thinking \n\ndone" {
+		t.Fatalf("reasoning output = %q, want %q", reasoningOut, "thinking \n\ndone")
+	}
+}
+
+func TestDevinACPCapturedUserTextPreservesWhitespace(t *testing.T) {
+	proj := newDevinRunProjection()
+	proj.captureHistory = true
+	manager, session := newTextDeltaTestManager(t)
+	run := &activeRun{runID: "devin-capture"}
+	sess := *session
+
+	for _, chunk := range []string{"line one", "\n\n", "line two"} {
+		manager.handleDevinACPUpdate(sess, run, proj, devinACPUpdatePayload("user_message_chunk", map[string]any{
+			"content": map[string]any{"type": "text", "text": chunk},
+		}))
+	}
+	if got, want := proj.takeDevinCapturedUserText(), "line one\n\nline two"; got != want {
+		t.Fatalf("captured user text = %q, want %q", got, want)
+	}
+}
+
 func TestDevinAgentSupportsSubAgents(t *testing.T) {
 	tests := []struct {
 		name string
