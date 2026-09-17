@@ -23,6 +23,7 @@ import (
 	"code-kanban/utils"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 const devinACPProtocolVersion = 1
@@ -426,7 +427,7 @@ func (m *Manager) runDevinACPSession(ctx context.Context, run *activeRun, sessio
 	for _, image := range images {
 		prompt = append(prompt, map[string]any{"type": image.Type, "data": image.Data, "mimeType": image.MimeType})
 	}
-	_, err = client.request(ctx, "session/prompt", map[string]any{
+	promptResult, err := client.request(ctx, "session/prompt", map[string]any{
 		"sessionId": nativeSessionID,
 		"prompt":    prompt,
 	})
@@ -441,6 +442,7 @@ func (m *Manager) runDevinACPSession(ctx context.Context, run *activeRun, sessio
 	}
 	client.close()
 	<-eventsDone
+	m.applyDevinPromptUsageFallback(session, run, proj, promptResult)
 	m.finishDevinRun(session, run, proj)
 }
 
@@ -668,6 +670,12 @@ func (m *Manager) dispatchDevinACPMessage(client *devinACPClient, session tables
 		}
 		return
 	}
+	if isDevinCompactionNotification(message.Method) {
+		if mode == devinACPDispatchLive {
+			m.handleDevinCompactionNotification(session, run, proj, message.Params)
+		}
+		return
+	}
 	if message.ID != nil && strings.TrimSpace(message.Method) != "" {
 		_ = client.respondError(message.ID, -32601, "unsupported method: "+message.Method)
 	}
@@ -737,6 +745,13 @@ type devinRunProjection struct {
 	// caller can emit them as msg_u events at message boundaries.
 	captureHistory  bool
 	pendingUserText strings.Builder
+
+	// usageSignatures dedupes usage_update notifications: the agent emits one
+	// plain update plus a second copy tagged with subagent_context for the
+	// same request, and only the first must be counted.
+	usageSignatures map[string]bool
+	// compactionToolID is the open context-compaction tool event, if any.
+	compactionToolID string
 }
 
 type devinToolState struct {
@@ -749,9 +764,50 @@ type devinToolState struct {
 
 func newDevinRunProjection() *devinRunProjection {
 	return &devinRunProjection{
-		messages: make(map[string]*devinMessageState),
-		tools:    make(map[string]*devinToolState),
+		messages:        make(map[string]*devinMessageState),
+		tools:           make(map[string]*devinToolState),
+		usageSignatures: make(map[string]bool),
 	}
+}
+
+// recordDevinUsageSignature reports whether signature was already observed in
+// this run; the first occurrence is recorded and returns false.
+func (p *devinRunProjection) recordDevinUsageSignature(signature string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.usageSignatures[signature] {
+		return true
+	}
+	p.usageSignatures[signature] = true
+	return false
+}
+
+// sawDevinUsageUpdate reports whether any usage_update was recorded this run.
+func (p *devinRunProjection) sawDevinUsageUpdate() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.usageSignatures) > 0
+}
+
+// openDevinCompaction returns the open compaction tool id, creating one when
+// none is open. p.mu must not be held (it locks internally).
+func (p *devinRunProjection) ensureDevinCompactionToolID() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.compactionToolID == "" {
+		p.compactionToolID = utils.NewID()
+	}
+	return p.compactionToolID
+}
+
+// takeDevinCompactionToolID returns and clears the open compaction tool id;
+// empty when no compaction is in flight.
+func (p *devinRunProjection) takeDevinCompactionToolID() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	id := p.compactionToolID
+	p.compactionToolID = ""
+	return id
 }
 
 // messageState returns the streaming state for a sub-agent context.
@@ -1013,10 +1069,14 @@ func parseDevinSubAgentCompletedMeta(meta map[string]any) *devinSubAgentComplete
 }
 
 // parseDevinSubAgentContextMeta returns the id of the sub-agent that owns the
-// update ("" when the update belongs to the main agent).
+// update ("" when the update belongs to the main agent). The agent tags the
+// main context as "root", which maps back to the empty main context id.
 func parseDevinSubAgentContextMeta(meta map[string]any) string {
 	raw := decodeRawObject(meta["cognition.ai/subagent_context"])
-	return strings.TrimSpace(stringValue(raw["parentAgentId"]))
+	if id := strings.TrimSpace(stringValue(raw["parentAgentId"])); id != "root" {
+		return id
+	}
+	return ""
 }
 
 // applyDevinSubAgentMeta projects sub-agent lifecycle metadata from an
@@ -1300,6 +1360,225 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 			ID: utils.NewID(), Type: "plan", RunID: run.runID, ParentID: run.assistantMessageIDSnapshot(), ThreadID: contextID,
 			Timestamp: time.Now(), Payload: update,
 		})
+	case "usage_update":
+		m.handleDevinUsageUpdate(session, run, proj, update)
+	}
+}
+
+// devinUsageUpdateValues holds the token accounting extracted from a
+// usage_update session update. Devin's inputTokens already includes cached
+// reads and writes, matching the session model's input semantics.
+type devinUsageUpdateValues struct {
+	input       int64
+	cachedInput int64
+	output      int64
+	used        int64
+	size        int64
+	cost        float64
+	costUSD     bool
+	hasTokens   bool
+}
+
+func devinUsageToken(meta map[string]any, keys ...string) (int64, bool) {
+	for _, key := range keys {
+		if value, ok := meta[key]; ok {
+			return int64(numberValue(value)), true
+		}
+	}
+	return 0, false
+}
+
+func parseDevinUsageUpdate(update map[string]any) devinUsageUpdateValues {
+	meta := decodeRawObject(update["_meta"])
+	var values devinUsageUpdateValues
+	in, hasIn := devinUsageToken(meta, "cognition.ai/inputTokens", "inputTokens")
+	out, hasOut := devinUsageToken(meta, "cognition.ai/outputTokens", "outputTokens")
+	cachedRead, hasCachedRead := devinUsageToken(meta, "cognition.ai/cachedReadTokens", "cachedReadTokens")
+	cachedWrite, hasCachedWrite := devinUsageToken(meta, "cognition.ai/cachedWriteTokens", "cachedWriteTokens")
+	values.input = in
+	values.cachedInput = cachedRead + cachedWrite
+	values.output = out
+	values.hasTokens = hasIn || hasOut || hasCachedRead || hasCachedWrite
+	values.used = int64(numberValue(update["used"]))
+	values.size = int64(numberValue(update["size"]))
+	if cost := decodeRawObject(update["cost"]); len(cost) > 0 {
+		values.cost = numberValue(cost["amount"])
+		currency := strings.TrimSpace(stringValue(cost["currency"]))
+		values.costUSD = currency == "" || strings.EqualFold(currency, "USD")
+	}
+	return values
+}
+
+// devinUsageSignature fingerprints one usage_update report. Only accounting
+// fields participate — context tags like subagent_context must not split the
+// signature, because the agent emits a bare copy plus a context-tagged copy
+// of the same report.
+func devinUsageSignature(update map[string]any) string {
+	meta := decodeRawObject(update["_meta"])
+	parts := make([]string, 0, 10)
+	for _, pair := range [][2]string{
+		{"used", ""},
+		{"size", ""},
+		{"cognition.ai/inputTokens", "meta"},
+		{"inputTokens", "meta"},
+		{"cognition.ai/outputTokens", "meta"},
+		{"outputTokens", "meta"},
+		{"cognition.ai/cachedReadTokens", "meta"},
+		{"cachedReadTokens", "meta"},
+		{"cognition.ai/cachedWriteTokens", "meta"},
+		{"cachedWriteTokens", "meta"},
+	} {
+		var value any
+		var ok bool
+		if pair[1] == "meta" {
+			value, ok = meta[pair[0]]
+		} else {
+			value, ok = update[pair[0]]
+		}
+		if ok {
+			parts = append(parts, pair[0]+"="+strconv.FormatFloat(numberValue(value), 'f', -1, 64))
+		}
+	}
+	if cost := decodeRawObject(update["cost"]); len(cost) > 0 {
+		parts = append(parts, "cost="+strconv.FormatFloat(numberValue(cost["amount"]), 'f', -1, 64)+stringValue(cost["currency"]))
+	}
+	return strings.Join(parts, "|")
+}
+
+// handleDevinUsageUpdate projects a usage_update session update into the
+// session's token accounting, mirroring handleCodexAppServerUsage: per-request
+// token counts accumulate into the totals while used/size feed the context
+// estimate and window. The agent emits each report twice — once bare and once
+// tagged with the owning sub-agent context — so identical payloads are
+// deduped per run. Reports always fold into the session totals: the token
+// spend belongs to one billable session regardless of which agent context
+// issued the request, and the bare/context-tagged copies may arrive in either
+// order.
+func (m *Manager) handleDevinUsageUpdate(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, update map[string]any) {
+	signature := devinUsageSignature(update)
+	if signature == "" || proj.recordDevinUsageSignature(signature) {
+		return
+	}
+	values := parseDevinUsageUpdate(update)
+	now := time.Now()
+	updates := map[string]any{"updated_at": now}
+	if values.hasTokens {
+		updates["total_input_tokens"] = gorm.Expr("total_input_tokens + ?", values.input)
+		updates["total_cached_input_tokens"] = gorm.Expr("total_cached_input_tokens + ?", values.cachedInput)
+		updates["total_output_tokens"] = gorm.Expr("total_output_tokens + ?", values.output)
+	}
+	if values.used > 0 {
+		updates["latest_token_count_input_tokens"] = values.input
+		updates["latest_token_count_cached_input_tokens"] = values.cachedInput
+		updates["latest_token_count_output_tokens"] = values.output
+		updates["latest_token_count_total_tokens"] = values.used
+		updates["latest_token_count_updated_at"] = now
+	}
+	if values.size > 0 {
+		updates["session_context_window_tokens"] = values.size
+		updates["session_context_window_observed_at"] = now
+	}
+	costUSD := values.costUSD && values.cost > 0
+	if costUSD {
+		updates["total_cost"] = gorm.Expr("total_cost + ?", values.cost)
+	}
+	_ = m.updateRuntimeState(context.Background(), session.ID, updates)
+	eventPayload := map[string]any{
+		"in":  values.input,
+		"cin": values.cachedInput,
+		"out": values.output,
+	}
+	if values.size > 0 {
+		eventPayload["cwt"] = values.size
+	}
+	if costUSD {
+		eventPayload["cost"] = values.cost
+	}
+	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
+		ID: utils.NewID(), Type: "usage", RunID: run.runID, Timestamp: now, Payload: eventPayload,
+	})
+	if values.size > 0 {
+		m.broadcastSessionSummary(context.Background(), session.ID)
+	}
+}
+
+// applyDevinPromptUsageFallback folds the session/prompt response's usage
+// block into the session accounting when the agent never streamed a
+// usage_update (older CLI versions). Both channels report per-request counts,
+// so a streamed update takes precedence to avoid double counting.
+func (m *Manager) applyDevinPromptUsageFallback(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, raw json.RawMessage) {
+	if len(raw) == 0 || proj.sawDevinUsageUpdate() {
+		return
+	}
+	usage := decodeRawObject(decodeRawObject(raw)["usage"])
+	in := int64(numberValue(usage["inputTokens"]))
+	out := int64(numberValue(usage["outputTokens"]))
+	cin := int64(numberValue(usage["cachedReadTokens"])) + int64(numberValue(usage["cachedWriteTokens"]))
+	used := int64(numberValue(usage["totalTokens"]))
+	if in <= 0 && out <= 0 && cin <= 0 && used <= 0 {
+		return
+	}
+	now := time.Now()
+	updates := map[string]any{
+		"total_input_tokens":        gorm.Expr("total_input_tokens + ?", in),
+		"total_cached_input_tokens": gorm.Expr("total_cached_input_tokens + ?", cin),
+		"total_output_tokens":       gorm.Expr("total_output_tokens + ?", out),
+		"updated_at":                now,
+	}
+	if used > 0 {
+		updates["latest_token_count_input_tokens"] = in
+		updates["latest_token_count_cached_input_tokens"] = cin
+		updates["latest_token_count_output_tokens"] = out
+		updates["latest_token_count_total_tokens"] = used
+		updates["latest_token_count_updated_at"] = now
+	}
+	_ = m.updateRuntimeState(context.Background(), session.ID, updates)
+	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
+		ID: utils.NewID(), Type: "usage", RunID: run.runID, Timestamp: now,
+		Payload: map[string]any{"in": in, "cin": cin, "out": out},
+	})
+}
+
+// isDevinCompactionNotification matches the compaction extension notification
+// method; on the wire the agent prefixes private notifications with "_".
+func isDevinCompactionNotification(method string) bool {
+	return method == "_cognition.ai/compaction" || method == "cognition.ai/compaction"
+}
+
+// handleDevinCompactionNotification projects cognition.ai/compaction
+// extension notifications into a context_compaction tool card and resets the
+// context estimate baseline once a compaction completes, matching how Codex
+// surfaces its context_compaction item.
+func (m *Manager) handleDevinCompactionNotification(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, raw json.RawMessage) {
+	params := decodeRawObject(raw)
+	status := strings.ToLower(strings.TrimSpace(stringValue(params["status"])))
+	summary := strings.TrimSpace(stringValue(params["summary"]))
+	now := time.Now()
+	switch status {
+	case "started":
+		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
+			ID: utils.NewID(), Type: "tool_st", RunID: run.runID, ParentID: run.assistantMessageIDSnapshot(),
+			Timestamp: now, Payload: map[string]any{
+				"tid": proj.ensureDevinCompactionToolID(), "name": "ContextCompaction",
+				"kind": "context_compaction", "ok": true,
+			},
+		})
+	case "completed", "failed":
+		toolID := firstNonEmpty(proj.takeDevinCompactionToolID(), utils.NewID())
+		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
+			ID: utils.NewID(), Type: "tool_end", RunID: run.runID, ParentID: run.assistantMessageIDSnapshot(),
+			Timestamp: now, Payload: map[string]any{
+				"tid": toolID, "name": "ContextCompaction", "kind": "context_compaction",
+				"out": truncateToolOutput("context_compaction", summary),
+				"ok":  status == "completed", "status": status,
+			},
+		})
+		if status == "completed" {
+			if record, err := m.GetSession(context.Background(), session.ID); err == nil {
+				_ = m.updateRuntimeState(context.Background(), session.ID, contextEstimateBaselineResetUpdate(record, now))
+				m.broadcastSessionSummary(context.Background(), session.ID)
+			}
+		}
 	}
 }
 
@@ -1458,6 +1737,7 @@ func devinPermissionResponsePayload(action string, request *pendingServerRequest
 func (m *Manager) finishDevinRun(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection) {
 	m.interruptActiveDevinSubAgents(session, run)
 	m.closeAllDevinMessages(session, run, proj)
+	_ = m.finalizeLatestTurnUsage(context.Background(), session.ID)
 	finalStatus, finalAssistantState := m.completedRunState(context.Background(), session, run)
 	now := time.Now()
 	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{ID: utils.NewID(), Type: "run_done", RunID: run.runID, Timestamp: now, Payload: map[string]any{"ok": true, "st": string(finalStatus)}})

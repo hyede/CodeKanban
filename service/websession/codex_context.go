@@ -231,6 +231,19 @@ func decorateSessionSummaryWithContext(summary *SessionSummary, config codexSess
 		summary.ContextWindowSource = ContextWindowSourceUnavailable
 		return
 	}
+	if normalizeAgent(summary.Agent) == AgentDevin {
+		// Devin reports its authoritative context window on usage_update.size.
+		// Preserve that observed value; there is no local Devin model catalog
+		// from which to infer an unknown window safely before the first update.
+		if summary.ContextWindowTokens != nil &&
+			*summary.ContextWindowTokens > 0 &&
+			summary.ContextWindowSource == ContextWindowSourceSessionUsage {
+			return
+		}
+		summary.ContextWindowTokens = nil
+		summary.ContextWindowSource = ContextWindowSourceUnavailable
+		return
+	}
 	if normalizeAgent(summary.Agent) != AgentCodex {
 		summary.ContextWindowTokens = nil
 		summary.ContextWindowSource = ContextWindowSourceUnavailable

@@ -1,7 +1,7 @@
 export const CODEX_CONTEXT_BASELINE_TOKENS = 12000;
 
 export function supportsContextUsageIndicator(agent: string) {
-  return agent === 'codex' || agent === 'claude' || agent === 'pi';
+  return agent === 'codex' || agent === 'claude' || agent === 'pi' || agent === 'devin';
 }
 
 export function contextUsageBaselineTokens(agent: string) {

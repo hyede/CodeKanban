@@ -10,9 +10,11 @@ import {
 } from '@/components/web-session/webSessionContextUsage';
 
 describe('webSessionContextUsage', () => {
-  it('supports Pi with a zero context baseline', () => {
+  it('supports Pi and Devin with a zero context baseline', () => {
     expect(supportsContextUsageIndicator('pi')).toBe(true);
+    expect(supportsContextUsageIndicator('devin')).toBe(true);
     expect(contextUsageBaselineTokens('pi')).toBe(0);
+    expect(contextUsageBaselineTokens('devin')).toBe(0);
     expect(contextUsageBaselineTokens('claude')).toBe(0);
     expect(contextUsageBaselineTokens('codex')).toBe(CODEX_CONTEXT_BASELINE_TOKENS);
   });

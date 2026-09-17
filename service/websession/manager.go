@@ -5191,7 +5191,7 @@ func (m *Manager) handleRunFailureWithCode(
 	}
 	run.setObservationFailure(code)
 	now := time.Now()
-	if normalizeAgent(Agent(session.Agent)) == AgentCodex {
+	if agent := normalizeAgent(Agent(session.Agent)); agent == AgentCodex || agent == AgentDevin {
 		_ = m.finalizeLatestTurnUsage(context.Background(), sessionID)
 	}
 	_, _ = m.appendAndBroadcast(context.Background(), sessionID, session, Event{

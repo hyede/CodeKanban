@@ -827,3 +827,204 @@ func TestParseDevinSessionModes(t *testing.T) {
 		t.Fatalf("expected nil modes, got %#v", got)
 	}
 }
+
+func TestDevinACPUsageUpdateProjectsSessionStats(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	run := &activeRun{runID: "devin-usage"}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	feed := func(extra map[string]any) {
+		manager.handleDevinACPUpdate(sess, run, proj, devinACPUpdatePayload("usage_update", extra))
+	}
+
+	feed(map[string]any{"used": 11849, "size": 262000, "_meta": map[string]any{
+		"cognition.ai/inputTokens": 11764, "cognition.ai/outputTokens": 85,
+	}})
+	// The agent repeats each report tagged with the owning context; the
+	// duplicate must not double count.
+	feed(map[string]any{"used": 11849, "size": 262000, "_meta": map[string]any{
+		"cognition.ai/inputTokens": 11764, "cognition.ai/outputTokens": 85,
+		"cognition.ai/subagent_context": map[string]any{"parentAgentId": "root"},
+	}})
+	feed(map[string]any{"used": 11926, "size": 262000, "_meta": map[string]any{
+		"cognition.ai/inputTokens":      11899,
+		"cognition.ai/outputTokens":     27,
+		"cognition.ai/cachedReadTokens": 11776,
+	}})
+
+	record, err := manager.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if record.TotalInputTokens != 23663 || record.TotalCachedInputTokens != 11776 || record.TotalOutputTokens != 112 {
+		t.Fatalf("unexpected totals: in=%d cin=%d out=%d",
+			record.TotalInputTokens, record.TotalCachedInputTokens, record.TotalOutputTokens)
+	}
+	if record.LatestTokenCountTotalTokens != 11926 || record.LatestTokenCountUpdatedAt == nil {
+		t.Fatalf("unexpected latest token count: total=%d at=%v",
+			record.LatestTokenCountTotalTokens, record.LatestTokenCountUpdatedAt)
+	}
+	if record.LatestTokenCountInputTokens != 11899 || record.LatestTokenCountCachedInputTokens != 11776 ||
+		record.LatestTokenCountOutputTokens != 27 {
+		t.Fatalf("unexpected latest token count parts: %#v", record)
+	}
+	if record.SessionContextWindowTokens != 262000 || record.SessionContextWindowObservedAt == nil {
+		t.Fatalf("unexpected context window: %d at=%v",
+			record.SessionContextWindowTokens, record.SessionContextWindowObservedAt)
+	}
+
+	summary := manager.mapSessionSummary(record)
+	if summary.ContextEstimateMode != ContextEstimateModeLatestTokenCount {
+		t.Fatalf("context estimate mode = %q, want %q", summary.ContextEstimateMode, ContextEstimateModeLatestTokenCount)
+	}
+	if summary.ContextEstimate.UsedTokens != 11926 {
+		t.Fatalf("context estimate used = %d, want 11926", summary.ContextEstimate.UsedTokens)
+	}
+	if summary.ContextWindowTokens == nil || *summary.ContextWindowTokens != 262000 {
+		t.Fatalf("context window tokens = %v, want 262000", summary.ContextWindowTokens)
+	}
+	if summary.ContextWindowSource != ContextWindowSourceSessionUsage {
+		t.Fatalf("context window source = %q, want %q", summary.ContextWindowSource, ContextWindowSourceSessionUsage)
+	}
+
+	var usageEvents int
+	for _, event := range readTextDeltaTestEvents(t, manager, session.ID) {
+		if event.Type != "usage" {
+			continue
+		}
+		usageEvents++
+		if int64(numberValue(event.Payload["cwt"])) != 262000 {
+			t.Fatalf("usage event cwt = %v, want 262000", event.Payload["cwt"])
+		}
+	}
+	if usageEvents != 2 {
+		t.Fatalf("expected 2 usage events after dedup, got %d", usageEvents)
+	}
+}
+
+func TestDevinACPUsageUpdateSubAgentContext(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	run := &activeRun{runID: "devin-usage-sub"}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	tokens := map[string]any{"cognition.ai/inputTokens": 90, "cognition.ai/outputTokens": 10}
+	// The tagged copy may arrive before its bare sibling; either order must
+	// count the report once and fold it into the session totals.
+	manager.handleDevinACPUpdate(sess, run, proj, devinACPUpdatePayload("usage_update", map[string]any{
+		"used": 100, "size": 262000,
+		"_meta": map[string]any{
+			"cognition.ai/inputTokens":      90,
+			"cognition.ai/outputTokens":     10,
+			"cognition.ai/subagent_context": map[string]any{"parentAgentId": "agent-1"},
+		},
+	}))
+	manager.handleDevinACPUpdate(sess, run, proj, devinACPUpdatePayload("usage_update", map[string]any{
+		"used": 100, "size": 262000, "_meta": tokens,
+	}))
+
+	record, err := manager.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if record.TotalInputTokens != 90 || record.TotalOutputTokens != 10 {
+		t.Fatalf("context-tagged usage must count once in session totals: %#v", record)
+	}
+}
+
+func TestDevinACPPromptUsageFallback(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	run := &activeRun{runID: "devin-usage-fallback"}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	manager.applyDevinPromptUsageFallback(sess, run, proj, json.RawMessage(
+		`{"stopReason":"end_turn","usage":{"totalTokens":11783,"inputTokens":11751,"outputTokens":32,"cachedReadTokens":10176}}`))
+
+	record, err := manager.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if record.TotalInputTokens != 11751 || record.TotalCachedInputTokens != 10176 || record.TotalOutputTokens != 32 {
+		t.Fatalf("unexpected fallback totals: %#v", record)
+	}
+	if record.LatestTokenCountTotalTokens != 11783 {
+		t.Fatalf("fallback latest token count = %d, want 11783", record.LatestTokenCountTotalTokens)
+	}
+
+	// A run that already streamed usage_update must not recount the response.
+	manager.handleDevinACPUpdate(sess, run, proj, devinACPUpdatePayload("usage_update", map[string]any{
+		"used": 20000, "size": 262000,
+		"_meta": map[string]any{"cognition.ai/inputTokens": 19900, "cognition.ai/outputTokens": 100},
+	}))
+	manager.applyDevinPromptUsageFallback(sess, run, proj, json.RawMessage(
+		`{"stopReason":"end_turn","usage":{"totalTokens":20000,"inputTokens":19900,"outputTokens":100}}`))
+
+	record, err = manager.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if record.TotalInputTokens != 31651 || record.TotalOutputTokens != 132 {
+		t.Fatalf("prompt usage counted twice: %#v", record)
+	}
+}
+
+func TestDevinCompactionNotification(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	run := &activeRun{runID: "devin-compact"}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	if err := manager.updateRuntimeState(context.Background(), session.ID, map[string]any{
+		"total_input_tokens":        50000,
+		"total_cached_input_tokens": 30000,
+		"total_output_tokens":       2000,
+	}); err != nil {
+		t.Fatalf("seed totals: %v", err)
+	}
+
+	manager.dispatchDevinACPMessage(nil, sess, run, proj, devinACPMessage{
+		Method: "_cognition.ai/compaction",
+		Params: json.RawMessage(`{"status":"started","sessionId":"native-1"}`),
+	}, devinACPDispatchLive)
+	manager.dispatchDevinACPMessage(nil, sess, run, proj, devinACPMessage{
+		Method: "_cognition.ai/compaction",
+		Params: json.RawMessage(`{"status":"completed","summary":"Compacted 3 messages","sessionId":"native-1"}`),
+	}, devinACPDispatchLive)
+
+	var startEvent, endEvent *Event
+	events := readTextDeltaTestEvents(t, manager, session.ID)
+	for index := range events {
+		event := &events[index]
+		if stringValue(event.Payload["kind"]) != "context_compaction" {
+			continue
+		}
+		if event.Type == "tool_st" {
+			startEvent = event
+		}
+		if event.Type == "tool_end" {
+			endEvent = event
+		}
+	}
+	if startEvent == nil || endEvent == nil {
+		t.Fatal("expected context_compaction tool_st and tool_end events")
+	}
+	if startEvent.Payload["tid"] != endEvent.Payload["tid"] {
+		t.Fatalf("compaction events use different tids: %v vs %v", startEvent.Payload["tid"], endEvent.Payload["tid"])
+	}
+	if endEvent.Payload["ok"] != true || stringValue(endEvent.Payload["out"]) != "Compacted 3 messages" {
+		t.Fatalf("unexpected compaction tool_end payload: %#v", endEvent.Payload)
+	}
+
+	record, err := manager.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if record.LastContextCompactionAt == nil {
+		t.Fatal("expected last_context_compaction_at after completed compaction")
+	}
+	if record.ContextBaselineInputTokens != 50000 || record.ContextBaselineOutputTokens != 2000 {
+		t.Fatalf("unexpected context baseline: %#v", record)
+	}
+}
