@@ -1121,7 +1121,9 @@ export class CodeKanbanClient {
         body: {
           worktreeId: ensureString(worktree?.id, "worktreeId"),
           agent,
-          claudeRuntime: ensureOptionalString(input.claudeRuntime) || "claude",
+          ...(ensureOptionalString(input.claudeRuntime)
+            ? { claudeRuntime: ensureOptionalString(input.claudeRuntime) }
+            : {}),
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           workflowMode:

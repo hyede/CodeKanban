@@ -314,6 +314,7 @@ export function resolvePiReasoningEfforts(
 }
 
 export const CLAUDE_MODEL_OPTIONS: WebSessionModelOption[] = [
+  { label: 'Fable', value: 'fable' },
   { label: 'Opus', value: 'opus' },
   { label: 'Sonnet', value: 'sonnet' },
   { label: 'Haiku', value: 'haiku' },
@@ -743,6 +744,16 @@ export const CLAUDE_RUNTIME_OPTIONS: WebSessionModelOption[] = [
   { label: 'CC', value: 'claude', menuLabel: 'Claude Code' },
   { label: 'CCR', value: 'ccr', menuLabel: 'Claude Code Router' },
 ];
+
+export function resolveDefaultClaudeRuntime(
+  configured: string | null | undefined
+): WebSessionClaudeRuntimeOption {
+  return String(configured ?? '')
+    .trim()
+    .toLowerCase() === 'ccr'
+    ? 'ccr'
+    : 'claude';
+}
 
 export const CODEX_PRIMARY_MODEL_OPTIONS: WebSessionModelOption[] = [
   { label: '5.5', value: 'gpt-5.5', menuLabel: 'GPT-5.5' },

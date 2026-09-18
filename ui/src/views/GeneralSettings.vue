@@ -919,6 +919,22 @@
                   </template>
                   <template v-if="sessionSubsection === 'claude'">
                     <n-form-item
+                      :label="t('settings.webSessionClaudeDefaultRuntime')"
+                      data-search-key="webSessionClaudeDefaultRuntime"
+                    >
+                      <n-space vertical size="small">
+                        <n-select
+                          v-model:value="developerForm.webSessionClaudeDefaultRuntime"
+                          :options="webSessionClaudeDefaultRuntimeOptions"
+                          :disabled="developerLoading"
+                          style="max-width: 320px"
+                        />
+                        <span class="form-tip">{{
+                          t('settings.webSessionClaudeDefaultRuntimeTip')
+                        }}</span>
+                      </n-space>
+                    </n-form-item>
+                    <n-form-item
                       :label="t('settings.webSessionAgentDefaultModel')"
                       data-search-key="webSessionClaudeDefaultModel"
                     >
@@ -3085,6 +3101,14 @@ function defaultAgentModelOption(modelLabel: string) {
   };
 }
 
+const webSessionClaudeDefaultRuntimeOptions = computed(() => [
+  {
+    label: t('settings.webSessionClaudeDefaultRuntimeOption', { runtime: 'Claude Code' }),
+    value: 'default',
+  },
+  { label: 'Claude Code', value: 'claude' },
+  { label: 'Claude Code Router', value: 'ccr' },
+]);
 const webSessionClaudeDefaultModelOptions = computed(() => [
   defaultAgentModelOption('Opus'),
   ...CLAUDE_MODEL_OPTIONS.map(option => ({
@@ -3182,6 +3206,8 @@ const developerSessionDirty = computed(() => {
       developerOriginal.value.webSessionClaudeDefaultModel ||
     developerForm.webSessionClaudeDefaultReasoningEffort !==
       developerOriginal.value.webSessionClaudeDefaultReasoningEffort ||
+    developerForm.webSessionClaudeDefaultRuntime !==
+      developerOriginal.value.webSessionClaudeDefaultRuntime ||
     developerForm.webSessionPiDefaultModel !== developerOriginal.value.webSessionPiDefaultModel ||
     developerForm.webSessionPiDefaultReasoningEffort !==
       developerOriginal.value.webSessionPiDefaultReasoningEffort ||

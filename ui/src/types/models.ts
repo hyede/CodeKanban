@@ -278,6 +278,7 @@ export interface DeveloperConfig {
   webSessionCodexDefaultSyncMode: 'default' | 'fast' | 'deep';
   webSessionClaudeDefaultModel: string;
   webSessionClaudeDefaultReasoningEffort: WebSessionAgentDefaultReasoningEffort;
+  webSessionClaudeDefaultRuntime: WebSessionClaudeDefaultRuntime;
   webSessionPiDefaultModel: string;
   webSessionPiDefaultReasoningEffort: WebSessionAgentDefaultReasoningEffort;
   webSessionDevinDefaultModel: string;
@@ -379,6 +380,8 @@ export type WebSessionCodexDefaultReasoningEffort = WebSessionReasoningEffort | 
 export type WebSessionAgentDefaultReasoningEffort = WebSessionCodexDefaultReasoningEffort;
 
 export type WebSessionCodexDefaultPermissionLevel = 'default' | 'standard' | 'elevated' | 'yolo';
+
+export type WebSessionClaudeDefaultRuntime = 'default' | 'claude' | 'ccr';
 
 export interface WebSessionCodexModelInfo {
   model: string;

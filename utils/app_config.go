@@ -80,6 +80,7 @@ type DeveloperConfig struct {
 	WebSessionCodexDefaultSyncMode         string                            `json:"webSessionCodexDefaultSyncMode" yaml:"webSessionCodexDefaultSyncMode"`
 	WebSessionClaudeDefaultModel           string                            `json:"webSessionClaudeDefaultModel" yaml:"webSessionClaudeDefaultModel"`
 	WebSessionClaudeDefaultReasoningEffort string                            `json:"webSessionClaudeDefaultReasoningEffort" yaml:"webSessionClaudeDefaultReasoningEffort"`
+	WebSessionClaudeDefaultRuntime         string                            `json:"webSessionClaudeDefaultRuntime" yaml:"webSessionClaudeDefaultRuntime"`
 	WebSessionPiDefaultModel               string                            `json:"webSessionPiDefaultModel" yaml:"webSessionPiDefaultModel"`
 	WebSessionPiDefaultReasoningEffort     string                            `json:"webSessionPiDefaultReasoningEffort" yaml:"webSessionPiDefaultReasoningEffort"`
 	WebSessionDevinDefaultModel            string                            `json:"webSessionDevinDefaultModel" yaml:"webSessionDevinDefaultModel"`
@@ -462,6 +463,7 @@ func ReadConfig() *AppConfig {
 			WebSessionCodexDefaultSyncMode:         WebSessionCodexDefaultSetting,
 			WebSessionClaudeDefaultModel:           WebSessionCodexDefaultSetting,
 			WebSessionClaudeDefaultReasoningEffort: WebSessionCodexDefaultSetting,
+			WebSessionClaudeDefaultRuntime:         WebSessionCodexDefaultSetting,
 			WebSessionPiDefaultModel:               WebSessionCodexDefaultSetting,
 			WebSessionPiDefaultReasoningEffort:     WebSessionCodexDefaultSetting,
 			WebSessionDevinDefaultModel:            WebSessionCodexDefaultSetting,
@@ -597,6 +599,9 @@ func NormalizeDeveloperConfig(config DeveloperConfig) DeveloperConfig {
 	config.WebSessionClaudeDefaultReasoningEffort = normalizeWebSessionCodexReasoningEffort(
 		config.WebSessionClaudeDefaultReasoningEffort,
 	)
+	config.WebSessionClaudeDefaultRuntime = normalizeWebSessionClaudeDefaultRuntime(
+		config.WebSessionClaudeDefaultRuntime,
+	)
 	config.WebSessionPiDefaultModel = normalizeWebSessionAgentDefaultModel(config.WebSessionPiDefaultModel)
 	config.WebSessionPiDefaultReasoningEffort = normalizeWebSessionCodexReasoningEffort(
 		config.WebSessionPiDefaultReasoningEffort,
@@ -671,6 +676,9 @@ func MergeDeveloperConfig(current DeveloperConfig, incoming DeveloperConfig) Dev
 	if strings.TrimSpace(incoming.WebSessionClaudeDefaultReasoningEffort) == "" {
 		incoming.WebSessionClaudeDefaultReasoningEffort = current.WebSessionClaudeDefaultReasoningEffort
 	}
+	if strings.TrimSpace(incoming.WebSessionClaudeDefaultRuntime) == "" {
+		incoming.WebSessionClaudeDefaultRuntime = current.WebSessionClaudeDefaultRuntime
+	}
 	if strings.TrimSpace(incoming.WebSessionPiDefaultModel) == "" {
 		incoming.WebSessionPiDefaultModel = current.WebSessionPiDefaultModel
 	}
@@ -713,6 +721,16 @@ func normalizeWebSessionCodexReasoningEffort(value string) string {
 		"xhigh",
 		"max",
 		"ultra":
+		return normalized
+	default:
+		return WebSessionCodexDefaultSetting
+	}
+}
+
+func normalizeWebSessionClaudeDefaultRuntime(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "claude", "ccr":
 		return normalized
 	default:
 		return WebSessionCodexDefaultSetting

@@ -3770,6 +3770,7 @@ import {
   resolveDevinSelectedReasoningEffort,
   filterDevinModelOptionGroups,
   resolveCustomModelOptions,
+  resolveDefaultClaudeRuntime,
   shouldSuppressPiModelMenuClose,
   resolvePiModelOptionGroups,
   resolvePiModelOptions,
@@ -4484,7 +4485,16 @@ let routeWriteFlight: Promise<void> | null = null;
 const IMAGE_ATTACHMENT_NAME_PATTERN = /\.(png|jpe?g|gif|webp|bmp|svg|tiff?)$/i;
 
 const draftAgent = ref<WebSessionAgent>('codex');
-const draftClaudeRuntime = ref<WebSessionClaudeRuntimeOption>('claude');
+// The composer's claude runtime falls back to the configured session default
+// until the user picks a runtime explicitly; viewing or creating a session
+// re-anchors the fallback to the configured default.
+const draftClaudeRuntimeOverride = ref<WebSessionClaudeRuntimeOption | null>(null);
+const draftClaudeRuntime = computed<WebSessionClaudeRuntimeOption>({
+  get: () => draftClaudeRuntimeOverride.value ?? defaultClaudeRuntimeForSession(),
+  set: value => {
+    draftClaudeRuntimeOverride.value = value;
+  },
+});
 const draftModel = ref(defaultModelForAgent('codex'));
 const draftReasoningEffort = ref<WebSessionReasoningEffort>(
   defaultReasoningEffortForAgent('codex')
@@ -10036,7 +10046,14 @@ function createDraftSession(forceAgent?: WebSessionAgent, options?: { title?: st
     worktreeId: context.worktreeId,
     orderIndex: Number.MAX_SAFE_INTEGER - draftSessions.value.length,
     agent: nextAgent,
-    claudeRuntime: source?.claudeRuntime === 'ccr' ? 'ccr' : draftClaudeRuntime.value,
+    claudeRuntime:
+      nextAgent === 'claude'
+        ? source?.agent === 'claude'
+          ? source.claudeRuntime === 'ccr'
+            ? 'ccr'
+            : 'claude'
+          : draftClaudeRuntime.value
+        : 'claude',
     title: options?.title || buildDraftTitle(nextAgent),
     model: defaultModelForAgent(nextAgent),
     reasoningEffort: defaultReasoningEffortForAgent(nextAgent),
@@ -11598,6 +11615,17 @@ function configuredDefaultReasoningEffortFor(agent: WebSessionAgent) {
   }
 }
 
+function defaultClaudeRuntimeForSession(): WebSessionClaudeRuntimeOption {
+  return resolveDefaultClaudeRuntime(developerConfig.value.webSessionClaudeDefaultRuntime);
+}
+
+function effectiveComposerClaudeRuntime(): WebSessionClaudeRuntimeOption {
+  if (currentSession.value?.agent === 'claude') {
+    return currentSession.value.claudeRuntime === 'ccr' ? 'ccr' : 'claude';
+  }
+  return draftClaudeRuntime.value;
+}
+
 function defaultModelForAgent(agent: WebSessionAgent) {
   return resolveDefaultModelForAgent(agent, configuredDefaultModelFor(agent));
 }
@@ -12015,7 +12043,7 @@ function setCustomModelsForAgent(agent: WebSessionCustomModelAgent, values: stri
 function builtinModelValuesForAgent(agent: WebSessionAgent) {
   if (agent === 'claude') {
     const values = CLAUDE_MODEL_OPTIONS.map(option => option.value);
-    if (draftClaudeRuntime.value === 'ccr') {
+    if (effectiveComposerClaudeRuntime() === 'ccr') {
       return [
         ...resolveCCRModelOptions(runtimeConfig.value?.ccrModels ?? []).map(option => option.value),
         ...values,
@@ -12068,7 +12096,7 @@ const modelOptions = computed(() => {
   const activeModel = currentSession.value?.model ?? draftModel.value;
   if (selectedAgent.value === 'claude') {
     const ccrOptions =
-      draftClaudeRuntime.value === 'ccr'
+      effectiveComposerClaudeRuntime() === 'ccr'
         ? resolveCCRModelOptions(runtimeConfig.value?.ccrModels ?? [])
         : [];
     const builtinOptions = ccrOptions.length > 0 ? ccrOptions : [...CLAUDE_MODEL_OPTIONS];
@@ -12197,8 +12225,8 @@ const selectedAgent = computed({
     const nextReasoningEffort = defaultReasoningEffortForAgent(next);
     const nextPermissionLevel = defaultPermissionLevelForAgent(next);
     draftAgent.value = next;
-    if (next === 'codex') {
-      draftClaudeRuntime.value = 'claude';
+    if (next !== 'claude') {
+      draftClaudeRuntimeOverride.value = null;
     }
     draftModel.value = nextModel;
     draftReasoningEffort.value = nextReasoningEffort;
@@ -13733,8 +13761,10 @@ async function handleCreateSession(
         agent,
         claudeRuntime:
           agent === 'claude'
-            ? source?.claudeRuntime === 'ccr'
-              ? 'ccr'
+            ? source?.agent === 'claude'
+              ? source.claudeRuntime === 'ccr'
+                ? 'ccr'
+                : 'claude'
               : draftClaudeRuntime.value
             : 'claude',
         model: source?.model || draftModel.value || defaultModelForAgent(agent),
@@ -13788,7 +13818,7 @@ async function handleCreateSession(
     options.onCreated?.(session);
     if (shouldActivateCreatedSession) {
       draftAgent.value = session.agent;
-      draftClaudeRuntime.value = session.claudeRuntime === 'ccr' ? 'ccr' : 'claude';
+      draftClaudeRuntimeOverride.value = null;
       draftModel.value = session.model;
       draftReasoningEffort.value =
         session.reasoningEffort || defaultReasoningEffortForAgent(session.agent);
@@ -13829,7 +13859,7 @@ async function handleStartDraftSession(forceAgent?: WebSessionAgent) {
   }
   const draft = createDraftSession(forceAgent);
   draftAgent.value = draft.agent;
-  draftClaudeRuntime.value = draft.claudeRuntime === 'ccr' ? 'ccr' : 'claude';
+  draftClaudeRuntimeOverride.value = null;
   draftModel.value = draft.model || defaultModelForAgent(draft.agent);
   draftReasoningEffort.value = draft.reasoningEffort || defaultReasoningEffortForAgent(draft.agent);
   draftWorkflowMode.value = draft.workflowMode;
@@ -17697,7 +17727,7 @@ watch(
       return;
     }
     draftAgent.value = session.agent;
-    draftClaudeRuntime.value = session.claudeRuntime === 'ccr' ? 'ccr' : 'claude';
+    draftClaudeRuntimeOverride.value = null;
     draftModel.value = session.model || defaultModelForAgent(session.agent);
     draftReasoningEffort.value =
       session.reasoningEffort || defaultReasoningEffortForAgent(session.agent);

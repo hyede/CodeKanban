@@ -117,6 +117,7 @@ type Config struct {
 	DevinPath                   string
 	PiRuntimeIdleTTL            time.Duration
 	DefaultAgentModel           func(agent Agent) string
+	DefaultClaudeRuntime        func() string
 	CodexClientName             func() string
 	CodexClientTitle            func() string
 	CodexClientVersion          func() string
@@ -1302,7 +1303,7 @@ func (m *Manager) CreateSession(ctx context.Context, params CreateParams) (Sessi
 		WorktreeID:                        nilIfEmpty(worktreeID),
 		OrderIndex:                        orderIndex,
 		Agent:                             string(agent),
-		ClaudeRuntime:                     string(normalizeClaudeRuntime(params.ClaudeRuntime)),
+		ClaudeRuntime:                     string(m.resolveSessionClaudeRuntime(agent, params.ClaudeRuntime)),
 		Backend:                           string(normalizeSessionBackend(params.Backend, agent)),
 		Title:                             title,
 		TitleAuto:                         strings.TrimSpace(params.Title) == "",
@@ -2815,7 +2816,7 @@ func (m *Manager) UpdateAgent(ctx context.Context, sessionID string, agent Agent
 		"context_window_setting":             0,
 		"applied_context_window_setting":     nil,
 		"codex_model_metadata_fallback":      false,
-		"claude_runtime":                     string(defaultClaudeRuntime(normalized)),
+		"claude_runtime":                     string(m.resolveSessionClaudeRuntime(normalized, "")),
 		"backend":                            string(defaultSessionBackend(normalized)),
 		"model":                              modelName,
 		"reasoning_effort":                   string(m.resolveSessionReasoningEffort(normalized, modelName, "")),
@@ -7825,9 +7826,19 @@ func normalizeClaudeRuntime(runtime ClaudeRuntime) ClaudeRuntime {
 	}
 }
 
-func defaultClaudeRuntime(agent Agent) ClaudeRuntime {
+func (m *Manager) resolveSessionClaudeRuntime(agent Agent, provided ClaudeRuntime) ClaudeRuntime {
 	if normalizeAgent(agent) != AgentClaude {
 		return ClaudeRuntimeNative
+	}
+	if strings.TrimSpace(string(provided)) != "" {
+		return normalizeClaudeRuntime(provided)
+	}
+	configured := ""
+	if m != nil && m.cfg.DefaultClaudeRuntime != nil {
+		configured = strings.TrimSpace(m.cfg.DefaultClaudeRuntime())
+	}
+	if strings.EqualFold(configured, string(ClaudeRuntimeCCR)) {
+		return ClaudeRuntimeCCR
 	}
 	return ClaudeRuntimeNative
 }

@@ -377,7 +377,12 @@ describe('webSessionModelOptions', () => {
   });
 
   it('keeps claude models unchanged', () => {
-    expect(CLAUDE_MODEL_OPTIONS.map(option => option.value)).toEqual(['opus', 'sonnet', 'haiku']);
+    expect(CLAUDE_MODEL_OPTIONS.map(option => option.value)).toEqual([
+      'fable',
+      'opus',
+      'sonnet',
+      'haiku',
+    ]);
   });
 
   it('uses compact claude runtime labels with full menu labels', () => {

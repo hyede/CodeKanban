@@ -1552,6 +1552,10 @@ export default {
     webSessionAgentDefaultModelAuto: '自动',
     webSessionAgentDefaultReasoningEffort: '默认推理强度',
     webSessionAgentDefaultReasoningEffortOption: '默认（{effort}）',
+    webSessionClaudeDefaultRuntime: '默认运行方式',
+    webSessionClaudeDefaultRuntimeOption: '默认（{runtime}）',
+    webSessionClaudeDefaultRuntimeTip:
+      '用于之后新建的 Claude Code 会话。选择 Claude Code Router 需要先配置好 CCR profile。',
     webSessionClaudeDefaultModelTip:
       '用于之后新建的 Claude Code 会话。可选择列表中的模型，也可直接输入自定义模型名称。',
     webSessionClaudeDefaultReasoningEffortTip: '用于之后新建的 Claude Code 会话。',

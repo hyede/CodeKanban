@@ -116,6 +116,9 @@ func Init(ctx context.Context, cfg *utils.AppConfig, assets embed.FS, info *AppI
 				return cfg.Developer.WebSessionCodexDefaultModel
 			}
 		},
+		DefaultClaudeRuntime: func() string {
+			return cfg.Developer.WebSessionClaudeDefaultRuntime
+		},
 		CodexClientName: func() string {
 			return cfg.Developer.WebSessionCodexClientName
 		},

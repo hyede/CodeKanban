@@ -15,6 +15,7 @@ describe('developer config defaults', () => {
     expect(config.webSessionCodexContextWindow).toBe(0);
     expect(config.webSessionClaudeDefaultModel).toBe('default');
     expect(config.webSessionClaudeDefaultReasoningEffort).toBe('default');
+    expect(config.webSessionClaudeDefaultRuntime).toBe('default');
     expect(config.webSessionPiDefaultModel).toBe('default');
     expect(config.webSessionPiDefaultReasoningEffort).toBe('default');
     expect(config.webSessionDevinDefaultModel).toBe('default');
@@ -84,6 +85,7 @@ describe('developer config defaults', () => {
     const config = sanitizeDeveloperConfig({
       webSessionClaudeDefaultModel: '  sonnet  ',
       webSessionClaudeDefaultReasoningEffort: 'high',
+      webSessionClaudeDefaultRuntime: 'ccr',
       webSessionPiDefaultModel: ' anthropic/claude-sonnet-4 ',
       webSessionPiDefaultReasoningEffort: 'max',
       webSessionDevinDefaultModel: 'swe-2',
@@ -92,6 +94,7 @@ describe('developer config defaults', () => {
 
     expect(config.webSessionClaudeDefaultModel).toBe('sonnet');
     expect(config.webSessionClaudeDefaultReasoningEffort).toBe('high');
+    expect(config.webSessionClaudeDefaultRuntime).toBe('ccr');
     expect(config.webSessionPiDefaultModel).toBe('anthropic/claude-sonnet-4');
     expect(config.webSessionPiDefaultReasoningEffort).toBe('max');
     expect(config.webSessionDevinDefaultModel).toBe('swe-2');

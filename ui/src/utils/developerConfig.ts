@@ -117,6 +117,11 @@ export function sanitizeDeveloperConfig(value?: Partial<DeveloperConfig> | null)
     webSessionClaudeDefaultReasoningEffort: normalizeConfiguredCodexReasoningEffort(
       value?.webSessionClaudeDefaultReasoningEffort ?? DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT
     ),
+    webSessionClaudeDefaultRuntime:
+      value?.webSessionClaudeDefaultRuntime === 'claude' ||
+      value?.webSessionClaudeDefaultRuntime === 'ccr'
+        ? value.webSessionClaudeDefaultRuntime
+        : 'default',
     webSessionPiDefaultModel: sanitizeAgentDefaultModel(value?.webSessionPiDefaultModel),
     webSessionPiDefaultReasoningEffort: normalizeConfiguredCodexReasoningEffort(
       value?.webSessionPiDefaultReasoningEffort ?? DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT

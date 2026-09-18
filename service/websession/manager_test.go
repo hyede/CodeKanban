@@ -506,6 +506,70 @@ func TestManagerCreateSessionUsesConfiguredCodexDefaultsAndExplicitOverrides(t *
 	}
 }
 
+func TestManagerClaudeRuntimeDefaults(t *testing.T) {
+	cleanup := initTestDB(t)
+	defer cleanup()
+
+	project := seedProject(t)
+	configured := "ccr"
+	manager, err := NewManager(Config{
+		DataDir: t.TempDir(),
+		DefaultClaudeRuntime: func() string {
+			return configured
+		},
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name       string
+		configured string
+		agent      Agent
+		provided   ClaudeRuntime
+		want       ClaudeRuntime
+	}{
+		{name: "configured CCR", configured: "ccr", agent: AgentClaude, want: ClaudeRuntimeCCR},
+		{name: "explicit native", configured: "ccr", agent: AgentClaude, provided: ClaudeRuntimeNative, want: ClaudeRuntimeNative},
+		{name: "explicit CCR", configured: "claude", agent: AgentClaude, provided: ClaudeRuntimeCCR, want: ClaudeRuntimeCCR},
+		{name: "default sentinel", configured: "default", agent: AgentClaude, want: ClaudeRuntimeNative},
+		{name: "other agent", configured: "ccr", agent: AgentCodex, want: ClaudeRuntimeNative},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			configured = tt.configured
+			created, err := manager.CreateSession(context.Background(), CreateParams{
+				ProjectID:     project.ID,
+				Agent:         tt.agent,
+				ClaudeRuntime: tt.provided,
+			})
+			if err != nil {
+				t.Fatalf("CreateSession returned error: %v", err)
+			}
+			if created.ClaudeRuntime != tt.want {
+				t.Fatalf("runtime = %q, want %q", created.ClaudeRuntime, tt.want)
+			}
+
+			configured = "ccr"
+			stored, err := manager.GetSession(context.Background(), created.ID)
+			if err != nil {
+				t.Fatalf("GetSession returned error: %v", err)
+			}
+			if stored.ClaudeRuntime != string(tt.want) {
+				t.Fatalf("configuration update changed existing runtime to %q", stored.ClaudeRuntime)
+			}
+			if tt.agent == AgentCodex {
+				updated, err := manager.UpdateAgent(context.Background(), created.ID, AgentClaude)
+				if err != nil {
+					t.Fatalf("UpdateAgent returned error: %v", err)
+				}
+				if updated.ClaudeRuntime != ClaudeRuntimeCCR {
+					t.Fatalf("agent switch did not inherit CCR: %q", updated.ClaudeRuntime)
+				}
+			}
+		})
+	}
+}
+
 func TestManagerCreateSessionResolvesCodexDefaultSentinels(t *testing.T) {
 	cleanup := initTestDB(t)
 	defer cleanup()

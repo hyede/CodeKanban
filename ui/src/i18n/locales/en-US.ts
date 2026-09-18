@@ -1630,6 +1630,10 @@ export default {
     webSessionAgentDefaultModelAuto: 'Auto',
     webSessionAgentDefaultReasoningEffort: 'Default Reasoning Effort',
     webSessionAgentDefaultReasoningEffortOption: 'Default ({effort})',
+    webSessionClaudeDefaultRuntime: 'Default Runtime',
+    webSessionClaudeDefaultRuntimeOption: 'Default ({runtime})',
+    webSessionClaudeDefaultRuntimeTip:
+      'Used for newly created Claude Code sessions. Claude Code Router requires a configured CCR profile.',
     webSessionClaudeDefaultModelTip:
       'Used for newly created Claude Code sessions. Choose a listed model or enter a custom model name.',
     webSessionClaudeDefaultReasoningEffortTip: 'Used for newly created Claude Code sessions.',
