@@ -1,6 +1,7 @@
 package websession
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"path/filepath"
@@ -1083,4 +1084,311 @@ func TestDevinCompactionEmptySummaryCompletedStaysOpen(t *testing.T) {
 	if stringValue(events[1].Payload["out"]) != "Compacted 3 messages" {
 		t.Fatalf("unexpected tool_end payload: %#v", events[1].Payload)
 	}
+}
+
+type devinTestWriteCloser struct{ bytes.Buffer }
+
+func (w *devinTestWriteCloser) Close() error { return nil }
+
+func newDevinTestClient() (*devinACPClient, *devinTestWriteCloser) {
+	stdin := &devinTestWriteCloser{}
+	return &devinACPClient{stdin: stdin, closed: make(chan struct{})}, stdin
+}
+
+func devinPlanExitPermissionMessage() devinACPMessage {
+	params, _ := json.Marshal(map[string]any{
+		"sessionId": "native-1",
+		"toolCall":  map[string]any{"toolCallId": "call-exit"},
+		"options": []any{
+			map[string]any{"optionId": "plan_accept_edits", "name": "Yes, implement plan and accept edits", "kind": "allow_once"},
+			map[string]any{"optionId": "plan_bypass", "name": "Yes, implement plan and bypass permissions", "kind": "allow_always"},
+			map[string]any{"optionId": "reject_once", "name": "No, plan needs changes", "kind": "reject_once"},
+		},
+	})
+	return devinACPMessage{ID: json.RawMessage(`77`), Params: params}
+}
+
+func TestDevinPermissionIsPlanExit(t *testing.T) {
+	if !devinPermissionIsPlanExit(map[string]any{
+		"toolCall": map[string]any{"toolCallId": "call-1"},
+		"options": []any{
+			map[string]any{"optionId": "plan_accept_edits", "kind": "allow_once"},
+			map[string]any{"optionId": "reject_once", "kind": "reject_once"},
+		},
+	}) {
+		t.Fatal("plan_ option ids should mark a plan exit request")
+	}
+	if !devinPermissionIsPlanExit(map[string]any{
+		"toolCall": map[string]any{"toolCallId": "call-2", "kind": "switch_mode"},
+	}) {
+		t.Fatal("switch_mode tool calls should mark a plan exit request")
+	}
+	if devinPermissionIsPlanExit(map[string]any{
+		"toolCall": map[string]any{"toolCallId": "call-3", "kind": "execute"},
+		"options": []any{
+			map[string]any{"optionId": "allow_once", "kind": "allow_once"},
+			map[string]any{"optionId": "reject_once", "kind": "reject_once"},
+		},
+	}) {
+		t.Fatal("ordinary permission request must not be classified as plan exit")
+	}
+}
+
+func TestDevinPlanExitPermissionRequest(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	sess := *session
+	run := &activeRun{runID: "devin-plan", sessionID: session.ID, backend: SessionBackendDevinACP, agent: AgentDevin}
+
+	manager.handleDevinPermissionRequest(&devinACPClient{}, sess, run, devinPlanExitPermissionMessage())
+
+	pending, ok := run.pendingApprovalRequest()
+	if !ok {
+		t.Fatal("expected a pending approval request")
+	}
+	if pending.Kind != pendingServerRequestPlanApproval {
+		t.Fatalf("pending kind = %q, want %q", pending.Kind, pendingServerRequestPlanApproval)
+	}
+	if pending.ItemID != "call-exit" {
+		t.Fatalf("pending item id = %q, want call-exit", pending.ItemID)
+	}
+	if !run.completedPlanToolSeen() {
+		t.Fatal("exit-plan request must mark the completed plan tool")
+	}
+	record, err := manager.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if record.AssistantState != string(AssistantStateWaitingPlanApproval) {
+		t.Fatalf("assistant state = %q, want %q", record.AssistantState, AssistantStateWaitingPlanApproval)
+	}
+	var approvalReq *Event
+	for i, event := range readTextDeltaTestEvents(t, manager, session.ID) {
+		if event.Type == "approval_req" {
+			approvalReq = &readTextDeltaTestEvents(t, manager, session.ID)[i]
+		}
+	}
+	if approvalReq == nil || stringValue(approvalReq.Payload["kind"]) != string(pendingServerRequestPlanApproval) {
+		t.Fatalf("expected plan_approval approval_req event, got %#v", approvalReq)
+	}
+}
+
+func TestDevinOrdinaryPermissionRequest(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	sess := *session
+	run := &activeRun{runID: "devin-cmd", sessionID: session.ID, backend: SessionBackendDevinACP, agent: AgentDevin}
+	params, _ := json.Marshal(map[string]any{
+		"sessionId": "native-1",
+		"toolCall":  map[string]any{"toolCallId": "call-1", "kind": "execute", "title": "Run command"},
+		"options": []any{
+			map[string]any{"optionId": "allow_once", "kind": "allow_once"},
+			map[string]any{"optionId": "reject_once", "kind": "reject_once"},
+		},
+	})
+
+	client, _ := newDevinTestClient()
+	// With the agent-side smart mode applied, elevated sessions surface the
+	// request instead of falling back to client-side auto-approve.
+	client.setSessionModes("native-1", &devinACPSessionModes{
+		CurrentModeID:    "smart",
+		AvailableModeIDs: map[string]bool{"smart": true},
+	}, true)
+	manager.handleDevinPermissionRequest(client, sess, run, devinACPMessage{ID: json.RawMessage(`12`), Params: params})
+
+	pending, ok := run.pendingApprovalRequest()
+	if !ok || pending.Kind != pendingServerRequestCommandApproval {
+		t.Fatalf("expected command approval pending request, got %#v", pending)
+	}
+	if run.completedPlanToolSeen() {
+		t.Fatal("ordinary permission request must not mark the plan tool")
+	}
+	record, err := manager.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if record.AssistantState != string(AssistantStateWaitingApproval) {
+		t.Fatalf("assistant state = %q, want %q", record.AssistantState, AssistantStateWaitingApproval)
+	}
+}
+
+func TestDevinPermissionResponsePayloadPlanExit(t *testing.T) {
+	request := &pendingServerRequest{
+		Kind: pendingServerRequestPlanApproval,
+		Permissions: map[string]any{
+			"options": []any{
+				map[string]any{"optionId": "plan_accept_edits", "kind": "allow_once"},
+				map[string]any{"optionId": "plan_bypass", "kind": "allow_always"},
+				map[string]any{"optionId": "reject_once", "kind": "reject_once"},
+			},
+		},
+	}
+	assertOption := func(session tables.WebSessionTable, want string) {
+		t.Helper()
+		payload, _ := devinPermissionResponsePayload("approve", request, session).(map[string]any)
+		outcome := decodeRawObject(payload["outcome"])
+		if got := stringValue(outcome["optionId"]); got != want {
+			t.Fatalf("approve optionId = %q, want %q", got, want)
+		}
+	}
+	assertOption(tables.WebSessionTable{PermissionLevel: string(PermissionLevelDefault)}, "plan_accept_edits")
+	assertOption(tables.WebSessionTable{PermissionLevel: string(PermissionLevelElevated)}, "plan_accept_edits")
+	assertOption(tables.WebSessionTable{PermissionLevel: string(PermissionLevelYolo)}, "plan_bypass")
+
+	payload, _ := devinPermissionResponsePayload("reject", request, tables.WebSessionTable{}).(map[string]any)
+	if got := stringValue(decodeRawObject(payload["outcome"])["outcome"]); got != "cancelled" {
+		t.Fatalf("reject outcome = %q, want cancelled", got)
+	}
+}
+
+func TestDevinSwitchModeToolCallProjectsPlanCard(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	run := &activeRun{runID: "devin-plan-card", sessionID: session.ID, backend: SessionBackendDevinACP, agent: AgentDevin}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	manager.handleDevinACPUpdate(sess, run, proj, devinACPUpdatePayload("tool_call", map[string]any{
+		"toolCallId": "call-exit",
+		"title":      "Exit plan mode",
+		"kind":       "switch_mode",
+		"rawInput":   map[string]any{"modeId": "accept-edits", "plan": "# Plan\n\n1. Ship it"},
+		"locations":  []any{map[string]any{"path": "/home/user/.devin/plans/plan-1.md"}},
+	}))
+	if !run.completedPlanToolSeen() {
+		t.Fatal("switch_mode tool call must mark the completed plan tool")
+	}
+	// The follow-up tool_call_update after the permission resolves must keep
+	// the plan text instead of overwriting it with an empty output.
+	manager.handleDevinACPUpdate(sess, run, proj, devinACPUpdatePayload("tool_call_update", map[string]any{
+		"toolCallId": "call-exit",
+		"status":     "completed",
+	}))
+
+	var planEnd *Event
+	events := readTextDeltaTestEvents(t, manager, session.ID)
+	for i, event := range events {
+		if event.Type == "tool_end" && stringValue(event.Payload["tid"]) == "call-exit" {
+			planEnd = &events[i]
+		}
+	}
+	if planEnd == nil {
+		t.Fatalf("expected a tool_end for the plan card, got %#v", events)
+	}
+	if stringValue(planEnd.Payload["kind"]) != "plan" || stringValue(planEnd.Payload["name"]) != "Plan" {
+		t.Fatalf("plan card must use kind plan / name Plan, got %#v", planEnd.Payload)
+	}
+	if stringValue(planEnd.Payload["out"]) != "# Plan\n\n1. Ship it" {
+		t.Fatalf("plan card lost the plan text: %#v", planEnd.Payload)
+	}
+	if meta := decodeRawObject(planEnd.Payload["meta"]); stringValue(meta["path"]) != "/home/user/.devin/plans/plan-1.md" {
+		t.Fatalf("plan card missing plan path: %#v", meta)
+	}
+}
+
+func TestDevinResolvePlanApprovalForSendApprovesOnDefaultMode(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	record := *session
+	record.WorkflowMode = string(WorkflowModeDefault)
+	run := &activeRun{runID: "devin-plan-send", sessionID: session.ID, backend: SessionBackendDevinACP, agent: AgentDevin, done: make(chan struct{})}
+	client, stdin := newDevinTestClient()
+	run.setDevinACP(client)
+	run.setPendingServerRequest(&pendingServerRequest{
+		RawID: json.RawMessage(`77`),
+		Kind:  pendingServerRequestPlanApproval,
+		Permissions: map[string]any{
+			"options": []any{
+				map[string]any{"optionId": "plan_accept_edits", "kind": "allow_once"},
+				map[string]any{"optionId": "plan_bypass", "kind": "allow_always"},
+				map[string]any{"optionId": "reject_once", "kind": "reject_once"},
+			},
+		},
+	})
+	run.markCompletedPlanTool()
+	manager.mu.Lock()
+	manager.runs[session.ID] = run
+	manager.mu.Unlock()
+
+	handled, err := manager.resolveDevinPlanApprovalForSend(context.Background(), session.ID, record, "Implement the plan.", nil, nil)
+	if err != nil || !handled {
+		t.Fatalf("resolveDevinPlanApprovalForSend = handled %v, err %v", handled, err)
+	}
+	if _, ok := run.pendingApprovalRequest(); ok {
+		t.Fatal("pending request must be cleared after approval")
+	}
+	if run.completedPlanToolSeen() {
+		t.Fatal("completed plan tool marker must be cleared after approval")
+	}
+	var response struct {
+		ID     int             `json:"id"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(stdin.Bytes()), &response); err != nil {
+		t.Fatalf("invalid response written to ACP stdin: %v", err)
+	}
+	outcome := decodeRawObject(decodeRawObject(response.Result)["outcome"])
+	if stringValue(outcome["outcome"]) != "selected" || stringValue(outcome["optionId"]) != "plan_accept_edits" {
+		t.Fatalf("unexpected permission outcome: %s", response.Result)
+	}
+
+	events := readTextDeltaTestEvents(t, manager, session.ID)
+	var sawApprovalRes, sawUserMessage bool
+	for _, event := range events {
+		if event.Type == "approval_res" && stringValue(event.Payload["act"]) == "approve" {
+			sawApprovalRes = true
+		}
+		if event.Type == "msg_u" && stringValue(event.Payload["txt"]) == "Implement the plan." {
+			sawUserMessage = true
+		}
+	}
+	if !sawApprovalRes || !sawUserMessage {
+		t.Fatalf("expected approval_res and msg_u events, got %#v", events)
+	}
+	if queued := manager.pendingInputsSnapshot(session.ID); len(queued) != 0 {
+		t.Fatalf("approved plan must not queue the message, got %#v", queued)
+	}
+}
+
+func TestDevinResolvePlanApprovalForSendQueuesFeedbackInPlanMode(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	record := *session
+	record.WorkflowMode = string(WorkflowModePlan)
+	run := &activeRun{runID: "devin-plan-feedback", sessionID: session.ID, backend: SessionBackendDevinACP, agent: AgentDevin, done: make(chan struct{})}
+	client, stdin := newDevinTestClient()
+	run.setDevinACP(client)
+	run.setPendingServerRequest(&pendingServerRequest{
+		RawID: json.RawMessage(`77`),
+		Kind:  pendingServerRequestPlanApproval,
+		Permissions: map[string]any{
+			"options": []any{
+				map[string]any{"optionId": "plan_accept_edits", "kind": "allow_once"},
+				map[string]any{"optionId": "reject_once", "kind": "reject_once"},
+			},
+		},
+	})
+	run.markCompletedPlanTool()
+	manager.mu.Lock()
+	manager.runs[session.ID] = run
+	manager.mu.Unlock()
+
+	handled, err := manager.resolveDevinPlanApprovalForSend(context.Background(), session.ID, record, "Please also handle retries", nil, nil)
+	if err != nil || !handled {
+		t.Fatalf("resolveDevinPlanApprovalForSend = handled %v, err %v", handled, err)
+	}
+	outcome := decodeRawObject(decodeRawObject(mustUnmarshalDevinResponse(t, stdin.Bytes()))["outcome"])
+	if stringValue(outcome["outcome"]) != "cancelled" {
+		t.Fatalf("feedback while still in plan mode must decline the exit, got %s", stdin.Bytes())
+	}
+	queued := manager.pendingInputsSnapshot(session.ID)
+	if len(queued) != 1 || queued[0].Text != "Please also handle retries" {
+		t.Fatalf("expected the message to be queued for the next turn, got %#v", queued)
+	}
+}
+
+func mustUnmarshalDevinResponse(t *testing.T, data []byte) map[string]any {
+	t.Helper()
+	var response struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(data), &response); err != nil {
+		t.Fatalf("invalid response written to ACP stdin: %v", err)
+	}
+	return decodeRawObject(response.Result)
 }

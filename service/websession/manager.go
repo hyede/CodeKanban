@@ -4530,6 +4530,9 @@ func (m *Manager) sendMessageInternal(
 	if err := m.waitForCodexRunDrain(ctx, sessionID); err != nil {
 		return err
 	}
+	if handled, err := m.resolveDevinPlanApprovalForSend(ctx, sessionID, record, text, attachments, attachmentIDs); handled || err != nil {
+		return err
+	}
 	if m.hasActiveRun(sessionID) {
 		return fmt.Errorf("session is already running")
 	}
@@ -6723,11 +6726,22 @@ func (m *Manager) respondToApproval(sessionID, action string) error {
 
 	if pending, ok := run.pendingApprovalRequest(); ok {
 		if run.backend == SessionBackendDevinACP && run.devinACP() != nil {
-			if err := run.devinACP().respond(pending.RawID, devinPermissionResponsePayload(action, pending)); err != nil {
+			if err := run.devinACP().respond(pending.RawID, devinPermissionResponsePayload(action, pending, record)); err != nil {
 				return err
 			}
 			run.clearPendingServerRequest()
 			m.resumeActiveCallTimeout(run)
+			if pending.Kind == pendingServerRequestPlanApproval {
+				run.clearCompletedPlanTool()
+				if action != "reject" {
+					// Approving exit-plan switches the agent into
+					// accept-edits/bypass; keep the workflow mode in sync.
+					if _, err := m.UpdateWorkflowMode(context.Background(), sessionID, WorkflowModeDefault); err != nil && m.logger != nil {
+						m.logger.Warn("failed to sync workflow mode after Devin plan approval",
+							zap.String("sessionId", sessionID), zap.Error(err))
+					}
+				}
+			}
 			record, err = m.GetSession(context.Background(), sessionID)
 			if err != nil {
 				return err

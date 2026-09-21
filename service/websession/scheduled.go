@@ -781,7 +781,11 @@ func (m *Manager) validateScheduledPlanApproval(
 ) error {
 	if payload.PendingItemID == "" {
 		if m.hasActiveRun(session.ID) {
-			return errScheduledPlanExpired
+			// Devin's exit-plan permission keeps the run alive while it waits;
+			// the send path resolves the request, so it is not an expiry.
+			if run, _ := m.devinPendingPlanApproval(session.ID); run == nil {
+				return errScheduledPlanExpired
+			}
 		}
 		return nil
 	}

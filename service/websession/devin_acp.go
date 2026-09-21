@@ -858,6 +858,19 @@ func devinACPSessionUpdateKind(raw json.RawMessage) string {
 	return payload.Update.SessionUpdate
 }
 
+// devinToolPlanPath returns the plan file path advertised by a switch_mode
+// tool call's locations, used as the plan card subtitle.
+func devinToolPlanPath(update map[string]any) string {
+	if items, ok := update["locations"].([]any); ok {
+		for _, item := range items {
+			if path := strings.TrimSpace(stringValue(decodeRawObject(item)["path"])); path != "" {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
 // devinToolHistoryKind maps the raw ACP tool kind to a history kind the UI
 // understands. Unknown kinds fall back to dynamic_tool_call like Pi.
 func devinToolHistoryKind(acpKind string) string {
@@ -1290,6 +1303,44 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 		toolID := firstNonEmpty(stringValue(update["toolCallId"]), utils.NewID())
 		title := firstNonEmpty(stringValue(update["title"]), "Tool")
 		rawKind := stringValue(update["kind"])
+		if devinToolCallIsPlanExit(update) {
+			// Devin's "Exit plan mode" call carries the finished plan in
+			// rawInput.plan. Project it as a Plan card like Claude's
+			// ExitPlanMode so the implement action can render while the
+			// companion session/request_permission is still pending.
+			run.markCompletedPlanTool()
+			rawInput := decodeRawObject(update["rawInput"])
+			planText := strings.TrimSpace(stringValue(rawInput["plan"]))
+			meta := map[string]any{"title": "Plan", "kind": "plan", "acpKind": rawKind}
+			if planPath := devinToolPlanPath(update); planPath != "" {
+				meta["path"] = planPath
+				meta["subtitle"] = planPath
+			}
+			proj.mu.Lock()
+			proj.tools[toolID] = &devinToolState{
+				name:     "Plan",
+				kind:     "plan",
+				input:    update["rawInput"],
+				parentID: messageID,
+				meta:     meta,
+			}
+			proj.mu.Unlock()
+			_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
+				ID: utils.NewID(), Type: "tool_st", RunID: run.runID, ParentID: messageID, ThreadID: contextID,
+				Timestamp: time.Now(), Payload: map[string]any{
+					"tid": toolID, "name": "Plan", "kind": "plan", "meta": meta, "ok": true,
+				},
+			})
+			_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
+				ID: utils.NewID(), Type: "tool_end", RunID: run.runID, ParentID: messageID, ThreadID: contextID,
+				Timestamp: time.Now(), Payload: map[string]any{
+					"tid": toolID, "name": "Plan", "kind": "plan",
+					"out": planText, "ok": true, "status": "completed", "meta": meta,
+				},
+			})
+			m.closeDevinMessage(session, run, proj, contextID)
+			return
+		}
 		mappedKind := devinToolHistoryKind(rawKind)
 		tool := &devinToolState{
 			name:     title,
@@ -1347,6 +1398,12 @@ func (m *Manager) handleDevinACPUpdate(session tables.WebSessionTable, run *acti
 			return
 		}
 		output := devinToolOutputText(update)
+		if mappedKind == "plan" && strings.TrimSpace(output) == "" {
+			// The plan card's body comes from rawInput.plan on the tool_call;
+			// the follow-up tool_call_update carries no output, so keep the
+			// captured plan text instead of overwriting it with "".
+			output = truncateToolOutput("plan", strings.TrimSpace(stringValue(decodeRawObject(input)["plan"])))
+		}
 		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
 			ID: utils.NewID(), Type: "tool_end", RunID: run.runID, ParentID: parentID, ThreadID: contextID,
 			Timestamp: time.Now(), Payload: map[string]any{
@@ -1650,6 +1707,11 @@ func (m *Manager) syncDevinSessionMode(ctx context.Context, sessionID string) {
 	if run == nil || run.backend != SessionBackendDevinACP {
 		return
 	}
+	if pending, ok := run.pendingServerRequest(); ok && pending.Kind == pendingServerRequestPlanApproval {
+		// A pending "Exit plan mode" request owns the mode transition; pushing
+		// session/set_mode now would race the agent's own switch on approval.
+		return
+	}
 	client := run.devinACP()
 	if client == nil {
 		return
@@ -1669,26 +1731,36 @@ func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session t
 	var params map[string]any
 	_ = json.Unmarshal(message.Params, &params)
 	options, _ := params["options"].([]any)
+	planExit := devinPermissionIsPlanExit(params)
 	// Yolo keeps the client-side auto-answer as a safety net (bypass should
 	// not produce requests at all). Elevated falls back to it only when the
 	// agent-side smart mode could not be applied — without it every request
 	// would reach the user, the legacy behavior for agents without modes.
-	autoApprove := effectivePermissionLevel(session) == PermissionLevelYolo ||
-		(effectivePermissionLevel(session) == PermissionLevelElevated && !client.modeAppliedSnapshot())
+	// Exiting plan mode always asks the user, matching Claude/Codex.
+	autoApprove := !planExit && (effectivePermissionLevel(session) == PermissionLevelYolo ||
+		(effectivePermissionLevel(session) == PermissionLevelElevated && !client.modeAppliedSnapshot()))
 	if !autoApprove {
 		now := time.Now()
 		request := &pendingServerRequest{
 			RawID:       append(json.RawMessage(nil), message.ID...),
 			Kind:        pendingServerRequestCommandApproval,
+			ItemID:      strings.TrimSpace(stringValue(decodeRawObject(params["toolCall"])["toolCallId"])),
 			Prompt:      devinPermissionPrompt(params),
 			Command:     devinPermissionCommand(params),
 			RequestedAt: &now,
 			Permissions: params,
 		}
+		assistantState := AssistantStateWaitingApproval
+		if planExit {
+			request.Kind = pendingServerRequestPlanApproval
+			request.Prompt = "Exit plan mode"
+			run.markCompletedPlanTool()
+			assistantState = AssistantStateWaitingPlanApproval
+		}
 		run.setPendingServerRequest(request)
 		m.pauseActiveCallTimeout(run)
-		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{ID: utils.NewID(), Type: "approval_req", RunID: run.runID, ParentID: run.assistantMessageID, Timestamp: now, Payload: map[string]any{"kind": string(request.Kind), "prompt": request.Prompt, "command": request.Command}})
-		_ = m.updateRuntimeState(context.Background(), session.ID, applyAssistantStateUpdates(map[string]any{"updated_at": now}, AssistantStateWaitingApproval, now))
+		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{ID: utils.NewID(), Type: "approval_req", RunID: run.runID, ParentID: run.assistantMessageID, Timestamp: now, Payload: map[string]any{"kind": string(request.Kind), "iid": request.ItemID, "prompt": request.Prompt, "command": request.Command}})
+		_ = m.updateRuntimeState(context.Background(), session.ID, applyAssistantStateUpdates(map[string]any{"updated_at": now}, assistantState, now))
 		m.broadcastSessionSummary(context.Background(), session.ID)
 		return
 	}
@@ -1707,6 +1779,32 @@ func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session t
 	_ = client.respond(message.ID, map[string]any{"outcome": outcome})
 }
 
+// devinToolCallIsPlanExit reports whether a switch_mode tool call is Devin's
+// "Exit plan mode" (any target other than plan). A switch INTO plan mode is
+// not a completed plan.
+func devinToolCallIsPlanExit(update map[string]any) bool {
+	if !strings.EqualFold(strings.TrimSpace(stringValue(update["kind"])), "switch_mode") {
+		return false
+	}
+	modeID := strings.TrimSpace(stringValue(decodeRawObject(update["rawInput"])["modeId"]))
+	return modeID != "plan"
+}
+
+// devinPermissionIsPlanExit reports whether a session/request_permission
+// call is Devin's "Exit plan mode" gate: its options use plan_ prefixed ids
+// (plan_accept_edits, plan_bypass) and/or the tool call is a switch_mode
+// targeting a non-plan mode.
+func devinPermissionIsPlanExit(params map[string]any) bool {
+	if options, ok := params["options"].([]any); ok {
+		for _, raw := range options {
+			if strings.HasPrefix(stringValue(decodeRawObject(raw)["optionId"]), "plan_") {
+				return true
+			}
+		}
+	}
+	return devinToolCallIsPlanExit(decodeRawObject(params["toolCall"]))
+}
+
 func devinPermissionPrompt(params map[string]any) string {
 	if reason := strings.TrimSpace(stringValue(params["reason"])); reason != "" {
 		return reason
@@ -1722,13 +1820,29 @@ func devinPermissionCommand(params map[string]any) string {
 	return strings.TrimSpace(firstNonEmpty(stringValue(rawInput["command"]), stringValue(rawInput["cmd"])))
 }
 
-func devinPermissionResponsePayload(action string, request *pendingServerRequest) any {
+func devinPermissionResponsePayload(action string, request *pendingServerRequest, session tables.WebSessionTable) any {
 	if action == "reject" {
 		return map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}
 	}
 	optionID := ""
 	if request != nil {
-		if options, ok := request.Permissions["options"].([]any); ok {
+		options, _ := request.Permissions["options"].([]any)
+		// Plan exit offers mode-specific options: bypass keeps yolo sessions
+		// unrestricted, everything else exits into accept-edits.
+		if request.Kind == pendingServerRequestPlanApproval {
+			preferred := "plan_accept_edits"
+			if effectivePermissionLevel(session) == PermissionLevelYolo {
+				preferred = "plan_bypass"
+			}
+			for _, raw := range options {
+				option, _ := raw.(map[string]any)
+				if stringValue(option["optionId"]) == preferred {
+					optionID = preferred
+					break
+				}
+			}
+		}
+		if optionID == "" {
 			for _, raw := range options {
 				option, _ := raw.(map[string]any)
 				if strings.Contains(stringValue(option["kind"]), "allow") {
@@ -1742,6 +1856,82 @@ func devinPermissionResponsePayload(action string, request *pendingServerRequest
 		return map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}
 	}
 	return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": optionID}}
+}
+
+// devinPendingPlanApproval returns the run's pending "Exit plan mode"
+// request, if the active run is a Devin ACP run blocked on one.
+func (m *Manager) devinPendingPlanApproval(sessionID string) (*activeRun, *pendingServerRequest) {
+	m.mu.RLock()
+	run := m.runs[sessionID]
+	m.mu.RUnlock()
+	if run == nil || run.backend != SessionBackendDevinACP || run.devinACP() == nil {
+		return nil, nil
+	}
+	pending, ok := run.pendingApprovalRequest()
+	if !ok || pending.Kind != pendingServerRequestPlanApproval {
+		return nil, nil
+	}
+	return run, pending
+}
+
+// resolveDevinPlanApprovalForSend handles a message sent while a Devin run is
+// blocked on the "Exit plan mode" permission. The committed workflow mode
+// carries the intent: the implement action switches the session to the
+// default workflow before sending, so the request is approved in place and
+// the agent continues the same run; any other message is feedback, so the
+// exit is declined and the text is queued for the next turn.
+// Returns handled=true when the send was consumed by this flow.
+func (m *Manager) resolveDevinPlanApprovalForSend(
+	ctx context.Context,
+	sessionID string,
+	record tables.WebSessionTable,
+	text string,
+	attachments []Attachment,
+	attachmentIDs []string,
+) (bool, error) {
+	run, pending := m.devinPendingPlanApproval(sessionID)
+	if run == nil || pending == nil {
+		return false, nil
+	}
+	approve := effectiveWorkflowMode(record) == WorkflowModeDefault
+	action := "reject"
+	if approve {
+		action = "approve"
+	}
+	if err := run.devinACP().respond(pending.RawID, devinPermissionResponsePayload(action, pending, record)); err != nil {
+		return true, err
+	}
+	run.clearPendingServerRequest()
+	run.clearCompletedPlanTool()
+	m.resumeActiveCallTimeout(run)
+
+	now := time.Now()
+	_, _ = m.appendAndBroadcast(ctx, sessionID, record, Event{
+		ID: utils.NewID(), Type: "approval_res", RunID: run.runID, ParentID: run.assistantMessageID, Timestamp: now,
+		Payload: map[string]any{"act": action, "prompt": pending.Prompt, "command": pending.Command},
+	})
+	if !approve {
+		// Stay in plan mode: the message is queued and dispatched as the next
+		// prompt once this turn ends.
+		_, err := m.queuePendingInput(sessionID, text, attachmentIDs, PendingInputModeQueue, "")
+		m.broadcastSessionSummary(ctx, sessionID)
+		return true, err
+	}
+	userMessageID := utils.NewID()
+	_, _ = m.appendAndBroadcast(ctx, sessionID, record, Event{
+		ID: utils.NewID(), Type: "msg_u", RunID: run.runID, ParentID: userMessageID, Timestamp: now,
+		Payload: map[string]any{
+			"mid":  userMessageID,
+			"txt":  text,
+			"atts": attachmentPayloads(attachments),
+		},
+	})
+	_ = m.updateRuntimeState(ctx, sessionID, applyAssistantStateUpdates(map[string]any{"updated_at": now}, AssistantStateWorking, now))
+	m.broadcastSessionSummary(ctx, sessionID)
+	// syncDevinSessionMode was skipped while the plan approval was pending;
+	// push the mapped mode now that the request is resolved.
+	m.syncDevinSessionMode(ctx, sessionID)
+	return true, nil
 }
 
 func (m *Manager) finishDevinRun(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection) {
