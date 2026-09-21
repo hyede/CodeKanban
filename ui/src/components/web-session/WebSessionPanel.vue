@@ -10810,7 +10810,7 @@ function mergeSidebarSearchResults(
 }
 
 const crossProjectSessions = computed<CrossProjectSessionItem[]>(() => {
-  return collectWebSessionSidebarSessions(
+  const items = collectWebSessionSidebarSessions(
     sidebarVisibleProjectIds.value,
     webSessionStore.getSessions
   ).map(session => {
@@ -10821,6 +10821,7 @@ const crossProjectSessions = computed<CrossProjectSessionItem[]>(() => {
       isCurrent: session.projectId === props.projectId && session.id === activeSessionId.value,
     };
   });
+  return withProjectBadges(items);
 });
 
 const filteredCrossProjectSessions = computed(() => {
