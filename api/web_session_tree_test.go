@@ -110,7 +110,7 @@ func requestWebSessionTree(t *testing.T, app *fiber.App, method, target, body st
 	if body != "" {
 		request.Header.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
 	}
-	response, err := app.Test(request)
+	response, err := app.Test(request, -1)
 	if err != nil {
 		t.Fatalf("app.Test: %v", err)
 	}

@@ -11416,7 +11416,7 @@ function renderModelOption(info: {
   const optionNode = h(
     'div',
     {
-      ...(info.node.props ?? {}),
+      ...info.node.props,
       ...(removable ? { 'data-devin-recent': 'true' } : {}),
     },
     [
