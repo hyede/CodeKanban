@@ -81,6 +81,23 @@ describe('web session agent capabilities', () => {
     expect(resolveWebSessionAgentCapability(config, 'claude').supportsWebSession).toBe(false);
     expect(resolveWebSessionAgentCapability(config, 'pi').supportsWebSession).toBe(false);
 
+    config.hasDevin = true;
+    config.devinVersion = '3000.10.27';
+    config.supportsDevinWebSession = true;
+    expect(resolveWebSessionAgentCapability(config, 'devin')).toMatchObject({
+      installed: true,
+      version: '3000.10.27',
+      supportsWebSession: true,
+      supportsSteer: false,
+      supportsFollowUp: true,
+      supportsSubAgentRegistry: false,
+    });
+
+    config.supportsDevinSubAgents = true;
+    expect(resolveWebSessionAgentCapability(config, 'devin')).toMatchObject({
+      supportsSubAgentRegistry: true,
+    });
+
     config.hasPi = true;
     config.piVersion = '0.84.1';
     config.supportsPiWebSession = false;

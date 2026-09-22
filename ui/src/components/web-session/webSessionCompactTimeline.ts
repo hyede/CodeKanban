@@ -34,8 +34,32 @@ export function isTransportRetryNoteBlock(block: WebSessionBlock): boolean {
   );
 }
 
+/**
+ * Assistant placeholders that never produced any content. `msg_a_st` opens the
+ * bubble as soon as an assistant message starts, so a turn that only emitted
+ * reasoning plus tool calls leaves a finished, empty message row behind.
+ */
+export function isEmptyAssistantBlock(block: WebSessionBlock): boolean {
+  return (
+    block.kind === 'assistant' &&
+    block.done === true &&
+    block.text.trim().length === 0 &&
+    block.attachments.length === 0 &&
+    !block.detail
+  );
+}
+
+/**
+ * Pi reports every tool under one generic kind and its tool names rarely
+ * repeat, so Pi rows fold by adjacency instead of by kind/name. The server
+ * stamps the same key on the activity group it persists, which keeps both
+ * projections in step.
+ */
+export const PI_ACTIVITY_GROUP_KEY = 'pi_activity';
+
 export function projectWebSessionCompactTimelineBlocks(
-  blocks: WebSessionBlock[]
+  blocks: WebSessionBlock[],
+  agent?: string
 ): WebSessionBlock[] {
   if (blocks.length === 0) {
     return blocks;
@@ -50,7 +74,7 @@ export function projectWebSessionCompactTimelineBlocks(
       continue;
     }
 
-    const groupKey = getCompactToolGroupKey(block);
+    const groupKey = getCompactToolGroupKey(block, agent);
     const group = [block];
     let nextIndex = index + 1;
 
@@ -58,7 +82,7 @@ export function projectWebSessionCompactTimelineBlocks(
       const candidate = blocks[nextIndex];
       if (
         !isCompactToolBlock(candidate) ||
-        getCompactToolGroupKey(candidate) !== groupKey ||
+        getCompactToolGroupKey(candidate, agent) !== groupKey ||
         getSourceThreadId(candidate) !== getSourceThreadId(block)
       ) {
         break;
@@ -83,10 +107,11 @@ export function projectWebSessionCompactTimelineBlocks(
 }
 
 export function projectWebSessionVisibleTimelineBlocks(
-  blocks: WebSessionBlock[]
+  blocks: WebSessionBlock[],
+  agent?: string
 ): WebSessionBlock[] {
-  return projectWebSessionCompactTimelineBlocks(blocks).filter(
-    block => !isTransportRetryNoteBlock(block)
+  return projectWebSessionCompactTimelineBlocks(blocks, agent).filter(
+    block => !isTransportRetryNoteBlock(block) && !isEmptyAssistantBlock(block)
   );
 }
 
@@ -106,7 +131,10 @@ function getCompactToolKind(block: WebSessionBlock): string {
   return normalizeWebSessionActivityToolKind(String(block.tool?.kind || '').trim());
 }
 
-function getCompactToolGroupKey(block: WebSessionBlock): string {
+function getCompactToolGroupKey(block: WebSessionBlock, agent?: string): string {
+  if (agent === 'pi') {
+    return PI_ACTIVITY_GROUP_KEY;
+  }
   const kind = getCompactToolKind(block);
   if (kind !== 'dynamic_tool_call') {
     return kind;

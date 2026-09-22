@@ -18,16 +18,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func envContainsValue(env []string, key, value string) bool {
-	prefix := key + "="
-	for _, item := range env {
-		if item == prefix+value {
-			return true
-		}
-	}
-	return false
-}
-
 func TestBuildExecCommandClaudeUsesStreamJSONInput(t *testing.T) {
 	store, err := newStore(t.TempDir())
 	if err != nil {
@@ -115,13 +105,13 @@ func TestBuildClaudeResumeCommandKeepsDeferredHookPath(t *testing.T) {
 	}
 }
 
-func TestBuildExecCommandClaudeRouterUsesCCRCodeAndInjectsHookSettings(t *testing.T) {
+func TestBuildExecCommandClaudeRouterLaunchesCCRProfileWithSettings(t *testing.T) {
 	store, err := newStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("newStore returned error: %v", err)
 	}
 	manager := &Manager{
-		cfg:     Config{DataDir: t.TempDir(), ClaudePath: "claude", CCRPath: "ccr"},
+		cfg:     Config{DataDir: t.TempDir(), ClaudePath: "claude", CCRPath: "ccr", CCRProfile: "default-claude-code"},
 		store:   store,
 		logger:  zap.NewNop(),
 		runs:    map[string]*activeRun{},
@@ -140,8 +130,8 @@ func TestBuildExecCommandClaudeRouterUsesCCRCodeAndInjectsHookSettings(t *testin
 	if err != nil {
 		t.Fatalf("buildExecCommand returned error: %v", err)
 	}
-	if len(cmd.Args) < 2 || cmd.Args[0] != "ccr" || cmd.Args[1] != "code" {
-		t.Fatalf("expected CCR runtime to launch ccr code, got %v", cmd.Args)
+	if len(cmd.Args) < 4 || cmd.Args[0] != "ccr" || cmd.Args[1] != "default-claude-code" || cmd.Args[2] != "cli" || cmd.Args[3] != "--" {
+		t.Fatalf("expected CCR runtime to launch 'ccr <profile> cli --', got %v", cmd.Args)
 	}
 	joinedArgs := strings.Join(cmd.Args, " ")
 	for _, expected := range []string{
@@ -153,24 +143,17 @@ func TestBuildExecCommandClaudeRouterUsesCCRCodeAndInjectsHookSettings(t *testin
 			t.Fatalf("expected args to contain %q, got %v", expected, cmd.Args)
 		}
 	}
-	if strings.Contains(joinedArgs, "--settings") {
-		t.Fatalf("expected CCR runtime to let ccr code own --settings args, got %v", cmd.Args)
+	settingsIndex := -1
+	for index, arg := range cmd.Args {
+		if arg == "--settings" && index+1 < len(cmd.Args) {
+			settingsIndex = index + 1
+			break
+		}
 	}
-	if manager.ccrHookClaudePath == "" {
-		t.Fatalf("expected CCR runtime to configure a Claude settings shim")
+	if settingsIndex < 0 {
+		t.Fatalf("expected CCR runtime to pass CodeKanban hook settings via --settings, got %v", cmd.Args)
 	}
-	if !envContainsValue(cmd.Env, "CLAUDE_PATH", manager.ccrHookClaudePath) {
-		t.Fatalf("expected CCR runtime to pass shim via CLAUDE_PATH, got %v", cmd.Env)
-	}
-	shimData, err := os.ReadFile(strings.TrimSuffix(manager.ccrHookClaudePath, ".cmd") + ".js")
-	if err != nil {
-		t.Fatalf("failed to read CodeKanban CCR shim: %v", err)
-	}
-	if !strings.Contains(string(shimData), "settings.allowedHttpHookUrls = mergeUniqueStrings") ||
-		!strings.Contains(string(shimData), "settings.hooks = mergeHooks") {
-		t.Fatalf("expected CodeKanban CCR shim to merge hook settings, got %s", string(shimData))
-	}
-	settingsData, err := os.ReadFile(manager.claudeHookSettingsPath)
+	settingsData, err := os.ReadFile(cmd.Args[settingsIndex])
 	if err != nil {
 		t.Fatalf("failed to read Claude hook settings: %v", err)
 	}
@@ -181,27 +164,6 @@ func TestBuildExecCommandClaudeRouterUsesCCRCodeAndInjectsHookSettings(t *testin
 	if !strings.Contains(string(settingsData), `"matcher":"AskUserQuestion"`) ||
 		!strings.Contains(string(settingsData), `"matcher":"ExitPlanMode"`) {
 		t.Fatalf("expected hook settings for AskUserQuestion and ExitPlanMode, got %s", string(settingsData))
-	}
-}
-
-func TestEnsureCCRClaudeHookSettingsDoesNotRequireCCRConfig(t *testing.T) {
-	store, err := newStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("newStore returned error: %v", err)
-	}
-	manager := &Manager{
-		cfg:     Config{DataDir: t.TempDir(), ClaudePath: "claude", CCRPath: "ccr", CCRConfigPath: filepath.Join(t.TempDir(), "missing", "config.json")},
-		store:   store,
-		logger:  zap.NewNop(),
-		runs:    map[string]*activeRun{},
-		clients: map[*client]struct{}{},
-	}
-
-	if err := manager.ensureCCRClaudeHookSettings(); err != nil {
-		t.Fatalf("expected CCR hook setup to use the shim without reading CCR config, got %v", err)
-	}
-	if manager.ccrHookClaudePath == "" {
-		t.Fatal("expected CCR hook setup to configure the Claude shim path")
 	}
 }
 

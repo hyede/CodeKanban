@@ -81,8 +81,22 @@ test('buildAgentLaunchSpec builds Claude CCR terminal command', () => {
     extraArgs: ['--model', 'sonnet'],
   });
 
-  assert.equal(result.command, 'ccr code --model sonnet');
+  assert.equal(result.command, 'ccr default-claude-code cli -- --model sonnet');
   assert.equal(result.claudeRuntime, 'ccr');
+  assert.equal(result.ccrProfile, 'default-claude-code');
+  assert.deepEqual(result.argv, ['ccr', 'default-claude-code', 'cli', '--', '--model', 'sonnet']);
+});
+
+test('buildAgentLaunchSpec honors a custom CCR profile', () => {
+  const result = buildAgentLaunchSpec({
+    agent: 'claude',
+    claudeRuntime: 'ccr',
+    ccrProfile: ' my-profile ',
+    prompt: 'Hello',
+  });
+
+  assert.equal(result.ccrProfile, 'my-profile');
+  assert.equal(result.command, 'ccr my-profile cli --');
 });
 
 test('buildAgentLaunchSpec builds Pi plan profile without Codex permission flags', () => {

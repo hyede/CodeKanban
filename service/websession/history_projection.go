@@ -96,7 +96,17 @@ func compactToolKind(event Event) string {
 	return eventToolKind(event)
 }
 
-func compactToolGroupKey(event Event) string {
+// piActivityGroupKey is the compact-tool group key used for Pi sessions.
+//
+// Codex and Claude Code group by tool kind, which folds runs of the same kind
+// into one card. Pi tools are heterogeneous (bash, file edits, MCP and extension
+// tools) and rarely repeat, so adjacent Pi rows share one group instead.
+const piActivityGroupKey = "pi_activity"
+
+func compactToolGroupKey(event Event, agent Agent) string {
+	if normalizeAgent(agent) == AgentPi {
+		return piActivityGroupKey
+	}
 	kind := compactToolKind(event)
 	if kind != "dynamic_tool_call" {
 		return kind

@@ -219,6 +219,44 @@ codekanban-cli terminal continue --session-id <TERMINAL_SESSION_ID> --prompt "Co
 - If the user says to stay inside the current directory only, add `--strict-cwd`.
 - If the user asks for a terminal-style launch, use `workflow start`.
 
+## Devin ACP sessions
+
+CodeKanban Web Sessions support Devin CLI through the Agent Client Protocol (ACP).
+Before creating a Devin session, verify the CLI and its account on the machine
+running the CodeKanban service:
+
+```bash
+devin --version
+devin auth status
+devin auth login
+```
+
+Create a Devin Web Session with the default low-cost model used by the UI:
+
+```bash
+codekanban-cli web-session create \
+  --project-name codekanban \
+  --agent devin \
+  --model "SWE-2 High" \
+  --permission-level elevated \
+  --title "Devin ACP session"
+```
+
+Then send and monitor work through the normal Web Session commands:
+
+```bash
+codekanban-cli web-session send --session-id <SESSION_ID> --text "Inspect the current repository and report the smallest safe change."
+codekanban-cli web-session state --session-id <SESSION_ID>
+codekanban-cli web-session wait --session-id <SESSION_ID> --until done --settle-ms 2000
+```
+
+The service starts `devin acp` as a child process, passes the selected model
+with `--model`, and inherits the Devin CLI authentication environment. Devin
+ACP sessions currently accept text prompts and terminal/tool updates; image
+attachments are rejected until ACP image support is added. Keep the session
+permission level at `elevated` or `yolo` for tool use; `default` cancels ACP
+permission requests because the browser approval bridge is not implemented yet.
+
 ## Important note
 
 This is the only shipped CodeKanban Codex skill.

@@ -32,6 +32,13 @@ func TestPiProbeHelperProcess(t *testing.T) {
 			os.Exit(0)
 		}
 	}
+	if argsMarker := os.Getenv("CODEKANBAN_PI_PROBE_ARGS_MARKER"); argsMarker != "" {
+		file, _ := os.OpenFile(argsMarker, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if file != nil {
+			_, _ = file.WriteString(strings.Join(os.Args, "\n") + "\n---\n")
+			_ = file.Close()
+		}
+	}
 
 	skip := os.Getenv("CODEKANBAN_PI_PROBE_SKIP")
 	scanner := bufio.NewScanner(os.Stdin)
@@ -164,5 +171,28 @@ func TestBuildPiCommandSupportsConfiguredArguments(t *testing.T) {
 	}
 	if cmd.Path == "" || len(cmd.Args) != 3 || cmd.Args[1] != `C:\pi\dist\cli.js` || cmd.Args[2] != "--version" {
 		t.Fatalf("unexpected command: path=%q args=%#v", cmd.Path, cmd.Args)
+	}
+}
+
+func TestLoadPiModelCatalogKeepsExtensionsEnabled(t *testing.T) {
+	argsMarker := filepath.Join(t.TempDir(), "probe-args.txt")
+	t.Setenv("CODEKANBAN_PI_PROBE_HELPER", "1")
+	t.Setenv("CODEKANBAN_PI_PROBE_ARGS_MARKER", argsMarker)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	models, err := loadPiModelCatalog(ctx, piProbeTestCommand(), "")
+	if err != nil {
+		t.Fatalf("loadPiModelCatalog returned error: %v", err)
+	}
+	if len(models) != 1 || models[0].Provider != "anthropic" {
+		t.Fatalf("Pi model catalog = %#v", models)
+	}
+	raw, err := os.ReadFile(argsMarker)
+	if err != nil {
+		t.Fatalf("read probe args marker: %v", err)
+	}
+	if strings.Contains(string(raw), "--no-extensions") {
+		t.Fatal("model catalog probe must keep extensions enabled so plugin providers are listed")
 	}
 }

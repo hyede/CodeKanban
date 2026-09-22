@@ -102,15 +102,15 @@ func (m *Manager) withCodexQueryClient(
 		_ = stderr
 	}()
 
-	if _, err := client.request(ctx, "initialize", map[string]any{
-		"clientInfo": map[string]any{
-			"name":    "codekanban-web-session",
-			"version": "0.0.0",
-		},
+	initializeRequest := map[string]any{
 		"capabilities": map[string]any{
 			"experimentalApi": true,
 		},
-	}); err != nil {
+	}
+	if clientInfo := m.codexClientInfo(); clientInfo != nil {
+		initializeRequest["clientInfo"] = clientInfo
+	}
+	if _, err := client.request(ctx, "initialize", initializeRequest); err != nil {
 		return err
 	}
 	return fn(client)

@@ -230,7 +230,7 @@ test('startWorkflow launches Claude through CCR when requested', async () => {
 
   assert.equal(result.claudeRuntime, 'ccr');
   assert.equal(FakeWebSocket.instances.length, 1);
-  assert.match(FakeWebSocket.instances[0].sent[0].data, /^ccr code\r$/);
+  assert.match(FakeWebSocket.instances[0].sent[0].data, /^ccr default-claude-code cli --\r$/);
   assert.match(FakeWebSocket.instances[0].sent[1].data, /^Inspect\r$/);
 });
 

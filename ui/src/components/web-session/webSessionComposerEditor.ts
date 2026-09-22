@@ -27,6 +27,12 @@ export interface WebSessionComposerCompletionResult {
   options: WebSessionComposerCompletionOption[];
 }
 
+export type WebSessionComposerDocument =
+  | JSONContent
+  | {
+      toJSON: () => JSONContent;
+    };
+
 export type WebSessionComposerHighlightKind = 'skill' | 'unknown-skill' | 'goal' | 'compact';
 
 export interface WebSessionComposerHighlightRange {
@@ -82,7 +88,7 @@ export function resolveWebSessionComposerCompositionEnd(input: {
 }
 
 export function composerTextToJSON(value: string): JSONContent {
-  const text = String(value ?? '');
+  const text = normalizeComposerLineBreaks(String(value ?? ''));
   const content: JSONContent[] = [];
   let segmentStart = 0;
 
@@ -113,30 +119,185 @@ export function composerTextToJSON(value: string): JSONContent {
   };
 }
 
-export function composerJSONToText(value: JSONContent): string {
-  const paragraph = value.type === 'doc' ? value.content?.[0] : value;
-  if (!paragraph || paragraph.type !== 'paragraph') {
-    return '';
+function normalizeComposerLineBreaks(value: string) {
+  return value.replace(/\r\n?/g, '\n');
+}
+
+function readComposerDocument(value: WebSessionComposerDocument): JSONContent {
+  if (typeof value === 'object' && value !== null && 'toJSON' in value) {
+    return value.toJSON();
+  }
+  return value;
+}
+
+interface ComposerBoundary {
+  offset: number;
+  position: number;
+}
+
+interface ComposerParagraphLayout {
+  contentStart: number;
+  contentEnd: number;
+  nodeStart: number;
+  nodeEnd: number;
+  startOffset: number;
+  endOffset: number;
+  boundaries: ComposerBoundary[];
+}
+
+interface ComposerDocumentLayout {
+  text: string;
+  boundaries: number[];
+  paragraphs: ComposerParagraphLayout[];
+}
+
+function appendNormalizedText(
+  text: string,
+  startPosition: number,
+  output: string[],
+  boundaries: number[],
+  paragraphBoundaries: ComposerBoundary[]
+) {
+  let rawIndex = 0;
+  while (rawIndex < text.length) {
+    const character = text[rawIndex];
+    const rawLength = character === '\r' && text[rawIndex + 1] === '\n' ? 2 : 1;
+    output.push(character === '\r' ? '\n' : character);
+    rawIndex += rawLength;
+    const position = startPosition + rawIndex;
+    boundaries.push(position);
+    paragraphBoundaries.push({ offset: output.length, position });
+  }
+  return startPosition + rawIndex;
+}
+
+function buildComposerDocumentLayout(value: WebSessionComposerDocument): ComposerDocumentLayout {
+  const document = readComposerDocument(value);
+  const paragraphs =
+    document.type === 'paragraph'
+      ? [document]
+      : (document.content ?? []).filter(node => node.type === 'paragraph');
+  const normalizedParagraphs = paragraphs.length > 0 ? paragraphs : [{ type: 'paragraph' }];
+  const output: string[] = [];
+  const boundaries: number[] = [];
+  const paragraphLayouts: ComposerParagraphLayout[] = [];
+  let contentStart = 1;
+
+  normalizedParagraphs.forEach((paragraph, paragraphIndex) => {
+    const startOffset = output.length;
+    const paragraphBoundaries: ComposerBoundary[] = [
+      { offset: startOffset, position: contentStart },
+    ];
+    if (boundaries.length === 0) {
+      boundaries.push(contentStart);
+    }
+
+    let position = contentStart;
+    for (const node of paragraph.content ?? []) {
+      if (node.type === 'text') {
+        const next = appendNormalizedText(
+          String(node.text ?? ''),
+          position,
+          output,
+          boundaries,
+          paragraphBoundaries
+        );
+        position = next;
+        continue;
+      }
+      if (node.type === 'hardBreak') {
+        output.push('\n');
+        position += 1;
+        boundaries.push(position);
+        paragraphBoundaries.push({ offset: output.length, position });
+      }
+    }
+
+    const contentEnd = position;
+    const nodeStart = contentStart - 1;
+    const nodeEnd = contentEnd + 1;
+    const endOffset = output.length;
+    paragraphLayouts.push({
+      contentStart,
+      contentEnd,
+      nodeStart,
+      nodeEnd,
+      startOffset,
+      endOffset,
+      boundaries: paragraphBoundaries,
+    });
+
+    if (paragraphIndex < normalizedParagraphs.length - 1) {
+      output.push('\n');
+      const nextContentStart = contentEnd + 2;
+      boundaries.push(nextContentStart);
+      contentStart = nextContentStart;
+    }
+  });
+
+  return {
+    text: output.join(''),
+    boundaries,
+    paragraphs: paragraphLayouts,
+  };
+}
+
+export function composerJSONToText(value: WebSessionComposerDocument): string {
+  return buildComposerDocumentLayout(value).text;
+}
+
+function clampInteger(value: number, minimum: number, maximum: number) {
+  if (!Number.isFinite(value)) {
+    return minimum;
+  }
+  return Math.max(minimum, Math.min(Math.trunc(value), maximum));
+}
+
+export function composerOffsetToPosition(offset: number, document: WebSessionComposerDocument) {
+  const layout = buildComposerDocumentLayout(document);
+  const safeOffset = clampInteger(offset, 0, layout.text.length);
+  const lastParagraph = layout.paragraphs[layout.paragraphs.length - 1];
+  // A paragraph separator maps to the end of the preceding paragraph; the offset after it maps
+  // to the next paragraph's content start.
+  return layout.boundaries[safeOffset] ?? lastParagraph?.contentEnd ?? 1;
+}
+
+function positionToParagraphOffset(paragraph: ComposerParagraphLayout, position: number) {
+  const boundaries = paragraph.boundaries;
+  if (position <= boundaries[0]!.position) {
+    return boundaries[0]!.offset;
+  }
+  for (let index = 1; index < boundaries.length; index += 1) {
+    const boundary = boundaries[index]!;
+    if (position === boundary.position) {
+      return boundary.offset;
+    }
+    if (position < boundary.position) {
+      return boundary.offset;
+    }
+  }
+  return boundaries[boundaries.length - 1]!.offset;
+}
+
+export function composerPositionToOffset(position: number, document: WebSessionComposerDocument) {
+  const layout = buildComposerDocumentLayout(document);
+  const lastParagraph = layout.paragraphs[layout.paragraphs.length - 1]!;
+  const maximumPosition = lastParagraph.nodeEnd;
+  const safePosition = clampInteger(position, 0, maximumPosition);
+
+  for (const paragraph of layout.paragraphs) {
+    if (safePosition < paragraph.contentStart) {
+      return paragraph.startOffset > 0 ? paragraph.startOffset - 1 : 0;
+    }
+    if (safePosition <= paragraph.contentEnd) {
+      return positionToParagraphOffset(paragraph, safePosition);
+    }
+    if (safePosition <= paragraph.nodeEnd) {
+      return paragraph.endOffset;
+    }
   }
 
-  return (paragraph.content ?? [])
-    .map(node => {
-      if (node.type === 'text') {
-        return String(node.text ?? '');
-      }
-      return node.type === 'hardBreak' ? '\n' : '';
-    })
-    .join('');
-}
-
-export function composerOffsetToPosition(offset: number, textLength: number) {
-  const safeLength = Math.max(0, textLength);
-  return Math.max(0, Math.min(offset, safeLength)) + 1;
-}
-
-export function composerPositionToOffset(position: number, textLength: number) {
-  const safeLength = Math.max(0, textLength);
-  return Math.max(0, Math.min(position - 1, safeLength));
+  return layout.text.length;
 }
 
 export function buildWebSessionComposerHighlights(

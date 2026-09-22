@@ -18,6 +18,7 @@ function unavailableCapability(): WebSessionAgentCapability {
     supportsImages: false,
     supportsCompaction: false,
     supportsSteer: false,
+    supportsFork: false,
     supportsFollowUp: false,
     supportsGoal: false,
     supportsSubAgentRegistry: false,
@@ -96,6 +97,26 @@ export function resolveWebSessionAgentCapability(
       supportsCompaction: config.supportsPiWebSession === true,
       supportsSteer: config.supportsPiWebSession === true,
       supportsFollowUp: config.supportsPiWebSession === true,
+    };
+  }
+  if (agent === 'devin') {
+    return {
+      ...fallback,
+      installed: config.hasDevin === true,
+      version: config.devinVersion,
+      supportsWebSession: config.hasDevin === true && config.supportsDevinWebSession !== false,
+      supportsImages: true,
+      supportsCompaction: false,
+      supportsSteer: false,
+      supportsFork:
+        config.hasDevin === true &&
+        config.supportsDevinWebSession !== false &&
+        config.supportsDevinSessionFork === true,
+      supportsFollowUp: true,
+      supportsSubAgentRegistry:
+        config.hasDevin === true &&
+        config.supportsDevinWebSession !== false &&
+        config.supportsDevinSubAgents === true,
     };
   }
   return fallback;

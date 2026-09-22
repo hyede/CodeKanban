@@ -172,6 +172,7 @@ func TestSystemSettingsBackupPreviewWarnsOnVersionDifference(t *testing.T) {
 	}
 	foundPermissionSetting := false
 	foundAutoRetryDefaults := false
+	foundClientName := false
 	for _, section := range payload.Item.Sections {
 		if section.Key != "server.developer" {
 			continue
@@ -180,6 +181,9 @@ func TestSystemSettingsBackupPreviewWarnsOnVersionDifference(t *testing.T) {
 			if key == "webSessionCodexDefaultPermissionLevel" {
 				foundPermissionSetting = true
 			}
+			if key == "webSessionCodexClientName" {
+				foundClientName = true
+			}
 			if key == "webSessionAutoRetryDefaults" {
 				foundAutoRetryDefaults = true
 			}
@@ -187,6 +191,9 @@ func TestSystemSettingsBackupPreviewWarnsOnVersionDifference(t *testing.T) {
 	}
 	if !foundPermissionSetting {
 		t.Fatalf("expected developer backup preview to include the Codex permission setting, got %#v", payload.Item.Sections)
+	}
+	if !foundClientName {
+		t.Fatalf("expected developer backup preview to include the Codex client name, got %#v", payload.Item.Sections)
 	}
 	if !foundAutoRetryDefaults {
 		t.Fatalf("expected developer backup preview to include the web session auto-retry defaults, got %#v", payload.Item.Sections)
@@ -318,6 +325,7 @@ terminal:
 				Developer: loPtr(utils.DeveloperConfig{
 					EnableTerminalScrollback:              true,
 					EnableTerminalStateSnapshot:           true,
+					WebSessionCodexClientName:             "custom-client",
 					WebSessionCodexDefaultModel:           "custom-codex-model",
 					WebSessionCodexDefaultReasoningEffort: "high",
 					WebSessionCodexDefaultPermissionLevel: "yolo",
@@ -382,6 +390,9 @@ terminal:
 	}
 	if !cfg.Developer.EnableTerminalScrollback {
 		t.Fatalf("developer config not applied: %#v", cfg.Developer)
+	}
+	if cfg.Developer.WebSessionCodexClientName != "custom-client" {
+		t.Fatalf("Codex client name = %q, want custom-client", cfg.Developer.WebSessionCodexClientName)
 	}
 	if got := strings.TrimSpace(utils.CurrentPlatformShell(cfg.Terminal.Shell)); got != importedShell {
 		t.Fatalf("current platform shell = %q, want %q", got, importedShell)

@@ -6,6 +6,7 @@ export const APPROVAL_POLICIES = ['untrusted', 'on-request', 'never'];
 export const WORKFLOW_PROFILES = ['plan', 'standard', 'yolo'];
 export const AGENTS = ['codex', 'claude', 'pi'];
 export const CLAUDE_RUNTIMES = ['claude', 'ccr'];
+export const CCR_DEFAULT_PROFILE = 'default-claude-code';
 
 const KNOWN_STRUCTURED_FLAGS = new Set([
   '-s',
@@ -69,10 +70,18 @@ export function buildAgentLaunchSpec(options = {}) {
     if (options.permissions) {
       throw new CodeKanbanValidationError('structured permissions are only supported for codex in v1');
     }
-    const argv = claudeRuntime === 'ccr' ? ['ccr', 'code', ...extraArgs] : ['claude', ...extraArgs];
+    const ccrProfile =
+      claudeRuntime === 'ccr'
+        ? ensureOptionalString(options.ccrProfile)?.trim() || CCR_DEFAULT_PROFILE
+        : undefined;
+    // Claude Code Router v3 launches agent CLIs through profiles:
+    // `ccr <profile> cli -- <agent args>` forwards the agent arguments unchanged.
+    const argv =
+      claudeRuntime === 'ccr' ? ['ccr', ccrProfile, 'cli', '--', ...extraArgs] : ['claude', ...extraArgs];
     return {
       agent,
       claudeRuntime,
+      ...(ccrProfile ? { ccrProfile } : {}),
       profile,
       argv,
       command: toCommandString(argv),

@@ -268,11 +268,21 @@ export interface WebSessionAutoRetryDefaultsConfig {
 export interface DeveloperConfig {
   enableTerminalScrollback: boolean;
   enableTerminalStateSnapshot: boolean;
+  webSessionCodexClientName: string;
+  webSessionCodexClientTitle: string;
+  webSessionCodexClientVersion: string;
   webSessionCodexDefaultModel: string;
   webSessionCodexContextWindow?: number;
   webSessionCodexDefaultReasoningEffort: WebSessionCodexDefaultReasoningEffort;
   webSessionCodexDefaultPermissionLevel: WebSessionCodexDefaultPermissionLevel;
   webSessionCodexDefaultSyncMode: 'default' | 'fast' | 'deep';
+  webSessionClaudeDefaultModel: string;
+  webSessionClaudeDefaultReasoningEffort: WebSessionAgentDefaultReasoningEffort;
+  webSessionClaudeDefaultRuntime: WebSessionClaudeDefaultRuntime;
+  webSessionPiDefaultModel: string;
+  webSessionPiDefaultReasoningEffort: WebSessionAgentDefaultReasoningEffort;
+  webSessionDevinDefaultModel: string;
+  webSessionDevinDefaultReasoningEffort: WebSessionAgentDefaultReasoningEffort;
   webSessionAutoRetryDefaults: WebSessionAutoRetryDefaultsConfig;
   webSessionActiveCallTimeout: WebSessionActiveCallTimeoutConfig;
 }
@@ -367,7 +377,11 @@ export type WebSessionReasoningEffort =
 
 export type WebSessionCodexDefaultReasoningEffort = WebSessionReasoningEffort | 'model_default';
 
+export type WebSessionAgentDefaultReasoningEffort = WebSessionCodexDefaultReasoningEffort;
+
 export type WebSessionCodexDefaultPermissionLevel = 'default' | 'standard' | 'elevated' | 'yolo';
+
+export type WebSessionClaudeDefaultRuntime = 'default' | 'claude' | 'ccr';
 
 export interface WebSessionCodexModelInfo {
   model: string;
@@ -395,7 +409,7 @@ export interface WebSessionGoal {
   updatedAt: string;
 }
 
-export type WebSessionAgent = 'claude' | 'codex' | 'pi';
+export type WebSessionAgent = 'claude' | 'codex' | 'pi' | 'devin';
 
 export interface WebSessionAgentPermissionModeCapability {
   id: 'unrestricted' | 'approval' | 'sandbox' | string;
@@ -410,6 +424,7 @@ export interface WebSessionAgentCapability {
   supportsImages: boolean;
   supportsCompaction: boolean;
   supportsSteer: boolean;
+  supportsFork?: boolean;
   supportsFollowUp: boolean;
   supportsGoal: boolean;
   supportsSubAgentRegistry: boolean;
@@ -426,6 +441,30 @@ export interface WebSessionPiModelInfo {
   maxTokens: number;
 }
 
+export interface WebSessionDevinModelInfo {
+  model: string;
+  displayName: string;
+  family?: string;
+  defaultReasoningEffort?: WebSessionReasoningEffort;
+  supportedReasoningEfforts?: WebSessionReasoningEffort[];
+  maxContextTokens?: number;
+  maxOutputTokens?: number;
+  costTier?: string;
+  costSummary?: string;
+  description?: string;
+  recommended?: boolean;
+  isNew?: boolean;
+  isBeta?: boolean;
+  isPromo?: boolean;
+  supportsImages?: boolean;
+}
+
+export interface WebSessionCCRModelInfo {
+  model: string;
+  provider: string;
+  displayName?: string;
+}
+
 export interface WebSessionRuntimeConfig {
   agents?: Partial<Record<WebSessionAgent, WebSessionAgentCapability>>;
   capabilitiesRefreshing?: boolean;
@@ -434,10 +473,14 @@ export interface WebSessionRuntimeConfig {
   compactLimitTokens: number;
   source: WebSessionContextWindowSource;
   models: WebSessionCodexModelInfo[];
+  devinModels?: WebSessionDevinModelInfo[];
   piModels?: WebSessionPiModelInfo[];
+  ccrModels?: WebSessionCCRModelInfo[];
   hasCodex: boolean;
   hasClaudeCode: boolean;
+  hasDevin?: boolean;
   codexVersion?: string | null;
+  devinVersion?: string | null;
   hasPi?: boolean;
   piVersion?: string | null;
   supportsPiWebSession?: boolean;
@@ -445,6 +488,9 @@ export interface WebSessionRuntimeConfig {
   piMinVersion?: string;
   piDiagnostics?: string;
   supportsWebSession: boolean;
+  supportsDevinWebSession?: boolean;
+  supportsDevinSessionFork?: boolean;
+  supportsDevinSubAgents?: boolean;
   webSessionMinCodexVersion: string;
   supportsMultiAgentV2?: boolean;
   multiAgentV2MinCodexVersion?: string;
@@ -473,7 +519,7 @@ export interface WebSessionSummary {
   orderIndex: number;
   agent: WebSessionAgent;
   claudeRuntime?: 'claude' | 'ccr';
-  backend?: 'legacy_exec' | 'codex_app_server' | 'pi_rpc';
+  backend?: 'legacy_exec' | 'codex_app_server' | 'pi_rpc' | 'devin_acp';
   title: string;
   model: string;
   reasoningEffort: WebSessionReasoningEffort;

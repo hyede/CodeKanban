@@ -53,16 +53,77 @@ describe('web session composer plain-text document', () => {
     });
   });
 
-  it('maps UTF-16 text offsets to ProseMirror positions and back', () => {
-    const text = 'A😀\n中';
+  it('serializes every paragraph and preserves hard breaks and empty paragraphs', () => {
+    const document = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'first' }] },
+        { type: 'paragraph' },
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'third' },
+            { type: 'hardBreak' },
+            { type: 'text', text: 'line' },
+          ],
+        },
+      ],
+    };
+
+    expect(composerJSONToText(document)).toBe('first\n\nthird\nline');
+  });
+
+  it('maps UTF-16 offsets to positions across paragraph boundaries', () => {
+    const document = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'b' }] },
+      ],
+    };
+
+    expect(composerJSONToText(document)).toBe('a\nb');
+    expect([0, 1, 2, 3].map(offset => composerOffsetToPosition(offset, document))).toEqual([
+      1, 2, 4, 5,
+    ]);
+    expect([1, 2, 4, 5].map(position => composerPositionToOffset(position, document))).toEqual([
+      0, 1, 2, 3,
+    ]);
+    expect(composerPositionToOffset(0, document)).toBe(0);
+    expect(composerPositionToOffset(3, document)).toBe(1);
+    expect(composerPositionToOffset(100, document)).toBe(3);
+    expect(composerOffsetToPosition(-10, document)).toBe(1);
+    expect(composerOffsetToPosition(100, document)).toBe(5);
+  });
+
+  it('maps empty paragraphs, hard breaks, Unicode, and document ends', () => {
+    const document = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: '😀' }, { type: 'hardBreak' }] },
+        { type: 'paragraph' },
+        { type: 'paragraph', content: [{ type: 'text', text: '中' }] },
+      ],
+    };
+    const text = composerJSONToText(document);
+
+    expect(text).toBe('😀\n\n\n中');
     for (let offset = 0; offset <= text.length; offset += 1) {
-      const position = composerOffsetToPosition(offset, text.length);
-      expect(composerPositionToOffset(position, text.length)).toBe(offset);
+      const position = composerOffsetToPosition(offset, document);
+      expect(composerPositionToOffset(position, document)).toBe(offset);
     }
-    expect(composerOffsetToPosition(-10, text.length)).toBe(1);
-    expect(composerOffsetToPosition(100, text.length)).toBe(text.length + 1);
-    expect(composerPositionToOffset(-10, text.length)).toBe(0);
-    expect(composerPositionToOffset(100, text.length)).toBe(text.length);
+    expect(composerOffsetToPosition(0, document)).toBe(1);
+    expect(composerOffsetToPosition(2, document)).toBe(3);
+    expect(composerOffsetToPosition(3, document)).toBe(4);
+    expect(composerOffsetToPosition(4, document)).toBe(6);
+    expect(composerOffsetToPosition(text.length, document)).toBe(9);
+    expect(composerPositionToOffset(-10, document)).toBe(0);
+    expect(composerPositionToOffset(100, document)).toBe(text.length);
+  });
+
+  it('normalizes only CRLF and CR line endings', () => {
+    const text = '  code\r\n\tindent\r\rnext  ';
+    expect(composerJSONToText(composerTextToJSON(text))).toBe('  code\n\tindent\n\nnext  ');
   });
 });
 

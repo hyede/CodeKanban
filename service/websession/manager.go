@@ -110,17 +110,24 @@ type Config struct {
 	RemoteAttachmentClient      *http.Client
 	ClaudePath                  string
 	CCRPath                     string
-	CCRConfigPath               string
+	CCRProfile                  string
+	CCRGatewayURL               string
 	CodexPath                   string
 	PiPath                      string
+	DevinPath                   string
 	PiRuntimeIdleTTL            time.Duration
-	DefaultCodexModel           func() string
+	DefaultAgentModel           func(agent Agent) string
+	DefaultClaudeRuntime        func() string
+	CodexClientName             func() string
+	CodexClientTitle            func() string
+	CodexClientVersion          func() string
 	DefaultCodexContextWindow   func() int64
-	DefaultCodexReasoningEffort func() ReasoningEffort
+	DefaultAgentReasoningEffort func(agent Agent) ReasoningEffort
 	DefaultCodexPermissionLevel func() string
 	DefaultCodexSyncMode        func() SyncMode
 	AutoRetryDefaultsConfig     func() utils.WebSessionAutoRetryDefaultsConfig
 	ActiveCallTimeoutConfig     func() utils.WebSessionActiveCallTimeoutConfig
+	TerminalShell               func() utils.TerminalShellConfig
 }
 
 type Manager struct {
@@ -164,6 +171,7 @@ type Manager struct {
 	pendingDirty                map[string]bool
 	codexContextWindow          codexContextWindowResolver
 	piProbe                     piRuntimeProbeCache
+	ccrModels                   ccrModelCatalogCache
 	runtimeCapabilityProbes     runtimeCapabilityProbeHooks
 	piRuntimeMu                 sync.Mutex
 	piRuntimeTerminators        map[string]piRuntimeTerminator
@@ -174,10 +182,6 @@ type Manager struct {
 	claudeHookSettingsPath      string
 	claudeHookErr               error
 	claudeHookServer            *http.Server
-	ccrHookMu                   sync.Mutex
-	ccrHookReady                bool
-	ccrHookErr                  error
-	ccrHookClaudePath           string
 	historyCleanupMu            sync.Mutex
 	workTimingBackfillMu        sync.Mutex
 	workTimingLocks             [64]sync.Mutex
@@ -516,16 +520,22 @@ func NewManager(cfg Config, logger *zap.Logger) (*Manager, error) {
 		cfg.ClaudePath = getenvDefault("CLAUDE_PATH", "claude")
 	}
 	if cfg.CCRPath == "" {
-		cfg.CCRPath = getenvDefault("CCR_PATH", "ccr")
+		cfg.CCRPath = defaultCCRPath()
 	}
-	if cfg.CCRConfigPath == "" {
-		cfg.CCRConfigPath = getenvDefault("CCR_CONFIG_PATH", defaultCCRConfigPath())
+	if cfg.CCRProfile == "" {
+		cfg.CCRProfile = getenvDefault("CCR_PROFILE", "default-claude-code")
+	}
+	if cfg.CCRGatewayURL == "" {
+		cfg.CCRGatewayURL = getenvDefault("CCR_GATEWAY_URL", "http://127.0.0.1:3456")
 	}
 	if cfg.CodexPath == "" {
 		cfg.CodexPath = getenvDefault("CODEX_PATH", "codex")
 	}
 	if cfg.PiPath == "" {
 		cfg.PiPath = getenvDefault("PI_PATH", "pi")
+	}
+	if cfg.DevinPath == "" {
+		cfg.DevinPath = getenvDefault("DEVIN_PATH", "devin")
 	}
 	if cfg.PiRuntimeIdleTTL <= 0 {
 		cfg.PiRuntimeIdleTTL = 2 * time.Minute
@@ -1293,7 +1303,7 @@ func (m *Manager) CreateSession(ctx context.Context, params CreateParams) (Sessi
 		WorktreeID:                        nilIfEmpty(worktreeID),
 		OrderIndex:                        orderIndex,
 		Agent:                             string(agent),
-		ClaudeRuntime:                     string(normalizeClaudeRuntime(params.ClaudeRuntime)),
+		ClaudeRuntime:                     string(m.resolveSessionClaudeRuntime(agent, params.ClaudeRuntime)),
 		Backend:                           string(normalizeSessionBackend(params.Backend, agent)),
 		Title:                             title,
 		TitleAuto:                         strings.TrimSpace(params.Title) == "",
@@ -2346,7 +2356,7 @@ func (m *Manager) pendingApprovalSnapshot(record tables.WebSessionTable) *Pendin
 	if !ok || request.Kind == pendingServerRequestPlanApproval {
 		return nil
 	}
-	if request.PiRuntime == nil && run.codexAppServer() == nil {
+	if request.PiRuntime == nil && run.codexAppServer() == nil && run.devinACP() == nil {
 		return nil
 	}
 	actionable := len(request.RawID) > 0
@@ -2420,10 +2430,10 @@ func (m *Manager) UpdateModel(ctx context.Context, sessionID, modelName string) 
 		"updated_at": time.Now(),
 	}
 	if !sameCodexModel(record.Model, normalized) {
-		updates["applied_context_window_setting"] = nil
+		// The fallback warning belongs to the model that produced it. Keep the
+		// session's window and settings, but re-evaluate this warning on the
+		// next run with the newly selected model.
 		updates["codex_model_metadata_fallback"] = false
-		updates["session_context_window_tokens"] = 0
-		updates["session_context_window_observed_at"] = nil
 	}
 	return m.updateFields(ctx, sessionID, updates)
 }
@@ -2472,10 +2482,14 @@ func (m *Manager) UpdateWorkflowMode(
 	sessionID string,
 	mode WorkflowMode,
 ) (SessionSummary, error) {
-	return m.updateFields(ctx, sessionID, map[string]any{
+	summary, err := m.updateFields(ctx, sessionID, map[string]any{
 		"workflow_mode": string(normalizeWorkflowMode(mode)),
 		"updated_at":    time.Now(),
 	})
+	if err == nil {
+		m.syncDevinSessionMode(ctx, sessionID)
+	}
+	return summary, err
 }
 
 func (m *Manager) GetSessionGoal(ctx context.Context, sessionID string) (*SessionGoal, error) {
@@ -2713,10 +2727,14 @@ func (m *Manager) UpdatePermissionLevel(
 	if err := validateWebSessionPermissionLevel(Agent(record.Agent), level); err != nil {
 		return SessionSummary{}, err
 	}
-	return m.updateFields(ctx, sessionID, map[string]any{
+	summary, err := m.updateFields(ctx, sessionID, map[string]any{
 		"permission_level": string(normalizePermissionLevel(level)),
 		"updated_at":       time.Now(),
 	})
+	if err == nil {
+		m.syncDevinSessionMode(ctx, sessionID)
+	}
+	return summary, err
 }
 
 func (m *Manager) UpdateActiveCallTimeout(
@@ -2798,7 +2816,7 @@ func (m *Manager) UpdateAgent(ctx context.Context, sessionID string, agent Agent
 		"context_window_setting":             0,
 		"applied_context_window_setting":     nil,
 		"codex_model_metadata_fallback":      false,
-		"claude_runtime":                     string(defaultClaudeRuntime(normalized)),
+		"claude_runtime":                     string(m.resolveSessionClaudeRuntime(normalized, "")),
 		"backend":                            string(defaultSessionBackend(normalized)),
 		"model":                              modelName,
 		"reasoning_effort":                   string(m.resolveSessionReasoningEffort(normalized, modelName, "")),
@@ -3261,6 +3279,30 @@ func (m *Manager) stopRunForFreshContext(sessionID string, timeout time.Duration
 	}
 }
 
+// forceTerminateRun kills the runtime process tree before cancelling its
+// context. On Windows, Claude is commonly launched through cmd.exe; cancelling
+// the context first can kill that wrapper before taskkill gets a chance to
+// terminate the real Claude child process.
+func forceTerminateRun(run *activeRun, cancel bool) {
+	if run == nil {
+		return
+	}
+
+	run.mu.Lock()
+	if cancel {
+		run.abortRequested = true
+	}
+	cmd := run.cmd
+	run.mu.Unlock()
+	killCmdTree(cmd)
+	if cancel && run.cancel != nil {
+		run.cancel()
+	}
+	// The context cancellation and process termination race. A second pass
+	// covers a process that was still starting when the first pass ran.
+	killCmdTree(run.command())
+}
+
 func (m *Manager) AbortSession(sessionID string) error {
 	m.mu.RLock()
 	run, ok := m.runs[sessionID]
@@ -3268,10 +3310,7 @@ func (m *Manager) AbortSession(sessionID string) error {
 	if !ok {
 		return nil
 	}
-	if run.cancel != nil {
-		run.cancel()
-	}
-	killCmdTree(run.command())
+	forceTerminateRun(run, true)
 	return nil
 }
 
@@ -4209,6 +4248,7 @@ func (m *Manager) handleSendCommand(ctx context.Context, client *client, frame w
 		payload.Attachments,
 		PendingInputMode(payload.Mode),
 		payload.PendingID,
+		nil,
 	)
 	if err != nil {
 		if errors.Is(err, ErrCodexRunDrainTimeout) {
@@ -4306,7 +4346,8 @@ func (m *Manager) CompactSession(ctx context.Context, sessionID string) error {
 	runCtx, cancel := context.WithCancel(context.Background())
 	run := &activeRun{
 		sessionID: sessionID, projectID: record.ProjectID, agent: AgentPi, backend: SessionBackendPiRPC,
-		runID: runID, cancel: cancel, done: make(chan struct{}), piCompaction: true,
+		contextWindowSetting: record.ContextWindowSetting,
+		runID:                runID, cancel: cancel, done: make(chan struct{}), piCompaction: true,
 	}
 	m.mu.Lock()
 	delete(m.codexTerminationRequests, sessionID)
@@ -4404,6 +4445,7 @@ func (m *Manager) startHiddenSessionRun(
 		projectID:              record.ProjectID,
 		agent:                  Agent(record.Agent),
 		backend:                effectiveSessionBackend(record),
+		contextWindowSetting:   record.ContextWindowSetting,
 		runID:                  runID,
 		cancel:                 cancel,
 		done:                   make(chan struct{}),
@@ -4488,6 +4530,9 @@ func (m *Manager) sendMessageInternal(
 	if err := m.waitForCodexRunDrain(ctx, sessionID); err != nil {
 		return err
 	}
+	if handled, err := m.resolveDevinPlanApprovalForSend(ctx, sessionID, record, text, attachments, attachmentIDs); handled || err != nil {
+		return err
+	}
 	if m.hasActiveRun(sessionID) {
 		return fmt.Errorf("session is already running")
 	}
@@ -4500,6 +4545,15 @@ func (m *Manager) sendMessageInternal(
 			return err
 		}
 		record = refreshed
+	}
+	if options.contextWindowSetting != nil {
+		if normalizeAgent(Agent(record.Agent)) != AgentCodex {
+			return fmt.Errorf("context window setting is only supported for Codex")
+		}
+		if !validContextWindowSetting(*options.contextWindowSetting) {
+			return fmt.Errorf("invalid context window setting")
+		}
+		record.ContextWindowSetting = *options.contextWindowSetting
 	}
 
 	defaultAutoRetryUpdates := map[string]any(nil)
@@ -4596,14 +4650,15 @@ func (m *Manager) sendMessageInternal(
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	run := &activeRun{
-		sessionID:     sessionID,
-		projectID:     record.ProjectID,
-		agent:         Agent(record.Agent),
-		backend:       effectiveSessionBackend(record),
-		runID:         runID,
-		fromAutoRetry: options.fromAutoRetry,
-		cancel:        cancel,
-		done:          make(chan struct{}),
+		sessionID:            sessionID,
+		projectID:            record.ProjectID,
+		agent:                Agent(record.Agent),
+		backend:              effectiveSessionBackend(record),
+		contextWindowSetting: record.ContextWindowSetting,
+		runID:                runID,
+		fromAutoRetry:        options.fromAutoRetry,
+		cancel:               cancel,
+		done:                 make(chan struct{}),
 	}
 
 	m.mu.Lock()
@@ -4619,11 +4674,12 @@ func (m *Manager) sendMessageInternal(
 }
 
 type sendMessageOptions struct {
-	fromAutoRetry      bool
-	continueWorkTiming bool
-	updateAutoTitle    bool
-	userMessageID      string
-	freshCodexContext  bool
+	fromAutoRetry        bool
+	continueWorkTiming   bool
+	updateAutoTitle      bool
+	userMessageID        string
+	freshCodexContext    bool
+	contextWindowSetting *int64
 }
 
 func (m *Manager) resetCodexContextForFreshSend(ctx context.Context, record tables.WebSessionTable) error {
@@ -4777,6 +4833,10 @@ func (m *Manager) runSession(ctx context.Context, run *activeRun, session tables
 		m.runCodexAppServerSession(ctx, run, session, text, attachments)
 		return
 	}
+	if run.backend == SessionBackendDevinACP && normalizeAgent(Agent(session.Agent)) == AgentDevin {
+		m.runDevinACPSession(ctx, run, session, text, attachments)
+		return
+	}
 	if run.backend == SessionBackendPiRPC && normalizeAgent(Agent(session.Agent)) == AgentPi {
 		if run.piCompaction {
 			m.runPiRPCCompaction(ctx, run, session)
@@ -4848,30 +4908,8 @@ func (m *Manager) runSession(ctx context.Context, run *activeRun, session tables
 
 	waitErr := cmd.Wait()
 	<-stderrDone
-	if ctx.Err() != nil {
-		abortPayload := activeCallTimeoutAbortPayload(session, run.abortEventPayload())
-		now := time.Now()
-		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-			ID:        utils.NewID(),
-			Seq:       0,
-			Type:      "run_abort",
-			RunID:     run.runID,
-			Timestamp: now,
-			Payload:   abortPayload,
-		})
-		_ = m.updateRuntimeState(
-			context.Background(),
-			session.ID,
-			applyAssistantStateUpdates(map[string]any{
-				"status":                     string(StatusIdle),
-				"updated_at":                 now,
-				"auto_retry_attempt":         0,
-				"auto_retry_next_at":         nil,
-				"auto_retry_last_error_code": nil,
-			}, AssistantStateNone, now),
-		)
-		m.cancelAutoRetryTimer(session.ID)
-		m.broadcastSessionSummary(context.Background(), session.ID)
+	if ctx.Err() != nil || run.abortRequestedSnapshot() {
+		m.finishAbortedRun(session.ID, session, run)
 		return
 	}
 
@@ -4948,7 +4986,7 @@ func (m *Manager) logRunCompletion(
 	}
 	result := "success"
 	errorCode := run.observationFailureCode()
-	if ctx != nil && ctx.Err() != nil {
+	if (ctx != nil && ctx.Err() != nil) || run.abortRequestedSnapshot() {
 		result = "canceled"
 		errorCode = ""
 	} else if errorCode != "" {
@@ -5017,28 +5055,8 @@ func (m *Manager) runClaudeResumeSession(ctx context.Context, run *activeRun, se
 
 	waitErr := cmd.Wait()
 	<-stderrDone
-	if ctx.Err() != nil {
-		now := time.Now()
-		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-			ID:        utils.NewID(),
-			Seq:       0,
-			Type:      "run_abort",
-			RunID:     run.runID,
-			Timestamp: now,
-		})
-		_ = m.updateRuntimeState(
-			context.Background(),
-			session.ID,
-			applyAssistantStateUpdates(map[string]any{
-				"status":                     string(StatusIdle),
-				"updated_at":                 now,
-				"auto_retry_attempt":         0,
-				"auto_retry_next_at":         nil,
-				"auto_retry_last_error_code": nil,
-			}, AssistantStateNone, now),
-		)
-		m.cancelAutoRetryTimer(session.ID)
-		m.broadcastSessionSummary(context.Background(), session.ID)
+	if ctx.Err() != nil || run.abortRequestedSnapshot() {
+		m.finishAbortedRun(session.ID, session, run)
 		return
 	}
 	if waitErr != nil {
@@ -5107,6 +5125,40 @@ func (m *Manager) handleRunFailure(sessionID string, session tables.WebSessionTa
 	m.handleRunFailureWithCode(sessionID, session, run, "", err)
 }
 
+func (m *Manager) finishAbortedRun(sessionID string, session tables.WebSessionTable, run *activeRun) {
+	if run == nil {
+		return
+	}
+	abortPayload := activeCallTimeoutAbortPayload(session, run.abortEventPayload())
+	run.resetActiveCallTracking()
+	if normalizeAgent(Agent(session.Agent)) == AgentPi {
+		_ = m.closePendingPiDialog(session, run, "Pi extension input was canceled because the run was aborted")
+	}
+	m.interruptActiveDevinSubAgents(session, run)
+	now := time.Now()
+	_, _ = m.appendAndBroadcast(context.Background(), sessionID, session, Event{
+		ID:        utils.NewID(),
+		Seq:       0,
+		Type:      "run_abort",
+		RunID:     run.runID,
+		Timestamp: now,
+		Payload:   abortPayload,
+	})
+	_ = m.updateRuntimeState(
+		context.Background(),
+		sessionID,
+		applyAssistantStateUpdates(map[string]any{
+			"status":                     string(StatusIdle),
+			"updated_at":                 now,
+			"auto_retry_attempt":         0,
+			"auto_retry_next_at":         nil,
+			"auto_retry_last_error_code": nil,
+		}, AssistantStateNone, now),
+	)
+	m.cancelAutoRetryTimer(sessionID)
+	m.broadcastSessionSummary(context.Background(), sessionID)
+}
+
 func (m *Manager) handleRunFailureWithCode(
 	sessionID string,
 	session tables.WebSessionTable,
@@ -5114,11 +5166,16 @@ func (m *Manager) handleRunFailureWithCode(
 	code string,
 	err error,
 ) {
+	if run != nil && run.abortRequestedSnapshot() {
+		m.finishAbortedRun(sessionID, session, run)
+		return
+	}
 	if run != nil {
 		run.resetActiveCallTracking()
 		if normalizeAgent(Agent(session.Agent)) == AgentPi {
 			_ = m.closePendingPiDialog(session, run, "Pi extension input ended because the runtime failed")
 		}
+		m.interruptActiveDevinSubAgents(session, run)
 	}
 	message := strings.TrimSpace(err.Error())
 	if message == "" {
@@ -5138,7 +5195,7 @@ func (m *Manager) handleRunFailureWithCode(
 	}
 	run.setObservationFailure(code)
 	now := time.Now()
-	if normalizeAgent(Agent(session.Agent)) == AgentCodex {
+	if agent := normalizeAgent(Agent(session.Agent)); agent == AgentCodex || agent == AgentDevin {
 		_ = m.finalizeLatestTurnUsage(context.Background(), sessionID)
 	}
 	_, _ = m.appendAndBroadcast(context.Background(), sessionID, session, Event{
@@ -6132,13 +6189,17 @@ func (m *Manager) decorateCompactToolGroupEvent(sessionID string, event *Event) 
 	firstSeq := event.Seq
 	count := 1
 
+	// sessionAgent locks the run mutex, so it must be resolved before the run
+	// lock below is taken.
+	agent := m.sessionAgent(sessionID)
+
 	m.mu.RLock()
 	run := m.runs[sessionID]
 	m.mu.RUnlock()
 
 	if run != nil {
 		run.mu.Lock()
-		groupKey := compactToolGroupKey(*event)
+		groupKey := compactToolGroupKey(*event, agent)
 		if run.commandGroupKey != "" && run.commandGroupKey != groupKey {
 			run.commandGroupID = ""
 			run.commandGroupKind = ""
@@ -6453,17 +6514,11 @@ func (m *Manager) buildExecCommand(ctx context.Context, session tables.WebSessio
 			"--verbose",
 		}
 		claudeRuntime := effectiveClaudeRuntime(session)
-		if claudeRuntime == ClaudeRuntimeCCR {
-			if err := m.ensureCCRClaudeHookSettings(); err != nil {
-				return nil, nil, false, err
-			}
-		} else {
-			settingsPath, err := m.ensureClaudeHookServer()
-			if err != nil {
-				return nil, nil, false, err
-			}
-			args = append(args, "--settings", settingsPath)
+		settingsPath, err := m.ensureClaudeHookServer()
+		if err != nil {
+			return nil, nil, false, err
 		}
+		args = append(args, "--settings", settingsPath)
 		if err := validateWebSessionPermissionLevel(AgentClaude, permissionLevel); err != nil {
 			return nil, nil, false, err
 		}
@@ -6491,9 +6546,12 @@ func (m *Manager) buildExecCommand(ctx context.Context, session tables.WebSessio
 		if err != nil {
 			return nil, nil, false, err
 		}
-		cmd := m.buildClaudeCommand(ctx, claudeRuntime, args)
+		cmd, err := m.buildClaudeCommand(ctx, claudeRuntime, args)
+		if err != nil {
+			return nil, nil, false, err
+		}
 		cmd.Dir = session.Cwd
-		cmd.Env = m.claudeCommandEnv(claudeRuntime)
+		cmd.Env = os.Environ()
 		return cmd, stdin, true, nil
 	case AgentCodex:
 		args := []string{"exec", "--json", "--skip-git-repo-check"}
@@ -6548,12 +6606,19 @@ func (m *Manager) buildExecCommand(ctx context.Context, session tables.WebSessio
 	}
 }
 
-func (m *Manager) buildClaudeCommand(ctx context.Context, runtime ClaudeRuntime, args []string) *exec.Cmd {
+func (m *Manager) buildClaudeCommand(ctx context.Context, runtime ClaudeRuntime, args []string) (*exec.Cmd, error) {
 	if normalizeClaudeRuntime(runtime) == ClaudeRuntimeCCR {
-		ccrArgs := append([]string{"code"}, args...)
-		return exec.CommandContext(ctx, m.cfg.CCRPath, ccrArgs...)
+		// Claude Code Router v3 launches agent CLIs through profiles:
+		// `ccr <profile> cli -- <agent args>` passes our claude arguments through
+		// to the profile's claude wrapper unchanged.
+		profile := strings.TrimSpace(m.cfg.CCRProfile)
+		if profile == "" {
+			return nil, fmt.Errorf("claude code router profile is not configured (set CCR_PROFILE)")
+		}
+		ccrArgs := append([]string{profile, "cli", "--"}, args...)
+		return exec.CommandContext(ctx, m.cfg.CCRPath, ccrArgs...), nil
 	}
-	return exec.CommandContext(ctx, m.cfg.ClaudePath, args...)
+	return exec.CommandContext(ctx, m.cfg.ClaudePath, args...), nil
 }
 
 func isClaudeControlCommand(cmd *exec.Cmd) bool {
@@ -6568,25 +6633,6 @@ func isClaudeControlCommand(cmd *exec.Cmd) bool {
 		}
 	}
 	return hasPromptTool
-}
-
-func (m *Manager) claudeCommandEnv(runtime ClaudeRuntime) []string {
-	env := os.Environ()
-	if normalizeClaudeRuntime(runtime) != ClaudeRuntimeCCR || strings.TrimSpace(m.ccrHookClaudePath) == "" {
-		return env
-	}
-	return upsertEnv(env, "CLAUDE_PATH", m.ccrHookClaudePath)
-}
-
-func upsertEnv(env []string, key, value string) []string {
-	prefix := key + "="
-	for i, item := range env {
-		if strings.HasPrefix(item, prefix) {
-			env[i] = prefix + value
-			return env
-		}
-	}
-	return append(env, prefix+value)
 }
 
 func (m *Manager) respondToApproval(sessionID, action string) error {
@@ -6619,7 +6665,7 @@ func (m *Manager) respondToApproval(sessionID, action string) error {
 		dispatchLock.Unlock()
 		confirmed := action != "reject" && action != "cancel"
 		return m.respondPiExtensionRequest(record, run, request, map[string]any{"confirmed": confirmed}, "approval_res", map[string]any{
-			"act": action, "prompt": request.Prompt,
+			"act": action, "prompt": request.Prompt, "command": request.Command,
 		})
 	}
 	defer dispatchLock.Unlock()
@@ -6664,8 +6710,9 @@ func (m *Manager) respondToApproval(sessionID, action string) error {
 			RunID:     utils.NewID(),
 			Timestamp: now,
 			Payload: map[string]any{
-				"act":    action,
-				"prompt": pending.Prompt,
+				"act":     action,
+				"prompt":  pending.Prompt,
+				"command": pending.Command,
 			},
 		})
 		if err := m.startClaudeDeferredResume(context.Background(), record, pending); err != nil {
@@ -6678,6 +6725,33 @@ func (m *Manager) respondToApproval(sessionID, action string) error {
 	}
 
 	if pending, ok := run.pendingApprovalRequest(); ok {
+		if run.backend == SessionBackendDevinACP && run.devinACP() != nil {
+			if err := run.devinACP().respond(pending.RawID, devinPermissionResponsePayload(action, pending, record)); err != nil {
+				return err
+			}
+			run.clearPendingServerRequest()
+			m.resumeActiveCallTimeout(run)
+			if pending.Kind == pendingServerRequestPlanApproval {
+				run.clearCompletedPlanTool()
+				if action != "reject" {
+					// Approving exit-plan switches the agent into
+					// accept-edits/bypass; keep the workflow mode in sync.
+					if _, err := m.UpdateWorkflowMode(context.Background(), sessionID, WorkflowModeDefault); err != nil && m.logger != nil {
+						m.logger.Warn("failed to sync workflow mode after Devin plan approval",
+							zap.String("sessionId", sessionID), zap.Error(err))
+					}
+				}
+			}
+			record, err = m.GetSession(context.Background(), sessionID)
+			if err != nil {
+				return err
+			}
+			now := time.Now()
+			_, _ = m.appendAndBroadcast(context.Background(), sessionID, record, Event{ID: utils.NewID(), Type: "approval_res", RunID: run.runID, ParentID: run.assistantMessageID, Timestamp: now, Payload: map[string]any{"act": action, "prompt": pending.Prompt, "command": pending.Command}})
+			_ = m.updateRuntimeState(context.Background(), sessionID, applyAssistantStateUpdates(map[string]any{"updated_at": now}, AssistantStateWorking, now))
+			m.broadcastSessionSummary(context.Background(), sessionID)
+			return nil
+		}
 		app := run.codexAppServer()
 		if app == nil {
 			return fmt.Errorf("session approval channel is unavailable")
@@ -6702,8 +6776,9 @@ func (m *Manager) respondToApproval(sessionID, action string) error {
 			TurnID:    pending.TurnID,
 			Timestamp: now,
 			Payload: map[string]any{
-				"act":    action,
-				"prompt": pending.Prompt,
+				"act":     action,
+				"prompt":  pending.Prompt,
+				"command": pending.Command,
 			},
 		})
 		_ = m.updateRuntimeState(
@@ -7029,7 +7104,6 @@ func (m *Manager) terminateCodexAppServerRun(run *activeRun, cancelActive bool) 
 	run.mu.Lock()
 	alreadyRequested := run.forceTerminateRequested
 	run.forceTerminateRequested = true
-	cancel := run.cancel
 	cmd := run.cmd
 	client := run.app
 	run.mu.Unlock()
@@ -7038,13 +7112,10 @@ func (m *Manager) terminateCodexAppServerRun(run *activeRun, cancelActive bool) 
 	if cmd != nil && cmd.Process != nil {
 		pid = cmd.Process.Pid
 	}
-	if cancelActive && cancel != nil {
-		cancel()
-	}
+	forceTerminateRun(run, cancelActive)
 	if client != nil {
 		_ = client.closeStdin()
 	}
-	killCmdTree(cmd)
 	if client != nil {
 		client.closeTransport()
 	}
@@ -7588,6 +7659,8 @@ func defaultTitle(agent Agent, projectName string) string {
 		prefix = "Claude"
 	case AgentPi:
 		prefix = "Pi"
+	case AgentDevin:
+		prefix = "Devin"
 	}
 	if strings.TrimSpace(projectName) == "" {
 		return prefix
@@ -7604,6 +7677,8 @@ func defaultModel(agent Agent, provided string) string {
 		return utils.DefaultWebSessionCodexModel
 	case AgentClaude:
 		return "opus"
+	case AgentDevin:
+		return "swe-2-high"
 	default:
 		return ""
 	}
@@ -7622,22 +7697,24 @@ func defaultReasoningEffort(agent Agent, provided ReasoningEffort) ReasoningEffo
 	if normalizeAgent(agent) == AgentCodex {
 		return ReasoningEffort(utils.DefaultWebSessionCodexReasoningEffort)
 	}
+	if normalizeAgent(agent) == AgentDevin {
+		return ReasoningEffortHigh
+	}
 	return ReasoningEffortDefault
 }
 
 func (m *Manager) resolveSessionModel(agent Agent, provided string) string {
-	if strings.TrimSpace(provided) != "" || normalizeAgent(agent) != AgentCodex {
+	if strings.TrimSpace(provided) != "" {
 		return defaultModel(agent, provided)
 	}
-	if m != nil && m.cfg.DefaultCodexModel != nil {
-		if configured := strings.TrimSpace(m.cfg.DefaultCodexModel()); configured != "" {
-			if strings.EqualFold(configured, utils.WebSessionCodexDefaultSetting) {
-				return defaultModel(agent, "")
-			}
-			return configured
-		}
+	configured := ""
+	if m != nil && m.cfg.DefaultAgentModel != nil {
+		configured = strings.TrimSpace(m.cfg.DefaultAgentModel(normalizeAgent(agent)))
 	}
-	return defaultModel(agent, "")
+	if configured == "" || strings.EqualFold(configured, utils.WebSessionCodexDefaultSetting) {
+		return defaultModel(agent, "")
+	}
+	return configured
 }
 
 func (m *Manager) resolveSessionReasoningEffort(
@@ -7645,25 +7722,37 @@ func (m *Manager) resolveSessionReasoningEffort(
 	modelName string,
 	provided ReasoningEffort,
 ) ReasoningEffort {
-	if strings.TrimSpace(string(provided)) != "" || normalizeAgent(agent) != AgentCodex {
+	if strings.TrimSpace(string(provided)) != "" {
 		return defaultReasoningEffort(agent, provided)
 	}
-	configured := strings.TrimSpace(utils.WebSessionCodexDefaultSetting)
-	if m != nil && m.cfg.DefaultCodexReasoningEffort != nil {
-		if value := strings.TrimSpace(string(m.cfg.DefaultCodexReasoningEffort())); value != "" {
+	normalizedAgent := normalizeAgent(agent)
+	configured := utils.WebSessionCodexDefaultSetting
+	if m != nil && m.cfg.DefaultAgentReasoningEffort != nil {
+		if value := strings.TrimSpace(string(m.cfg.DefaultAgentReasoningEffort(normalizedAgent))); value != "" {
 			configured = strings.ToLower(value)
 		}
 	}
 	switch configured {
-	case utils.WebSessionCodexDefaultSetting:
-		return normalizeCodexReasoningEffort(
-			modelName,
-			ReasoningEffort(utils.DefaultWebSessionCodexReasoningEffort),
-		)
 	case utils.WebSessionCodexModelDefaultEffort:
 		return ReasoningEffortDefault
+	case utils.WebSessionCodexDefaultSetting:
+		if normalizedAgent == AgentDevin {
+			if effort := devinReasoningEffortFromModel(modelName); effort != ReasoningEffortDefault {
+				return effort
+			}
+		}
+		if normalizedAgent == AgentCodex {
+			return normalizeCodexReasoningEffort(
+				modelName,
+				ReasoningEffort(utils.DefaultWebSessionCodexReasoningEffort),
+			)
+		}
+		return defaultReasoningEffort(agent, "")
 	default:
-		return normalizeCodexReasoningEffort(modelName, ReasoningEffort(configured))
+		if normalizedAgent == AgentCodex {
+			return normalizeCodexReasoningEffort(modelName, ReasoningEffort(configured))
+		}
+		return normalizeReasoningEffort(ReasoningEffort(configured))
 	}
 }
 
@@ -7698,6 +7787,8 @@ func defaultSessionBackend(agent Agent) SessionBackend {
 		return SessionBackendCodexAppServer
 	case AgentPi:
 		return SessionBackendPiRPC
+	case AgentDevin:
+		return SessionBackendDevinACP
 	default:
 		return SessionBackendLegacyExec
 	}
@@ -7714,6 +7805,10 @@ func normalizeSessionBackend(backend SessionBackend, agent Agent) SessionBackend
 		if normalizedAgent == AgentPi {
 			return SessionBackendPiRPC
 		}
+	case string(SessionBackendDevinACP):
+		if normalizedAgent == AgentDevin {
+			return SessionBackendDevinACP
+		}
 	case string(SessionBackendLegacyExec):
 		if normalizedAgent != AgentPi {
 			return SessionBackendLegacyExec
@@ -7729,10 +7824,10 @@ func normalizeAgent(agent Agent) Agent {
 func validateAgent(agent Agent) (Agent, error) {
 	normalized := normalizeAgent(agent)
 	switch normalized {
-	case AgentClaude, AgentCodex, AgentPi:
+	case AgentClaude, AgentCodex, AgentPi, AgentDevin:
 		return normalized, nil
 	default:
-		return "", fmt.Errorf("invalid agent %q: expected claude, codex, or pi", strings.TrimSpace(string(agent)))
+		return "", fmt.Errorf("invalid agent %q: expected claude, codex, pi, or devin", strings.TrimSpace(string(agent)))
 	}
 }
 
@@ -7745,9 +7840,19 @@ func normalizeClaudeRuntime(runtime ClaudeRuntime) ClaudeRuntime {
 	}
 }
 
-func defaultClaudeRuntime(agent Agent) ClaudeRuntime {
+func (m *Manager) resolveSessionClaudeRuntime(agent Agent, provided ClaudeRuntime) ClaudeRuntime {
 	if normalizeAgent(agent) != AgentClaude {
 		return ClaudeRuntimeNative
+	}
+	if strings.TrimSpace(string(provided)) != "" {
+		return normalizeClaudeRuntime(provided)
+	}
+	configured := ""
+	if m != nil && m.cfg.DefaultClaudeRuntime != nil {
+		configured = strings.TrimSpace(m.cfg.DefaultClaudeRuntime())
+	}
+	if strings.EqualFold(configured, string(ClaudeRuntimeCCR)) {
+		return ClaudeRuntimeCCR
 	}
 	return ClaudeRuntimeNative
 }
@@ -7919,6 +8024,10 @@ func effectiveSessionBackend(record tables.WebSessionTable) SessionBackend {
 		if agent == AgentPi {
 			return SessionBackendPiRPC
 		}
+	case string(SessionBackendDevinACP):
+		if agent == AgentDevin {
+			return SessionBackendDevinACP
+		}
 	default:
 		if agent == AgentCodex {
 			// Existing Codex sessions predate backend persistence and must continue
@@ -8065,6 +8174,7 @@ func (m *Manager) recoverInterruptedSessions(ctx context.Context) error {
 			}).
 			Updates(map[string]any{
 				"status":           string(WebSessionSubAgentInterrupted),
+				"is_active":        false,
 				"current_turn_id":  nil,
 				"ended_at":         now,
 				"last_activity_at": now,
@@ -8142,12 +8252,45 @@ func getenvDefault(key, fallback string) string {
 	return fallback
 }
 
-func defaultCCRConfigPath() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(homeDir) == "" {
-		return filepath.Join(".claude-code-router", "config.json")
+func defaultCCRPath() string {
+	ccrPath := getenvDefault("CCR_PATH", "ccr")
+	// Respect an explicitly configured path even when it is not resolvable on
+	// the current PATH; the later exec failure carries a clearer error.
+	if _, err := exec.LookPath(ccrPath); err == nil || strings.TrimSpace(os.Getenv("CCR_PATH")) != "" {
+		return ccrPath
 	}
-	return filepath.Join(homeDir, ".claude-code-router", "config.json")
+	// The Claude Code Router v3 desktop app ships its launcher as `ccr-app` in
+	// its own bin directory instead of the npm CLI's `ccr`; both run the same
+	// CLI. The bin directory is only added to the user PATH at install time, so
+	// probe the known locations for services started with a stale PATH.
+	for _, dir := range ccrDesktopBinDirs() {
+		for _, name := range []string{"ccr-app", "ccr"} {
+			for _, ext := range []string{"", ".cmd", ".exe"} {
+				candidate := filepath.Join(dir, name+ext)
+				if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+					return candidate
+				}
+			}
+		}
+	}
+	return ccrPath
+}
+
+func ccrDesktopBinDirs() []string {
+	var dirs []string
+	appendDir := func(base, rel string) {
+		if strings.TrimSpace(base) == "" {
+			return
+		}
+		dirs = append(dirs, filepath.Join(base, rel))
+	}
+	appendDir(os.Getenv("APPDATA"), filepath.Join("claude-code-router", "bin"))
+	if homeDir, err := os.UserHomeDir(); err == nil && strings.TrimSpace(homeDir) != "" {
+		appendDir(homeDir, filepath.Join("Library", "Application Support", "claude-code-router", "bin"))
+		appendDir(homeDir, filepath.Join(".config", "claude-code-router", "bin"))
+		appendDir(homeDir, filepath.Join(".claude-code-router", "bin"))
+	}
+	return dirs
 }
 
 func truncateString(value string, limit int) string {

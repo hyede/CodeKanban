@@ -62,7 +62,7 @@ type WireSession = {
   oi?: number;
   ag: WebSessionAgent;
   cr?: 'claude' | 'ccr';
-  be?: 'legacy_exec' | 'codex_app_server' | 'pi_rpc' | string;
+  be?: 'legacy_exec' | 'codex_app_server' | 'pi_rpc' | 'devin_acp' | string;
   md: string;
   re?: WebSessionReasoningEffort;
   wm: 'default' | 'plan';
@@ -169,6 +169,7 @@ type WireScheduledInput = {
   dst?: string;
   a?: 'message' | 'execute_plan' | string;
   tid?: string;
+  cws?: number | null;
   m?: 'send' | 'interrupt' | 'redirect' | 'queue' | string;
   epm?: boolean;
   st?: 'scheduled' | 'failed' | 'expired' | 'dispatched' | 'canceled' | string;
@@ -246,7 +247,12 @@ type WireSubAgent = {
   nn?: string;
   rl?: string;
   st?: string;
+  act?: boolean;
   sm?: string;
+  uin?: number;
+  ucin?: number;
+  uout?: number;
+  utot?: number;
   ctid?: string | null;
   liid?: string | null;
   loi?: number;
@@ -347,6 +353,11 @@ export interface WebSessionSubAgent extends WebSessionLiveSubAgent {
   nickname: string;
   role: string;
   status: WebSessionSubAgentStatus;
+  active?: boolean;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
   currentTurnId?: string | null;
   latestItemId?: string | null;
   latestOrderIndex: number;
@@ -638,6 +649,7 @@ export interface WebSessionScheduledInput {
     | 'missing';
   action: 'message' | 'execute_plan';
   targetId: string;
+  contextWindowSettingSnapshot?: number | null;
   mode: 'send' | 'interrupt' | 'queue';
   exitPlanMode: boolean;
   status: 'scheduled' | 'failed' | 'expired';
@@ -753,9 +765,9 @@ export interface WebSessionDraftAttachmentUploadBatchResult {
 }
 
 type WebSessionAssistantDescriptor = {
-  type: 'claude-code' | 'codex';
-  name: 'Claude Code' | 'Codex';
-  displayName: 'Claude Code' | 'Codex';
+  type: 'claude-code' | 'codex' | 'devin';
+  name: 'Claude Code' | 'Codex' | 'Devin';
+  displayName: 'Claude Code' | 'Codex' | 'Devin';
 };
 
 export interface WebSessionAIEvent {
@@ -1362,15 +1374,28 @@ function normalizeSubAgent(
   const startedAt = parseHistoryTimeValue(record.sa ?? record.startedAt) ?? undefined;
   const currentTurnId = String(record.ctid ?? record.currentTurnId ?? '').trim() || null;
   const normalizedStatus = normalizeSubAgentStatus(record.st ?? record.status);
+  const hasExplicitActive = typeof record.act === 'boolean' || typeof record.active === 'boolean';
+  const active = hasExplicitActive
+    ? Boolean(record.act ?? record.active)
+    : normalizedStatus === 'pending_init' ||
+      (normalizedStatus === 'running' && Boolean(currentTurnId));
   return {
     id,
     parentThreadId: String(record.ptid ?? record.parentThreadId ?? '').trim() || null,
     path,
     nickname,
     role,
-    status: normalizedStatus === 'running' && !currentTurnId ? 'idle' : normalizedStatus,
+    status:
+      normalizedStatus === 'running' && !hasExplicitActive && !currentTurnId
+        ? 'idle'
+        : normalizedStatus,
+    active,
     title: subAgentDisplayTitle({ id, nickname, role, path }),
     summary: String(record.sm ?? record.summary ?? '').trim(),
+    inputTokens: Number(record.uin ?? record.inputTokens ?? 0) || 0,
+    cachedInputTokens: Number(record.ucin ?? record.cachedInputTokens ?? 0) || 0,
+    outputTokens: Number(record.uout ?? record.outputTokens ?? 0) || 0,
+    totalTokens: Number(record.utot ?? record.totalTokens ?? 0) || 0,
     currentTurnId,
     latestItemId: String(record.liid ?? record.latestItemId ?? '').trim() || null,
     latestOrderIndex: Number(record.loi ?? record.latestOrderIndex ?? 0) || 0,
@@ -1382,7 +1407,10 @@ function normalizeSubAgent(
 
 function isActiveSubAgent(agent: WebSessionSubAgent) {
   return (
-    agent.status === 'pending_init' || (agent.status === 'running' && Boolean(agent.currentTurnId))
+    agent.active === true ||
+    (agent.active == null &&
+      (agent.status === 'pending_init' ||
+        (agent.status === 'running' && Boolean(agent.currentTurnId))))
   );
 }
 
@@ -2051,6 +2079,39 @@ function mergeSessionAttentionState(
     ...normalizedIncoming,
     attentionRevision: normalizedCurrent.attentionRevision,
     hasUnread: normalizedCurrent.hasUnread,
+  };
+}
+
+function mergeSessionContextWindowHistory(
+  current: WebSessionSummary | null | undefined,
+  incoming: WebSessionSummary
+): WebSessionSummary {
+  if (!current || current.id !== incoming.id) {
+    return incoming;
+  }
+
+  const currentWindow = Number(current.contextWindowTokens);
+  const incomingWindow = Number(incoming.contextWindowTokens);
+  if (
+    !Number.isFinite(currentWindow) ||
+    currentWindow <= 0 ||
+    (Number.isFinite(incomingWindow) && incomingWindow > 0)
+  ) {
+    return incoming;
+  }
+
+  // Session summaries can be refreshed while the native process has not
+  // reported its window yet. Keep the last valid value for the same session
+  // and agent across model changes so a transient unavailable snapshot cannot
+  // erase the current session history.
+  const sameAgent = current.agent === incoming.agent;
+  if (!sameAgent) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    contextWindowTokens: current.contextWindowTokens,
+    contextWindowSource: current.contextWindowSource,
   };
 }
 
@@ -3195,7 +3256,10 @@ export const useWebSessionStore = defineStore('web-session', () => {
       agent: session.ag,
       claudeRuntime: session.cr === 'ccr' ? 'ccr' : 'claude',
       backend:
-        session.be === 'legacy_exec' || session.be === 'codex_app_server' || session.be === 'pi_rpc'
+        session.be === 'legacy_exec' ||
+        session.be === 'codex_app_server' ||
+        session.be === 'pi_rpc' ||
+        session.be === 'devin_acp'
           ? session.be
           : undefined,
       title: session.ttl,
@@ -3378,6 +3442,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
     dependencyStatus?: string;
     action?: 'message' | 'execute_plan' | string;
     targetId?: string;
+    contextWindowSettingSnapshot?: number | null;
     mode?: 'send' | 'interrupt' | 'redirect' | 'queue' | string;
     exitPlanMode?: boolean;
     status?: 'scheduled' | 'failed' | 'expired' | 'dispatched' | 'canceled' | string;
@@ -3473,6 +3538,11 @@ export const useWebSessionStore = defineStore('web-session', () => {
       typeof item.canceledAt === 'number'
         ? item.canceledAt
         : Date.parse(typeof item.canceledAt === 'string' ? item.canceledAt : '');
+    const contextWindowSettingSnapshot =
+      typeof item.contextWindowSettingSnapshot === 'number' &&
+      Number.isFinite(item.contextWindowSettingSnapshot)
+        ? item.contextWindowSettingSnapshot
+        : undefined;
     return {
       id,
       dependsOnId,
@@ -3500,6 +3570,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
           : Date.now(),
       sentAt: Number.isFinite(sentAt) ? sentAt : null,
       canceledAt: Number.isFinite(canceledAt) ? canceledAt : null,
+      ...(contextWindowSettingSnapshot !== undefined ? { contextWindowSettingSnapshot } : {}),
     };
   }
 
@@ -3857,7 +3928,10 @@ export const useWebSessionStore = defineStore('web-session', () => {
     }
   ) {
     const previous = archivedSessionsById.value[summary.id];
-    const nextSummary = mergeSessionAttentionState(previous, summary);
+    const nextSummary = mergeSessionAttentionState(
+      previous,
+      mergeSessionContextWindowHistory(previous, summary)
+    );
     archivedSessionsById.value = {
       ...archivedSessionsById.value,
       [summary.id]: {
@@ -4018,7 +4092,10 @@ export const useWebSessionStore = defineStore('web-session', () => {
     const next = [...current];
     const index = next.findIndex(item => item.id === incomingSummary.id);
     if (index >= 0) {
-      const nextSummary = mergeSessionAttentionState(next[index], incomingSummary);
+      const nextSummary = mergeSessionAttentionState(
+        next[index],
+        mergeSessionContextWindowHistory(next[index], incomingSummary)
+      );
       next.splice(index, 1, {
         ...next[index],
         ...nextSummary,
@@ -5342,11 +5419,17 @@ export const useWebSessionStore = defineStore('web-session', () => {
           name: 'Claude Code',
           displayName: 'Claude Code',
         }
-      : {
-          type: 'codex',
-          name: 'Codex',
-          displayName: 'Codex',
-        };
+      : session.agent === 'devin'
+        ? {
+            type: 'devin',
+            name: 'Devin',
+            displayName: 'Devin',
+          }
+        : {
+            type: 'codex',
+            name: 'Codex',
+            displayName: 'Codex',
+          };
   }
 
   function getApprovalForNotification(
@@ -5543,6 +5626,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
                     dependencyStatus: item.dst,
                     action: item.a,
                     targetId: item.tid,
+                    contextWindowSettingSnapshot: item.cws,
                     mode: item.m,
                     exitPlanMode: item.epm,
                     status: item.st,
@@ -7062,6 +7146,18 @@ export const useWebSessionStore = defineStore('web-session', () => {
     return target;
   }
 
+  async function forkSessionMessage(projectId: string, sessionId: string, itemId: string) {
+    const target = await webSessionApi.forkMessage(projectId, sessionId, itemId);
+    const branchId = target.session.id;
+    await hydrateSessionTarget(projectId, target);
+    rememberActiveSession(projectId, branchId);
+    emitter.emit('web-session:created', {
+      projectId,
+      sessionId: branchId,
+    });
+    return target;
+  }
+
   async function syncSession(
     projectId: string,
     sessionId: string,
@@ -7436,6 +7532,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
         typeof payload?.dst === 'string' ? payload.dst : options.dependsOnId ? 'waiting' : 'none',
       action: typeof payload?.a === 'string' ? payload.a : 'message',
       targetId: typeof payload?.tid === 'string' ? payload.tid : '',
+      contextWindowSettingSnapshot: typeof payload?.cws === 'number' ? payload.cws : null,
       mode: typeof payload?.m === 'string' ? payload.m : '',
       exitPlanMode: typeof payload?.epm === 'boolean' ? payload.epm : options.exitPlanMode === true,
       status: typeof payload?.st === 'string' ? payload.st : '',
@@ -7509,6 +7606,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
         typeof payload?.dst === 'string' ? payload.dst : options.dependsOnId ? 'waiting' : 'none',
       action: typeof payload?.a === 'string' ? payload.a : 'execute_plan',
       targetId: typeof payload?.tid === 'string' ? payload.tid : target.planItemId,
+      contextWindowSettingSnapshot: typeof payload?.cws === 'number' ? payload.cws : null,
       mode: typeof payload?.m === 'string' ? payload.m : 'send',
       status: typeof payload?.st === 'string' ? payload.st : '',
       lastError: typeof payload?.err === 'string' ? payload.err : '',
@@ -7590,6 +7688,10 @@ export const useWebSessionStore = defineStore('web-session', () => {
             : current.dependencyStatus,
       action: typeof payload?.a === 'string' ? payload.a : current.action,
       targetId: typeof payload?.tid === 'string' ? payload.tid : current.targetId,
+      contextWindowSettingSnapshot:
+        typeof payload?.cws === 'number'
+          ? payload.cws
+          : (current.contextWindowSettingSnapshot ?? null),
       mode: typeof payload?.m === 'string' ? payload.m : (update.mode ?? current.mode),
       exitPlanMode:
         typeof payload?.epm === 'boolean'
@@ -8394,6 +8496,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
     markSessionRead,
     createSession: createSessionViaHttp,
     editUserMessage,
+    forkSessionMessage,
     importSession,
     renameSession,
     archiveSession,

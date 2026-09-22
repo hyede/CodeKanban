@@ -1,7 +1,9 @@
 import type {
   WebSessionAgent,
+  WebSessionCCRModelInfo,
   WebSessionCodexDefaultPermissionLevel,
   WebSessionCodexDefaultReasoningEffort,
+  WebSessionDevinModelInfo,
   WebSessionPiModelInfo,
   WebSessionReasoningEffort,
 } from '@/types/models';
@@ -18,10 +20,30 @@ export type WebSessionAgentOption = WebSessionAgent;
 export type WebSessionClaudeRuntimeOption = 'claude' | 'ccr';
 export type { WebSessionReasoningEffort } from '@/types/models';
 
+export type WebSessionModelBadge = 'new' | 'beta' | 'promo';
+
+export type WebSessionModelOptionDetail = {
+  title?: string;
+  description?: string;
+  cost?: string;
+  contextTokens?: number;
+  outputTokens?: number;
+  efforts?: WebSessionReasoningEffort[];
+};
+
 export type WebSessionModelOption = {
   label: string;
   value: string;
   menuLabel?: string;
+  accentLabel?: string;
+  description?: string;
+  modelDescription?: string;
+  recommended?: boolean;
+  removable?: boolean;
+  badges?: WebSessionModelBadge[];
+  inputPrice?: string;
+  detail?: WebSessionModelOptionDetail;
+  searchText?: string;
 };
 
 export type WebSessionModelOptionGroup = {
@@ -31,8 +53,29 @@ export type WebSessionModelOptionGroup = {
   children: WebSessionModelOption[];
 };
 
+export type WebSessionModelCostItem = { label: string; price: string; unit: string };
+
+export function parseDevinCostSummary(summary: string | undefined): WebSessionModelCostItem[] {
+  const raw = String(summary ?? '').trim();
+  if (!raw) {
+    return [];
+  }
+  return raw.split('·').map(entry => {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      return { label: '', price: '', unit: '' };
+    }
+    const match = trimmed.match(/^(\S+)\s*\/\s*(\S+)\s+(.+)$/);
+    if (!match) {
+      return { label: trimmed, price: '', unit: '' };
+    }
+    return { price: match[1], unit: match[2], label: match[3].trim() };
+  });
+}
+
 export const CUSTOM_MODEL_VALUE = '__custom_model__';
 export const MORE_MODELS_VALUE = '__more_models__';
+export const CUSTOM_MODEL_STORAGE_LIMIT = 20;
 export const PI_FREQUENT_MODEL_LIMIT = 6;
 
 export type PiModelMenuCloseSource = 'show-change' | 'pointer-leave';
@@ -167,6 +210,54 @@ export function rememberPiFrequentModel(
   ].slice(0, normalizedLimit);
 }
 
+export function rememberCustomModel(
+  values: string[],
+  modelValue: string,
+  limit = CUSTOM_MODEL_STORAGE_LIMIT
+) {
+  const normalizedValue = modelValue.trim();
+  const normalizedLimit = Math.max(0, Math.floor(limit));
+  if (!normalizedValue || normalizedLimit === 0) {
+    return [];
+  }
+  const currentValues = Array.isArray(values) ? values : [];
+  return [
+    normalizedValue,
+    ...currentValues
+      .map(value => String(value || '').trim())
+      .filter(value => value && value !== normalizedValue),
+  ].slice(0, normalizedLimit);
+}
+
+export function removeCustomModel(values: string[], modelValue: string) {
+  const normalizedValue = modelValue.trim();
+  const currentValues = Array.isArray(values) ? values : [];
+  if (!normalizedValue) {
+    return [...currentValues];
+  }
+  return currentValues
+    .map(value => String(value || '').trim())
+    .filter(value => value && value !== normalizedValue);
+}
+
+export function resolveCustomModelOptions(
+  values: string[],
+  reservedValues: string[] = []
+): WebSessionModelOption[] {
+  const reserved = new Set(Array.isArray(reservedValues) ? reservedValues : []);
+  const seen = new Set<string>();
+  const options: WebSessionModelOption[] = [];
+  for (const rawValue of Array.isArray(values) ? values : []) {
+    const normalizedValue = String(rawValue || '').trim();
+    if (!normalizedValue || reserved.has(normalizedValue) || seen.has(normalizedValue)) {
+      continue;
+    }
+    seen.add(normalizedValue);
+    options.push({ label: normalizedValue, value: normalizedValue });
+  }
+  return options;
+}
+
 export function resolvePiModelOptionGroups(
   models: WebSessionPiModelInfo[]
 ): WebSessionModelOptionGroup[] {
@@ -223,15 +314,446 @@ export function resolvePiReasoningEfforts(
 }
 
 export const CLAUDE_MODEL_OPTIONS: WebSessionModelOption[] = [
+  { label: 'Fable', value: 'fable' },
   { label: 'Opus', value: 'opus' },
   { label: 'Sonnet', value: 'sonnet' },
   { label: 'Haiku', value: 'haiku' },
 ];
 
+export const DEVIN_MODEL_OPTIONS: WebSessionModelOption[] = [
+  { label: 'SWE-2 High', value: 'swe-2-high', menuLabel: 'SWE-2 High' },
+];
+
+export function resolveDevinModelOptions(models: WebSessionDevinModelInfo[] = []) {
+  return models
+    .filter(model => Boolean(model.model?.trim()))
+    .map(model => {
+      const name = model.displayName?.trim() || model.model;
+      const cost = model.costSummary?.trim() || model.costTier?.trim() || undefined;
+      const modelDescription = model.description?.trim() || undefined;
+      const inputCost = parseDevinCostSummary(model.costSummary).find(
+        item => item.price && /input/i.test(item.label)
+      );
+      const badges: WebSessionModelBadge[] = [];
+      if (model.isNew === true) badges.push('new');
+      if (model.isPromo === true || model.costTier?.trim().toLowerCase() === 'promotion') {
+        badges.push('promo');
+      }
+      if (model.isBeta === true) badges.push('beta');
+      return {
+        label: name,
+        value: model.model,
+        menuLabel: name,
+        description: cost,
+        modelDescription,
+        recommended: model.recommended === true,
+        badges,
+        inputPrice: inputCost ? `${inputCost.price}/${inputCost.unit}` : undefined,
+        detail: {
+          title: name,
+          description: modelDescription,
+          cost,
+          contextTokens: model.maxContextTokens || undefined,
+          outputTokens: model.maxOutputTokens || undefined,
+        },
+      };
+    });
+}
+
+function devinRepresentativeModel(models: WebSessionDevinModelInfo[]) {
+  return [...models].sort((left, right) => {
+    const rank = (model: WebSessionDevinModelInfo) => {
+      const value = model.model.toLowerCase();
+      if (value === 'swe-2-high') return 0;
+      if (value.endsWith('-medium')) return 1;
+      if (value.endsWith('-high')) return 2;
+      if (value.endsWith('-max')) return 3;
+      return 4;
+    };
+    return rank(left) - rank(right);
+  })[0];
+}
+
+export function resolveDevinSpecialModelOptions(
+  models: WebSessionDevinModelInfo[] = [],
+  currentModel = ''
+): WebSessionModelOption[] {
+  const normalizedCurrent = currentModel.trim();
+  return ['Adaptive', 'Fusion'].flatMap(family => {
+    const entries = models.filter(model => model.family?.trim() === family);
+    const representative = entries.find(model => model.model === normalizedCurrent) ?? entries[0];
+    if (!representative) return [];
+    const option = resolveDevinModelOptions([representative])[0];
+    return option ? [option] : [];
+  });
+}
+
+export type DevinFusionModelConfig = {
+  model: string;
+  lead: string;
+  effort: string;
+  sidekick: string;
+  sidekickEffort: string;
+  fast: boolean;
+};
+
+export type DevinFusionSelection = {
+  lead: string;
+  effort: string;
+  sidekick: string;
+  sidekickEffort?: string;
+  fast: boolean;
+};
+
+const DEVIN_FUSION_EFFORT_NAMES = ['Low', 'Medium', 'High', 'XHigh', 'Max'];
+
+function normalizeDevinFusionEffort(raw: string | undefined) {
+  const value = String(raw || '')
+    .trim()
+    .toLowerCase();
+  return DEVIN_FUSION_EFFORT_NAMES.find(name => name.toLowerCase() === value) ?? '';
+}
+
+function parseDevinFusionMember(raw: string) {
+  const match = raw.trim().match(/^(.*?)(?: (Low|Medium|High|XHigh|Max)(?: Thinking)?)?( Fast)?$/i);
+  if (!match) {
+    return { name: raw.trim(), effort: '', fast: false };
+  }
+  return {
+    name: match[1].trim(),
+    effort: normalizeDevinFusionEffort(match[2]),
+    fast: Boolean(match[3]),
+  };
+}
+
+export function resolveDevinFusionModelConfigs(
+  models: WebSessionDevinModelInfo[] = []
+): DevinFusionModelConfig[] {
+  return models
+    .filter(model => model.family?.trim() === 'Fusion')
+    .flatMap(model => {
+      const label = model.displayName?.trim() || '';
+      const parts = label.match(/^Fusion \((.+) \+ (.+)\)$/);
+      if (!parts) return [];
+      const lead = parseDevinFusionMember(parts[1]);
+      const sidekick = parseDevinFusionMember(parts[2]);
+      return [
+        {
+          model: model.model,
+          lead: lead.name,
+          effort: lead.effort || 'Medium',
+          sidekick: sidekick.name,
+          sidekickEffort: sidekick.effort,
+          fast: lead.fast || sidekick.fast,
+        },
+      ];
+    });
+}
+
+export function resolveDevinFusionModel(
+  configs: DevinFusionModelConfig[],
+  selection: DevinFusionSelection
+) {
+  const { lead, effort, sidekick, fast } = selection;
+  const sidekickEffort = selection.sidekickEffort ?? '';
+  return (
+    configs.find(
+      config =>
+        config.lead === lead &&
+        config.effort === effort &&
+        config.sidekick === sidekick &&
+        config.sidekickEffort === sidekickEffort &&
+        config.fast === fast
+    )?.model ??
+    configs.find(
+      config =>
+        config.lead === lead &&
+        config.effort === effort &&
+        config.sidekick === sidekick &&
+        config.fast === fast
+    )?.model ??
+    configs.find(
+      config => config.lead === lead && config.effort === effort && config.sidekick === sidekick
+    )?.model ??
+    configs.find(config => config.lead === lead && config.effort === effort)?.model ??
+    configs.find(config => config.lead === lead)?.model ??
+    configs[0]?.model ??
+    ''
+  );
+}
+
+export type DevinModelGroupLabels = {
+  recent?: string;
+  recommended?: string;
+  all?: string;
+};
+
+export const DEVIN_DUPLICATE_MODEL_VALUE_SUFFIX = '#dup';
+
+export function duplicateDevinModelOptionValue(value: string) {
+  return `${value}${DEVIN_DUPLICATE_MODEL_VALUE_SUFFIX}`;
+}
+
+export function normalizeDevinModelOptionValue(value: string) {
+  return value.endsWith(DEVIN_DUPLICATE_MODEL_VALUE_SUFFIX)
+    ? value.slice(0, -DEVIN_DUPLICATE_MODEL_VALUE_SUFFIX.length)
+    : value;
+}
+
+const DEVIN_EFFORT_DISPLAY_ORDER: WebSessionReasoningEffort[] = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+];
+
+function devinFamilyEfforts(entries: WebSessionDevinModelInfo[]) {
+  const efforts = [
+    ...new Set(
+      entries
+        .map(model => model.defaultReasoningEffort)
+        .filter((effort): effort is WebSessionReasoningEffort =>
+          Boolean(effort && effort !== 'default')
+        )
+    ),
+  ];
+  return efforts.sort(
+    (left, right) =>
+      DEVIN_EFFORT_DISPLAY_ORDER.indexOf(left) - DEVIN_EFFORT_DISPLAY_ORDER.indexOf(right)
+  );
+}
+
+export function resolveDevinModelOptionGroups(
+  models: WebSessionDevinModelInfo[] = [],
+  recentModelValues: string[] = [],
+  currentModel = '',
+  labels: DevinModelGroupLabels = {}
+): WebSessionModelOptionGroup[] {
+  const families = new Map<string, WebSessionDevinModelInfo[]>();
+  for (const model of models) {
+    const family = model.family?.trim() || 'Other models';
+    if (family === 'Adaptive' || family === 'Fusion') continue;
+    const entries = families.get(family) ?? [];
+    entries.push(model);
+    families.set(family, entries);
+  }
+  const normalizedCurrent = currentModel.trim();
+  const familyEntries = [...families.entries()].flatMap(([family, entries]) => {
+    const chosen =
+      entries.find(model => model.model === normalizedCurrent) ?? devinRepresentativeModel(entries);
+    if (!chosen) return [];
+    const base = resolveDevinModelOptions([chosen])[0];
+    if (!base) return [];
+    return [
+      {
+        family,
+        option: {
+          ...base,
+          label: family,
+          menuLabel: family,
+          recommended: entries.some(model => model.recommended === true),
+          detail: {
+            ...base.detail,
+            title: family,
+            efforts: devinFamilyEfforts(entries),
+          },
+          searchText: entries
+            .flatMap(model => [model.model, model.displayName])
+            .filter(Boolean)
+            .join(' '),
+        } as WebSessionModelOption,
+      },
+    ];
+  });
+  const optionsByValue = new Map(
+    resolveDevinModelOptions(models).map(option => [option.value, option] as const)
+  );
+  const seenRecent = new Set<string>();
+  const recent: WebSessionModelOption[] = [];
+  for (const rawValue of recentModelValues) {
+    const value = String(rawValue || '').trim();
+    if (!value || seenRecent.has(value)) continue;
+    seenRecent.add(value);
+    const option = optionsByValue.get(value);
+    if (!option) continue;
+    const model = models.find(entry => entry.model === value);
+    const family = model?.family?.trim();
+    const menuLabel = String(option.menuLabel ?? option.label ?? '');
+    let recentMenuLabel = option.menuLabel;
+    let accentLabel: string | undefined;
+    if (family && family !== 'Adaptive' && family !== 'Fusion' && menuLabel.startsWith(family)) {
+      const remainder = menuLabel.slice(family.length).trim();
+      const effort = model?.defaultReasoningEffort;
+      const effortLabel =
+        effort && effort !== 'default' ? effort.charAt(0).toUpperCase() + effort.slice(1) : '';
+      recentMenuLabel = family;
+      accentLabel = remainder || effortLabel || undefined;
+    }
+    recent.push({
+      ...option,
+      label: recentMenuLabel ?? option.label,
+      menuLabel: recentMenuLabel,
+      accentLabel,
+      removable: true,
+    });
+  }
+  const recentFamilies = new Set(
+    recent
+      .map(option => models.find(model => model.model === option.value)?.family?.trim() ?? '')
+      .filter(Boolean)
+  );
+  const recommendedEntries = familyEntries.filter(
+    entry => entry.option.recommended === true && !recentFamilies.has(entry.family)
+  );
+  const recommended = recommendedEntries.map(entry => entry.option);
+  const recommendedFamilies = new Set(recommendedEntries.map(entry => entry.family));
+  const recentOptionValues = new Set(recent.map(option => option.value));
+  const allModels = familyEntries
+    .filter(entry => !recommendedFamilies.has(entry.family))
+    .map(entry =>
+      recentOptionValues.has(entry.option.value)
+        ? { ...entry.option, value: duplicateDevinModelOptionValue(entry.option.value) }
+        : entry.option
+    );
+  const groups: WebSessionModelOptionGroup[] = [];
+  if (recent.length) {
+    groups.push({
+      type: 'group',
+      key: 'devin-recent',
+      label: labels.recent ?? 'Recently Used',
+      children: recent,
+    });
+  }
+  if (recommended.length) {
+    groups.push({
+      type: 'group',
+      key: 'devin-recommended',
+      label: labels.recommended ?? 'Recommended',
+      children: recommended,
+    });
+  }
+  if (allModels.length) {
+    groups.push({
+      type: 'group',
+      key: 'devin-all',
+      label: labels.all ?? 'All Models',
+      children: allModels,
+    });
+  }
+  return groups;
+}
+
+export function filterDevinModelOptionGroups(
+  groups: WebSessionModelOptionGroup[],
+  query: string
+): WebSessionModelOptionGroup[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return groups;
+  return groups.flatMap(group => {
+    const children = group.children.filter(option =>
+      [
+        group.label,
+        option.label,
+        option.menuLabel,
+        option.value,
+        option.description,
+        option.searchText,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedQuery)
+    );
+    return children.length ? [{ ...group, children }] : [];
+  });
+}
+
+export function resolveDevinReasoningEfforts(
+  models: WebSessionDevinModelInfo[],
+  selectedModel: string
+): WebSessionReasoningEffort[] {
+  const selected = models.find(model => model.model.trim() === selectedModel.trim());
+  if (selected?.family) {
+    const familyEfforts = models
+      .filter(model => model.family === selected.family)
+      .map(model => model.defaultReasoningEffort)
+      .filter((effort): effort is WebSessionReasoningEffort =>
+        Boolean(effort && effort !== 'default')
+      );
+    if (familyEfforts.length) {
+      return [...new Set(familyEfforts)];
+    }
+  }
+  if (selected?.supportedReasoningEfforts?.length) {
+    return [...new Set(selected.supportedReasoningEfforts)];
+  }
+  const suffix = selectedModel.trim().toLowerCase().split('-').pop();
+  return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(suffix || '')
+    ? [suffix as WebSessionReasoningEffort]
+    : ['default'];
+}
+
+export function resolveDevinModelForReasoning(
+  models: WebSessionDevinModelInfo[],
+  currentModel: string,
+  effort: WebSessionReasoningEffort
+) {
+  const selected = models.find(model => model.model.trim() === currentModel.trim());
+  if (!selected?.family) {
+    return currentModel;
+  }
+  return (
+    models.find(
+      model =>
+        model.family === selected.family && (model.defaultReasoningEffort ?? 'default') === effort
+    )?.model ?? currentModel
+  );
+}
+
+export function resolveDevinSelectedReasoningEffort(
+  models: WebSessionDevinModelInfo[],
+  selectedModel: string,
+  currentEffort: WebSessionReasoningEffort
+) {
+  if (currentEffort !== 'default') return currentEffort;
+  return (
+    models.find(model => model.model.trim() === selectedModel.trim())?.defaultReasoningEffort ??
+    currentEffort
+  );
+}
+
+// CCR routes claude through the Claude Code Router gateway, so the selectable
+// models are the gateway's provider/model ids instead of Anthropic aliases.
+export function resolveCCRModelOptions(
+  models: WebSessionCCRModelInfo[] = []
+): WebSessionModelOption[] {
+  return models
+    .filter(model => Boolean(model.model?.trim()))
+    .map(model => ({
+      label: model.displayName?.trim() || model.model,
+      value: model.model,
+      menuLabel: model.model,
+    }));
+}
+
 export const CLAUDE_RUNTIME_OPTIONS: WebSessionModelOption[] = [
   { label: 'CC', value: 'claude', menuLabel: 'Claude Code' },
   { label: 'CCR', value: 'ccr', menuLabel: 'Claude Code Router' },
 ];
+
+export function resolveDefaultClaudeRuntime(
+  configured: string | null | undefined
+): WebSessionClaudeRuntimeOption {
+  return String(configured ?? '')
+    .trim()
+    .toLowerCase() === 'ccr'
+    ? 'ccr'
+    : 'claude';
+}
 
 export const CODEX_PRIMARY_MODEL_OPTIONS: WebSessionModelOption[] = [
   { label: '5.5', value: 'gpt-5.5', menuLabel: 'GPT-5.5' },
@@ -279,32 +801,43 @@ export function resolveCodexReasoningEfforts(
   return fallback ? [...fallback] : null;
 }
 
+export const BUILTIN_DEFAULT_MODELS: Record<WebSessionAgentOption, string> = {
+  claude: 'opus',
+  codex: EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_MODEL,
+  pi: '',
+  devin: 'swe-2-high',
+};
+
+export const BUILTIN_DEFAULT_REASONING_EFFORTS: Record<
+  WebSessionAgentOption,
+  WebSessionReasoningEffort
+> = {
+  claude: 'default',
+  codex: EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT,
+  pi: 'default',
+  devin: 'high',
+};
+
 export function defaultModelForAgent(
   agent: WebSessionAgentOption,
-  configuredCodexModel = DEFAULT_WEB_SESSION_CODEX_MODEL
+  configuredModel = DEFAULT_WEB_SESSION_CODEX_MODEL
 ) {
-  if (agent === 'claude') {
-    return 'opus';
-  }
-  if (agent === 'pi') {
-    return '';
-  }
-  const configured = configuredCodexModel.trim();
+  const configured = configuredModel.trim();
   return !configured || configured.toLowerCase() === DEFAULT_WEB_SESSION_CODEX_MODEL
-    ? EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_MODEL
+    ? BUILTIN_DEFAULT_MODELS[agent]
     : configured;
 }
 
 export function defaultReasoningEffortForAgent(
   agent: WebSessionAgentOption,
-  configuredCodexEffort: WebSessionCodexDefaultReasoningEffort = DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT
+  configuredEffort: WebSessionCodexDefaultReasoningEffort = DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT
 ): WebSessionReasoningEffort {
-  if (agent !== 'codex' || configuredCodexEffort === 'model_default') {
+  if (configuredEffort === 'model_default') {
     return 'default';
   }
-  return configuredCodexEffort === 'default'
-    ? EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT
-    : configuredCodexEffort;
+  return configuredEffort === 'default'
+    ? BUILTIN_DEFAULT_REASONING_EFFORTS[agent]
+    : configuredEffort;
 }
 
 export function defaultPermissionLevelForAgent(

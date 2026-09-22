@@ -49,6 +49,27 @@ type piHistoryTreeResponse struct {
 	LeafID *string         `json:"leafId"`
 }
 
+// piFailureItemText keeps whatever assistant text a failed message already
+// carried and appends Pi's own errorMessage, so the UI shows the real cause
+// (e.g. a provider-side image rejection) instead of a bare generic fallback.
+func piFailureItemText(text, errorMessage string) string {
+	message := strings.TrimSpace(errorMessage)
+	if message == "" {
+		if strings.TrimSpace(text) != "" {
+			return text
+		}
+		return "Pi assistant run failed"
+	}
+	message = truncateString(message, 2000)
+	if strings.TrimSpace(text) == "" {
+		return "Pi assistant run failed: " + message
+	}
+	if strings.Contains(text, message) {
+		return text
+	}
+	return text + "\n" + message
+}
+
 func (m *Manager) syncImportedPiSession(
 	ctx context.Context,
 	session tables.WebSessionTable,
@@ -174,9 +195,7 @@ func buildPiHistoryProjection(
 		}
 		if strings.EqualFold(strings.TrimSpace(entry.Message.StopReason), "error") || strings.TrimSpace(entry.Message.ErrorMessage) != "" {
 			item.Level = "error"
-			if item.Text == "" {
-				item.Text = "Pi assistant run failed"
-			}
+			item.Text = piFailureItemText(item.Text, entry.Message.ErrorMessage)
 		}
 		row := tables.WebSessionItemTable{}
 		row.Init()
@@ -363,9 +382,7 @@ func (m *Manager) reconcileLivePiHistory(
 			item.Level = ""
 			if strings.EqualFold(strings.TrimSpace(message.entry.Message.StopReason), "error") || strings.TrimSpace(message.entry.Message.ErrorMessage) != "" {
 				item.Level = "error"
-				if item.Text == "" {
-					item.Text = "Pi assistant run failed"
-				}
+				item.Text = piFailureItemText(item.Text, message.entry.Message.ErrorMessage)
 			}
 			applyHistoryItemToRow(row, session.ID, item)
 			row.WebTurnID = nilIfEmptyHistory(turnIDs[message.turnSourceID])

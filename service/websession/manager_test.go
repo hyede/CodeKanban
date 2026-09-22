@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -28,6 +29,40 @@ import (
 
 type captureWSConn struct {
 	frames []wireFrame
+}
+
+func TestForceTerminateRunKillsProcessBeforeCancellingContext(t *testing.T) {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd.exe", "/c", "ping 127.0.0.1 -n 30 >NUL")
+	} else {
+		cmd = exec.Command("sh", "-c", "sleep 30")
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start test process: %v", err)
+	}
+
+	var cancelCalled atomic.Bool
+	run := &activeRun{
+		cmd: cmd,
+		cancel: func() {
+			cancelCalled.Store(true)
+		},
+	}
+	forceTerminateRun(run, true)
+
+	waitErr := make(chan error, 1)
+	go func() {
+		waitErr <- cmd.Wait()
+	}()
+	select {
+	case <-waitErr:
+	case <-time.After(3 * time.Second):
+		t.Fatal("force termination did not stop the process")
+	}
+	if !cancelCalled.Load() {
+		t.Fatal("expected run context cancellation after process termination")
+	}
 }
 
 func (c *captureWSConn) ReadMessage() (messageType int, p []byte, err error) {
@@ -410,10 +445,10 @@ func TestManagerCreateSessionUsesConfiguredCodexDefaultsAndExplicitOverrides(t *
 	configuredPermission := utils.WebSessionCodexStandardPermission
 	manager, err := NewManager(Config{
 		DataDir: t.TempDir(),
-		DefaultCodexModel: func() string {
+		DefaultAgentModel: func(Agent) string {
 			return configuredModel
 		},
-		DefaultCodexReasoningEffort: func() ReasoningEffort {
+		DefaultAgentReasoningEffort: func(Agent) ReasoningEffort {
 			return configuredEffort
 		},
 		DefaultCodexPermissionLevel: func() string {
@@ -471,6 +506,70 @@ func TestManagerCreateSessionUsesConfiguredCodexDefaultsAndExplicitOverrides(t *
 	}
 }
 
+func TestManagerClaudeRuntimeDefaults(t *testing.T) {
+	cleanup := initTestDB(t)
+	defer cleanup()
+
+	project := seedProject(t)
+	configured := "ccr"
+	manager, err := NewManager(Config{
+		DataDir: t.TempDir(),
+		DefaultClaudeRuntime: func() string {
+			return configured
+		},
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name       string
+		configured string
+		agent      Agent
+		provided   ClaudeRuntime
+		want       ClaudeRuntime
+	}{
+		{name: "configured CCR", configured: "ccr", agent: AgentClaude, want: ClaudeRuntimeCCR},
+		{name: "explicit native", configured: "ccr", agent: AgentClaude, provided: ClaudeRuntimeNative, want: ClaudeRuntimeNative},
+		{name: "explicit CCR", configured: "claude", agent: AgentClaude, provided: ClaudeRuntimeCCR, want: ClaudeRuntimeCCR},
+		{name: "default sentinel", configured: "default", agent: AgentClaude, want: ClaudeRuntimeNative},
+		{name: "other agent", configured: "ccr", agent: AgentCodex, want: ClaudeRuntimeNative},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			configured = tt.configured
+			created, err := manager.CreateSession(context.Background(), CreateParams{
+				ProjectID:     project.ID,
+				Agent:         tt.agent,
+				ClaudeRuntime: tt.provided,
+			})
+			if err != nil {
+				t.Fatalf("CreateSession returned error: %v", err)
+			}
+			if created.ClaudeRuntime != tt.want {
+				t.Fatalf("runtime = %q, want %q", created.ClaudeRuntime, tt.want)
+			}
+
+			configured = "ccr"
+			stored, err := manager.GetSession(context.Background(), created.ID)
+			if err != nil {
+				t.Fatalf("GetSession returned error: %v", err)
+			}
+			if stored.ClaudeRuntime != string(tt.want) {
+				t.Fatalf("configuration update changed existing runtime to %q", stored.ClaudeRuntime)
+			}
+			if tt.agent == AgentCodex {
+				updated, err := manager.UpdateAgent(context.Background(), created.ID, AgentClaude)
+				if err != nil {
+					t.Fatalf("UpdateAgent returned error: %v", err)
+				}
+				if updated.ClaudeRuntime != ClaudeRuntimeCCR {
+					t.Fatalf("agent switch did not inherit CCR: %q", updated.ClaudeRuntime)
+				}
+			}
+		})
+	}
+}
+
 func TestManagerCreateSessionResolvesCodexDefaultSentinels(t *testing.T) {
 	cleanup := initTestDB(t)
 	defer cleanup()
@@ -481,10 +580,10 @@ func TestManagerCreateSessionResolvesCodexDefaultSentinels(t *testing.T) {
 	configuredPermission := utils.WebSessionCodexDefaultSetting
 	manager, err := NewManager(Config{
 		DataDir: t.TempDir(),
-		DefaultCodexModel: func() string {
+		DefaultAgentModel: func(Agent) string {
 			return configuredModel
 		},
-		DefaultCodexReasoningEffort: func() ReasoningEffort {
+		DefaultAgentReasoningEffort: func(Agent) ReasoningEffort {
 			return configuredEffort
 		},
 		DefaultCodexPermissionLevel: func() string {
@@ -2568,7 +2667,7 @@ func TestManagerListSessionsDoesNotUseContextWindowFromDifferentConfiguredModel(
 	}
 }
 
-func TestUpdateModelClearsObservedContextWindow(t *testing.T) {
+func TestUpdateModelPreservesObservedContextWindow(t *testing.T) {
 	cleanup := initTestDB(t)
 	defer cleanup()
 
@@ -2576,6 +2675,8 @@ func TestUpdateModelClearsObservedContextWindow(t *testing.T) {
 	session := seedWebSession(t, project.ID, "Codex", 1000)
 	observedAt := time.Now()
 	if err := model.GetDB().Model(session).Updates(map[string]any{
+		"applied_context_window_setting":     int64(512000),
+		"context_window_setting":             int64(768000),
 		"session_context_window_tokens":      int64(353400),
 		"session_context_window_observed_at": observedAt,
 	}).Error; err != nil {
@@ -2593,11 +2694,17 @@ func TestUpdateModelClearsObservedContextWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSession returned error: %v", err)
 	}
-	if record.SessionContextWindowTokens != 0 {
-		t.Fatalf("expected observed context window to be cleared, got %d", record.SessionContextWindowTokens)
+	if record.SessionContextWindowTokens != 353400 {
+		t.Fatalf("expected observed context window to be preserved, got %d", record.SessionContextWindowTokens)
 	}
-	if record.SessionContextWindowObservedAt != nil {
-		t.Fatalf("expected observed context timestamp to be cleared, got %v", record.SessionContextWindowObservedAt)
+	if record.ContextWindowSetting != 768000 {
+		t.Fatalf("expected context window setting to be preserved, got %d", record.ContextWindowSetting)
+	}
+	if record.AppliedContextWindowSetting == nil || *record.AppliedContextWindowSetting != 512000 {
+		t.Fatalf("expected applied context window setting to be preserved, got %v", record.AppliedContextWindowSetting)
+	}
+	if record.SessionContextWindowObservedAt == nil || !record.SessionContextWindowObservedAt.Equal(observedAt) {
+		t.Fatalf("expected observed context timestamp to be preserved, got %v", record.SessionContextWindowObservedAt)
 	}
 }
 
@@ -5189,6 +5296,37 @@ func TestCodexV2SubAgentActivityUpdatesRegistryAndHistory(t *testing.T) {
 		activity.SourceTurnID == nil || *activity.SourceTurnID != "turn_root" ||
 		activity.SourceItemID == nil || *activity.SourceItemID != "activity_started" {
 		t.Fatalf("unexpected semantic activity history item: %#v", activity)
+	}
+
+	_, err = manager.handleCodexAppServerMessage(*session, run, nil, rootScope, codexAppServerIncoming{
+		Method: "thread/tokenUsage/updated",
+		Params: func() json.RawMessage {
+			encoded, marshalErr := json.Marshal(map[string]any{
+				"threadId": "thread_child",
+				"turnId":   "turn_child",
+				"tokenUsage": map[string]any{
+					"total": map[string]any{
+						"input_tokens": 100, "cached_input_tokens": 20,
+						"output_tokens": 30, "total_tokens": 130,
+					},
+				},
+			})
+			if marshalErr != nil {
+				t.Fatalf("marshal child token usage: %v", marshalErr)
+			}
+			return encoded
+		}(),
+	})
+	if err != nil {
+		t.Fatalf("handle child token usage: %v", err)
+	}
+	agents, err = manager.sessionSubAgents(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("sessionSubAgents after child token usage: %v", err)
+	}
+	if len(agents) != 1 || !agents[0].Active || agents[0].InputTokens != 100 ||
+		agents[0].CachedInputTokens != 20 || agents[0].OutputTokens != 30 || agents[0].TotalTokens != 130 {
+		t.Fatalf("expected child usage and active state to be retained, got %#v", agents)
 	}
 
 	_, err = manager.handleCodexAppServerMessage(*session, run, nil, rootScope, codexAppServerIncoming{
@@ -8982,6 +9120,129 @@ func TestDecorateProjectedEventSeparatesDynamicToolNames(t *testing.T) {
 	}
 }
 
+func TestHistoryFoldsAdjacentPiToolsIntoOneActivityGroup(t *testing.T) {
+	cleanup := initTestDB(t)
+	defer cleanup()
+
+	project := seedProject(t)
+	session := seedWebSessionWithAgent(t, project.ID, "Pi activity", 1000, AgentPi)
+	manager, err := NewManager(Config{DataDir: t.TempDir()}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	// Pi names its tools freely, so unlike Codex there is no shared kind to fold
+	// on: two different tools must still end up in one activity group.
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_bash_st", Seq: 1, Type: "tool_st", Timestamp: time.UnixMilli(1_000),
+		Payload: map[string]any{
+			"tid": "bash1", "name": "bash", "kind": piToolHistoryKind,
+			"in": map[string]any{"command": "go test ./..."},
+		},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_bash_end", Seq: 2, Type: "tool_end", Timestamp: time.UnixMilli(2_000),
+		Payload: map[string]any{"tid": "bash1", "kind": piToolHistoryKind, "out": "ok", "ok": true},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_note_st", Seq: 3, Type: "tool_st", Timestamp: time.UnixMilli(3_000),
+		Payload: map[string]any{
+			"tid": "note1", "name": "ctx_note", "kind": piToolHistoryKind,
+			"in": map[string]any{"content": "remember this"},
+		},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_note_end", Seq: 4, Type: "tool_end", Timestamp: time.UnixMilli(4_000),
+		Payload: map[string]any{"tid": "note1", "kind": piToolHistoryKind, "out": "saved", "ok": true},
+	})
+
+	history, err := manager.History(context.Background(), session.ID, 20, nil)
+	if err != nil {
+		t.Fatalf("History returned error: %v", err)
+	}
+	if len(history.Items) != 1 {
+		t.Fatalf("expected one folded Pi activity item, got %d", len(history.Items))
+	}
+	grouped := history.Items[0]
+	if grouped.Tool == nil || grouped.Tool.CommandGroup == nil {
+		t.Fatalf("expected folded group metadata, got %#v", grouped.Tool)
+	}
+	if got := grouped.Tool.CommandGroup.ID; got != commandExecutionGroupID("bash1") {
+		t.Fatalf("expected group anchored on the first tool %q, got %q", commandExecutionGroupID("bash1"), got)
+	}
+	if grouped.Tool.CommandGroup.Count != 2 {
+		t.Fatalf("expected folded count 2, got %d", grouped.Tool.CommandGroup.Count)
+	}
+	if !grouped.Tool.CommandGroup.Compacted {
+		t.Fatalf("expected the Pi activity group to be marked compacted, got %#v", grouped.Tool.CommandGroup)
+	}
+	if got := grouped.Tool.Name; got != "ctx_note" {
+		t.Fatalf("expected the folded card to carry the latest tool %q, got %q", "ctx_note", got)
+	}
+}
+
+func TestHistorySplitsPiActivityGroupOnAssistantReply(t *testing.T) {
+	cleanup := initTestDB(t)
+	defer cleanup()
+
+	project := seedProject(t)
+	session := seedWebSessionWithAgent(t, project.ID, "Pi activity split", 1000, AgentPi)
+	manager, err := NewManager(Config{DataDir: t.TempDir()}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_bash1_st", Seq: 1, Type: "tool_st", Timestamp: time.UnixMilli(1_000),
+		Payload: map[string]any{"tid": "bash1", "name": "bash", "kind": piToolHistoryKind},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_bash1_end", Seq: 2, Type: "tool_end", Timestamp: time.UnixMilli(2_000),
+		Payload: map[string]any{"tid": "bash1", "kind": piToolHistoryKind, "out": "ok", "ok": true},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_text", Seq: 3, Type: "txt_d", Timestamp: time.UnixMilli(3_000),
+		Payload: map[string]any{"mid": "msg1", "txt": "first step done"},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_bash2_st", Seq: 4, Type: "tool_st", Timestamp: time.UnixMilli(4_000),
+		Payload: map[string]any{"tid": "bash2", "name": "bash", "kind": piToolHistoryKind},
+	})
+	appendHistoryEvent(t, manager, session.ID, Event{
+		ID: "evt_bash2_end", Seq: 5, Type: "tool_end", Timestamp: time.UnixMilli(5_000),
+		Payload: map[string]any{"tid": "bash2", "kind": piToolHistoryKind, "out": "ok", "ok": true},
+	})
+
+	history, err := manager.History(context.Background(), session.ID, 20, nil)
+	if err != nil {
+		t.Fatalf("History returned error: %v", err)
+	}
+	if len(history.Items) != 3 {
+		t.Fatalf("expected tool, reply and tool items, got %d", len(history.Items))
+	}
+	first := history.Items[0]
+	last := history.Items[2]
+	if first.Tool == nil || first.Tool.CommandGroup == nil || last.Tool == nil {
+		t.Fatalf("expected tool items around the reply, got %#v / %#v", first.Tool, last.Tool)
+	}
+	if first.Tool.CommandGroup.Count != 1 {
+		t.Fatalf("expected a single-tool group before the reply, got %d", first.Tool.CommandGroup.Count)
+	}
+	if last.Tool.CommandGroup == nil || last.Tool.CommandGroup.ID == first.Tool.CommandGroup.ID {
+		t.Fatalf("expected the reply to close the Pi activity group, got %#v", last.Tool.CommandGroup)
+	}
+}
+
+func TestPiToolHistoryKindStaysCompactAndGeneric(t *testing.T) {
+	if !isCompactToolKind(piToolHistoryKind) {
+		t.Fatalf("expected %q to be a compact tool kind", piToolHistoryKind)
+	}
+	kind, ok := activeCallTimeoutKindFromTool(piToolHistoryKind)
+	if !ok || kind != activeCallTimeoutKindTool {
+		t.Fatalf("expected %q to keep the generic tool timeout policy, got %q (%v)", piToolHistoryKind, kind, ok)
+	}
+}
+
 func TestCodexToolResultUsesCamelCaseAggregatedOutput(t *testing.T) {
 	got := codexToolResult(map[string]any{
 		"type":             "commandExecution",
@@ -11518,4 +11779,53 @@ func appendHistoryEvent(t *testing.T, manager *Manager, sessionID string, event 
 	if _, err := manager.applyEventToHistoryCache(context.Background(), sessionID, event); err != nil {
 		t.Fatalf("applyEventToHistoryCache returned error: %v", err)
 	}
+}
+
+func TestDefaultCCRFallsBackToDesktopAppLauncher(t *testing.T) {
+	writeLauncher := func(dir, name string) error {
+		script := "#!/bin/sh\nexit 0\n"
+		if runtime.GOOS == "windows" {
+			name, script = name+".cmd", "@echo off\r\nexit /b 0\r\n"
+		}
+		return os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755)
+	}
+
+	t.Run("probes the desktop bin dir when the PATH is stale", func(t *testing.T) {
+		appDataDir := t.TempDir()
+		binDir := filepath.Join(appDataDir, "claude-code-router", "bin")
+		if err := os.MkdirAll(binDir, 0o755); err != nil {
+			t.Fatalf("create fake desktop bin dir: %v", err)
+		}
+		if err := writeLauncher(binDir, "ccr-app"); err != nil {
+			t.Fatalf("write fake ccr-app launcher: %v", err)
+		}
+		t.Setenv("PATH", t.TempDir())
+		t.Setenv("CCR_PATH", "")
+		t.Setenv("APPDATA", appDataDir)
+
+		ccrPath := defaultCCRPath()
+		if !strings.Contains(strings.ToLower(ccrPath), filepath.Join("claude-code-router", "bin")) ||
+			!strings.Contains(strings.ToLower(ccrPath), "ccr-app") {
+			t.Fatalf("expected default CCR path to probe the desktop bin dir, got %q", ccrPath)
+		}
+	})
+
+	t.Run("returns the CLI name when nothing is installed", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		t.Setenv("CCR_PATH", "")
+		t.Setenv("APPDATA", t.TempDir())
+
+		if ccrPath := defaultCCRPath(); ccrPath != "ccr" {
+			t.Fatalf("expected default CCR path to stay ccr, got %q", ccrPath)
+		}
+	})
+
+	t.Run("keeps an explicit CCR_PATH even when unresolvable", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		t.Setenv("CCR_PATH", "custom-ccr")
+
+		if ccrPath := defaultCCRPath(); ccrPath != "custom-ccr" {
+			t.Fatalf("expected explicit CCR_PATH to win, got %q", ccrPath)
+		}
+	})
 }

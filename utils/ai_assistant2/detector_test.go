@@ -107,14 +107,19 @@ func TestDetectFromCommand(t *testing.T) {
 			want:    types.AssistantTypeClaudeCode,
 		},
 		{
-			name:    "claude code router direct command",
-			command: "ccr code --model sonnet",
+			name:    "claude code router profile launch command",
+			command: "ccr default-claude-code cli -- --model sonnet",
 			want:    types.AssistantTypeClaudeCode,
 		},
 		{
-			name:    "claude code router node cli command",
-			command: "node /usr/local/lib/node_modules/@musistudio/claude-code-router/dist/cli.js code --model sonnet",
+			name:    "claude code router wrapper command",
+			command: `C:\Users\demo\.claude-code-router\bin\ccr-claude-code-wrapper-code.cmd -p --model sonnet`,
 			want:    types.AssistantTypeClaudeCode,
+		},
+		{
+			name:    "claude code router management command is not assistant",
+			command: "node /usr/local/lib/node_modules/@musistudio/claude-code-router/dist/cli.js status",
+			want:    types.AssistantTypeUnknown,
 		},
 		{
 			name:    "claude code router status is not assistant",

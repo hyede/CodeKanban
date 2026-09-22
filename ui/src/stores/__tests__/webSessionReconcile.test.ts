@@ -223,6 +223,32 @@ describe('web session resume reconciliation', () => {
     expect(listMock).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps the last known context window across model changes during an unavailable refresh', async () => {
+    const recorded = makeSession({
+      contextWindowTokens: 486400,
+      contextWindowSource: 'session_usage',
+    });
+    const unavailable = makeSession({
+      ...recorded,
+      revision: '2',
+      model: 'gpt-5.6-luna',
+      contextWindowTokens: null,
+      contextWindowSource: 'unavailable',
+    });
+    listMock.mockResolvedValue([recorded]);
+    reconcileMock.mockResolvedValue({ items: [unavailable], missingIds: [] });
+
+    const store = useWebSessionStore();
+    await store.loadSessions(recorded.projectId);
+    await store.reconcileRecentSessions();
+
+    expect(store.getSessions(recorded.projectId)[0]).toMatchObject({
+      id: recorded.id,
+      contextWindowTokens: 486400,
+      contextWindowSource: 'session_usage',
+    });
+  });
+
   it('allows an immediate retry when resume reconciliation fails', async () => {
     const running = makeSession({
       id: 'retry-running',

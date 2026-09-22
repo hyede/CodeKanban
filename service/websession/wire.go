@@ -221,19 +221,24 @@ type wireHistItem struct {
 }
 
 type wireSubAgent struct {
-	ThreadID         string  `json:"tid"`
-	ParentThreadID   *string `json:"ptid,omitempty"`
-	Path             string  `json:"p,omitempty"`
-	Nickname         string  `json:"nn,omitempty"`
-	Role             string  `json:"rl,omitempty"`
-	Status           string  `json:"st"`
-	Summary          string  `json:"sm,omitempty"`
-	CurrentTurnID    *string `json:"ctid,omitempty"`
-	LatestItemID     *string `json:"liid,omitempty"`
-	LatestOrderIndex int64   `json:"loi,omitempty"`
-	StartedAt        *int64  `json:"sa,omitempty"`
-	LastActivityAt   *int64  `json:"la,omitempty"`
-	EndedAt          *int64  `json:"ea,omitempty"`
+	ThreadID          string  `json:"tid"`
+	ParentThreadID    *string `json:"ptid,omitempty"`
+	Path              string  `json:"p,omitempty"`
+	Nickname          string  `json:"nn,omitempty"`
+	Role              string  `json:"rl,omitempty"`
+	Status            string  `json:"st"`
+	Active            bool    `json:"act,omitempty"`
+	Summary           string  `json:"sm,omitempty"`
+	InputTokens       int64   `json:"uin,omitempty"`
+	CachedInputTokens int64   `json:"ucin,omitempty"`
+	OutputTokens      int64   `json:"uout,omitempty"`
+	TotalTokens       int64   `json:"utot,omitempty"`
+	CurrentTurnID     *string `json:"ctid,omitempty"`
+	LatestItemID      *string `json:"liid,omitempty"`
+	LatestOrderIndex  int64   `json:"loi,omitempty"`
+	StartedAt         *int64  `json:"sa,omitempty"`
+	LastActivityAt    *int64  `json:"la,omitempty"`
+	EndedAt           *int64  `json:"ea,omitempty"`
 }
 
 type wireHistoryAttach struct {
@@ -290,26 +295,27 @@ type wirePendingInput struct {
 }
 
 type wireScheduledInput struct {
-	ID               string   `json:"id"`
-	DependsOnID      string   `json:"dep,omitempty"`
-	DependencyStatus string   `json:"dst,omitempty"`
-	Action           string   `json:"a,omitempty"`
-	TargetID         string   `json:"tid,omitempty"`
-	Mode             string   `json:"m"`
-	ExitPlanMode     bool     `json:"epm,omitempty"`
-	Text             string   `json:"txt,omitempty"`
-	AttachmentIDs    []string `json:"atts,omitempty"`
-	ScheduleKind     string   `json:"sk,omitempty"`
-	ScheduledFor     *int64   `json:"sf,omitempty"`
-	IdleSince        *int64   `json:"is,omitempty"`
-	BlockingReasons  []string `json:"br,omitempty"`
-	ConditionError   string   `json:"ce,omitempty"`
-	Status           string   `json:"st"`
-	LastError        string   `json:"err,omitempty"`
-	CreatedAt        int64    `json:"ca"`
-	UpdatedAt        int64    `json:"ua"`
-	SentAt           *int64   `json:"sa,omitempty"`
-	CanceledAt       *int64   `json:"xa,omitempty"`
+	ID                           string   `json:"id"`
+	DependsOnID                  string   `json:"dep,omitempty"`
+	DependencyStatus             string   `json:"dst,omitempty"`
+	Action                       string   `json:"a,omitempty"`
+	TargetID                     string   `json:"tid,omitempty"`
+	ContextWindowSettingSnapshot *int64   `json:"cws,omitempty"`
+	Mode                         string   `json:"m"`
+	ExitPlanMode                 bool     `json:"epm,omitempty"`
+	Text                         string   `json:"txt,omitempty"`
+	AttachmentIDs                []string `json:"atts,omitempty"`
+	ScheduleKind                 string   `json:"sk,omitempty"`
+	ScheduledFor                 *int64   `json:"sf,omitempty"`
+	IdleSince                    *int64   `json:"is,omitempty"`
+	BlockingReasons              []string `json:"br,omitempty"`
+	ConditionError               string   `json:"ce,omitempty"`
+	Status                       string   `json:"st"`
+	LastError                    string   `json:"err,omitempty"`
+	CreatedAt                    int64    `json:"ca"`
+	UpdatedAt                    int64    `json:"ua"`
+	SentAt                       *int64   `json:"sa,omitempty"`
+	CanceledAt                   *int64   `json:"xa,omitempty"`
 }
 
 type wireResyncRequiredPayload struct {
@@ -725,26 +731,27 @@ func mapWireScheduledInputs(items []ScheduledInput) []wireScheduledInput {
 			canceledAt = &value
 		}
 		wireItems = append(wireItems, wireScheduledInput{
-			ID:               item.ID,
-			DependsOnID:      item.DependsOnID,
-			DependencyStatus: string(item.DependencyStatus),
-			Action:           string(item.Action),
-			TargetID:         item.TargetID,
-			Mode:             string(item.Mode),
-			ExitPlanMode:     item.ExitPlanMode,
-			Text:             item.Text,
-			AttachmentIDs:    append([]string(nil), item.AttachmentIDs...),
-			ScheduleKind:     string(item.ScheduleKind),
-			ScheduledFor:     scheduledFor,
-			IdleSince:        idleSince,
-			BlockingReasons:  blockingReasons,
-			ConditionError:   item.ConditionError,
-			Status:           string(item.Status),
-			LastError:        item.LastError,
-			CreatedAt:        item.CreatedAt.UnixMilli(),
-			UpdatedAt:        item.UpdatedAt.UnixMilli(),
-			SentAt:           sentAt,
-			CanceledAt:       canceledAt,
+			ID:                           item.ID,
+			DependsOnID:                  item.DependsOnID,
+			DependencyStatus:             string(item.DependencyStatus),
+			Action:                       string(item.Action),
+			TargetID:                     item.TargetID,
+			ContextWindowSettingSnapshot: item.ContextWindowSettingSnapshot,
+			Mode:                         string(item.Mode),
+			ExitPlanMode:                 item.ExitPlanMode,
+			Text:                         item.Text,
+			AttachmentIDs:                append([]string(nil), item.AttachmentIDs...),
+			ScheduleKind:                 string(item.ScheduleKind),
+			ScheduledFor:                 scheduledFor,
+			IdleSince:                    idleSince,
+			BlockingReasons:              blockingReasons,
+			ConditionError:               item.ConditionError,
+			Status:                       string(item.Status),
+			LastError:                    item.LastError,
+			CreatedAt:                    item.CreatedAt.UnixMilli(),
+			UpdatedAt:                    item.UpdatedAt.UnixMilli(),
+			SentAt:                       sentAt,
+			CanceledAt:                   canceledAt,
 		})
 	}
 	return wireItems
@@ -792,19 +799,24 @@ func mapWireHistoryItem(item HistoryItem) wireHistItem {
 
 func mapWireSubAgent(item WebSessionSubAgent) wireSubAgent {
 	return wireSubAgent{
-		ThreadID:         item.ThreadID,
-		ParentThreadID:   item.ParentThreadID,
-		Path:             item.Path,
-		Nickname:         item.Nickname,
-		Role:             item.Role,
-		Status:           string(item.Status),
-		Summary:          item.Summary,
-		CurrentTurnID:    item.CurrentTurnID,
-		LatestItemID:     item.LatestItemID,
-		LatestOrderIndex: item.LatestOrderIndex,
-		StartedAt:        unixMilliPtr(item.StartedAt),
-		LastActivityAt:   unixMilliPtr(item.LastActivityAt),
-		EndedAt:          unixMilliPtr(item.EndedAt),
+		ThreadID:          item.ThreadID,
+		ParentThreadID:    item.ParentThreadID,
+		Path:              item.Path,
+		Nickname:          item.Nickname,
+		Role:              item.Role,
+		Status:            string(item.Status),
+		Active:            item.Active,
+		Summary:           item.Summary,
+		InputTokens:       item.InputTokens,
+		CachedInputTokens: item.CachedInputTokens,
+		OutputTokens:      item.OutputTokens,
+		TotalTokens:       item.TotalTokens,
+		CurrentTurnID:     item.CurrentTurnID,
+		LatestItemID:      item.LatestItemID,
+		LatestOrderIndex:  item.LatestOrderIndex,
+		StartedAt:         unixMilliPtr(item.StartedAt),
+		LastActivityAt:    unixMilliPtr(item.LastActivityAt),
+		EndedAt:           unixMilliPtr(item.EndedAt),
 	}
 }
 

@@ -61,6 +61,43 @@ func TestBackfillWebSessionItemCommandGroupIDs(t *testing.T) {
 	}
 }
 
+func TestBackfillWebSessionSubAgentActive(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "sub-agent-active-backfill.db")
+	if err := InitWithDSN(dsn, 0, true); err != nil {
+		t.Fatalf("InitWithDSN: %v", err)
+	}
+	t.Cleanup(DBClose)
+
+	rows := []tables.WebSessionSubAgentTable{
+		{WebSessionID: "session-1", ThreadID: "thread-running", Status: "running"},
+		{WebSessionID: "session-1", ThreadID: "thread-idle", Status: "idle"},
+	}
+	for index := range rows {
+		rows[index].ID = "sub-agent-" + string(rune('a'+index))
+		if err := db.Create(&rows[index]).Error; err != nil {
+			t.Fatalf("create sub-agent row %d: %v", index, err)
+		}
+	}
+
+	backfilled, err := backfillWebSessionSubAgentActive()
+	if err != nil {
+		t.Fatalf("backfillWebSessionSubAgentActive: %v", err)
+	}
+	if backfilled != 1 {
+		t.Fatalf("backfilled rows = %d, want 1", backfilled)
+	}
+	var running, idle tables.WebSessionSubAgentTable
+	if err := db.First(&running, "thread_id = ?", "thread-running").Error; err != nil {
+		t.Fatalf("load running sub-agent: %v", err)
+	}
+	if err := db.First(&idle, "thread_id = ?", "thread-idle").Error; err != nil {
+		t.Fatalf("load idle sub-agent: %v", err)
+	}
+	if !running.IsActive || idle.IsActive {
+		t.Fatalf("unexpected active states: running=%v idle=%v", running.IsActive, idle.IsActive)
+	}
+}
+
 func TestWebSessionItemCommandGroupIndexColumns(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "command-group-index.db")
 	if err := InitWithDSN(dsn, 0, true); err != nil {

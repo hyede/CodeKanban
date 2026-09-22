@@ -1,4 +1,7 @@
 import {
+  DEFAULT_WEB_SESSION_CODEX_CLIENT_NAME,
+  DEFAULT_WEB_SESSION_CODEX_CLIENT_TITLE,
+  DEFAULT_WEB_SESSION_CODEX_CLIENT_VERSION,
   DEFAULT_WEB_SESSION_CODEX_MODEL,
   DEFAULT_WEB_SESSION_CODEX_PERMISSION_LEVEL,
   DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT,
@@ -70,20 +73,35 @@ export function sanitizeAutoRetryDefaultsConfig(
   };
 }
 
+function sanitizeAgentDefaultModel(value?: string | null): string {
+  const normalized = value?.trim() ?? '';
+  return !normalized || normalized.toLowerCase() === DEFAULT_WEB_SESSION_CODEX_MODEL
+    ? DEFAULT_WEB_SESSION_CODEX_MODEL
+    : normalized;
+}
+
 export function sanitizeDeveloperConfig(value?: Partial<DeveloperConfig> | null): DeveloperConfig {
-  const configuredModel = value?.webSessionCodexDefaultModel?.trim();
   return {
     enableTerminalScrollback: value?.enableTerminalScrollback ?? false,
     enableTerminalStateSnapshot: value?.enableTerminalStateSnapshot ?? false,
+    webSessionCodexClientName:
+      value?.webSessionCodexClientName === undefined
+        ? DEFAULT_WEB_SESSION_CODEX_CLIENT_NAME
+        : value.webSessionCodexClientName.trim(),
+    webSessionCodexClientTitle:
+      value?.webSessionCodexClientTitle === undefined
+        ? DEFAULT_WEB_SESSION_CODEX_CLIENT_TITLE
+        : value.webSessionCodexClientTitle.trim(),
+    webSessionCodexClientVersion:
+      value?.webSessionCodexClientVersion === undefined
+        ? DEFAULT_WEB_SESSION_CODEX_CLIENT_VERSION
+        : value.webSessionCodexClientVersion.trim(),
     webSessionCodexContextWindow: [0, 512000, 768000, 1000000].includes(
       value?.webSessionCodexContextWindow ?? 0
     )
       ? (value?.webSessionCodexContextWindow ?? 0)
       : 0,
-    webSessionCodexDefaultModel:
-      configuredModel?.toLowerCase() === DEFAULT_WEB_SESSION_CODEX_MODEL
-        ? DEFAULT_WEB_SESSION_CODEX_MODEL
-        : configuredModel || DEFAULT_WEB_SESSION_CODEX_MODEL,
+    webSessionCodexDefaultModel: sanitizeAgentDefaultModel(value?.webSessionCodexDefaultModel),
     webSessionCodexDefaultReasoningEffort: normalizeConfiguredCodexReasoningEffort(
       value?.webSessionCodexDefaultReasoningEffort ?? DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT
     ),
@@ -95,6 +113,23 @@ export function sanitizeDeveloperConfig(value?: Partial<DeveloperConfig> | null)
       value?.webSessionCodexDefaultSyncMode === 'deep'
         ? value.webSessionCodexDefaultSyncMode
         : DEFAULT_WEB_SESSION_CODEX_SYNC_MODE,
+    webSessionClaudeDefaultModel: sanitizeAgentDefaultModel(value?.webSessionClaudeDefaultModel),
+    webSessionClaudeDefaultReasoningEffort: normalizeConfiguredCodexReasoningEffort(
+      value?.webSessionClaudeDefaultReasoningEffort ?? DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT
+    ),
+    webSessionClaudeDefaultRuntime:
+      value?.webSessionClaudeDefaultRuntime === 'claude' ||
+      value?.webSessionClaudeDefaultRuntime === 'ccr'
+        ? value.webSessionClaudeDefaultRuntime
+        : 'default',
+    webSessionPiDefaultModel: sanitizeAgentDefaultModel(value?.webSessionPiDefaultModel),
+    webSessionPiDefaultReasoningEffort: normalizeConfiguredCodexReasoningEffort(
+      value?.webSessionPiDefaultReasoningEffort ?? DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT
+    ),
+    webSessionDevinDefaultModel: sanitizeAgentDefaultModel(value?.webSessionDevinDefaultModel),
+    webSessionDevinDefaultReasoningEffort: normalizeConfiguredCodexReasoningEffort(
+      value?.webSessionDevinDefaultReasoningEffort ?? DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT
+    ),
     webSessionAutoRetryDefaults: sanitizeAutoRetryDefaultsConfig(
       value?.webSessionAutoRetryDefaults
     ),

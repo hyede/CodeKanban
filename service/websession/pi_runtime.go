@@ -166,7 +166,10 @@ func (m *Manager) startPiRuntime(
 		}
 	}()
 
-	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// The handshake shares one deadline across get_state/get_commands/get_entries
+	// and starts before the child process has answered anything, so it uses the
+	// generous startup budget instead of the per-request timeout.
+	requestCtx, cancel := context.WithTimeout(ctx, piRPCStartupTimeout)
 	defer cancel()
 	var state piRPCState
 	if err := client.Request(requestCtx, "get_state", nil, &state); err != nil {
@@ -1019,8 +1022,9 @@ func applyPiContextUsageUpdates(
 	observedAt time.Time,
 ) {
 	if contextUsage == nil || contextUsage.Tokens == nil || contextUsage.ContextWindow <= 0 {
-		updates["session_context_window_tokens"] = 0
-		updates["session_context_window_observed_at"] = nil
+		// A status refresh can omit contextUsage while the native session is
+		// still usable. Keep the last valid window recorded for this session;
+		// only a newer positive observation should replace it.
 		if includeLatest {
 			updates["latest_token_count_input_tokens"] = 0
 			updates["latest_token_count_cached_input_tokens"] = 0

@@ -68,7 +68,7 @@ import {
 
 const highlightPluginKey = new PluginKey<DecorationSet>('webSessionComposerHighlights');
 const ComposerDocument = Document.extend({
-  content: 'paragraph',
+  content: 'paragraph+',
 });
 const ComposerParagraph = Paragraph.extend({
   marks: '',
@@ -143,8 +143,8 @@ function buildHighlightDecorations(doc: ProseMirrorNode) {
               ? 'composer-skill-token'
               : 'composer-skill-token composer-skill-token--unknown';
       return Decoration.inline(
-        composerOffsetToPosition(range.from, text.length),
-        composerOffsetToPosition(range.to, text.length),
+        composerOffsetToPosition(range.from, doc),
+        composerOffsetToPosition(range.to, doc),
         { class: className }
       );
     }
@@ -185,10 +185,9 @@ function getSelectionRange(editor = editorRef.value): WebSessionComposerSelectio
     return { start: length, end: length };
   }
 
-  const textLength = getEditorText(editor).length;
   return {
-    start: composerPositionToOffset(editor.state.selection.from, textLength),
-    end: composerPositionToOffset(editor.state.selection.to, textLength),
+    start: composerPositionToOffset(editor.state.selection.from, editor.state.doc),
+    end: composerPositionToOffset(editor.state.selection.to, editor.state.doc),
   };
 }
 
@@ -252,24 +251,26 @@ function insertPlainText(text: string, from: number, to: number) {
   const safeFrom = Math.max(0, Math.min(from, currentText.length));
   const safeTo = Math.max(safeFrom, Math.min(to, currentText.length));
   const normalizedText = String(text ?? '').replace(/\r\n?/g, '\n');
-  const cursor = safeFrom + normalizedText.length;
-  return editor
+  const currentDocument = editor.state.doc;
+  const inserted = editor
     .chain()
     .focus()
     .insertContentAt(
       {
-        from: composerOffsetToPosition(safeFrom, currentText.length),
-        to: composerOffsetToPosition(safeTo, currentText.length),
+        from: composerOffsetToPosition(safeFrom, currentDocument),
+        to: composerOffsetToPosition(safeTo, currentDocument),
       },
       inlineContentFromText(normalizedText)
     )
-    .setTextSelection(
-      composerOffsetToPosition(
-        cursor,
-        currentText.length - (safeTo - safeFrom) + normalizedText.length
-      )
-    )
     .run();
+  if (!inserted) {
+    return false;
+  }
+
+  const nextText = getEditorText(editor);
+  const cursor = Math.max(0, Math.min(safeFrom + normalizedText.length, nextText.length));
+  editor.commands.setTextSelection(composerOffsetToPosition(cursor, editor.state.doc));
+  return true;
 }
 
 function applyCompletion(option: WebSessionComposerCompletionOption) {
@@ -351,9 +352,15 @@ function handleEditorPaste(event: ClipboardEvent) {
     return false;
   }
 
+  const plainText = clipboardData.getData('text/plain');
+  if (!plainText) {
+    // Let ProseMirror parse HTML-only clipboard data into a structured Slice.
+    return false;
+  }
+
   event.preventDefault();
   const selection = getSelectionRange();
-  insertPlainText(clipboardData.getData('text/plain'), selection.start, selection.end);
+  insertPlainText(plainText, selection.start, selection.end);
   return true;
 }
 
@@ -416,9 +423,9 @@ function setSelectionRange(start: number, end = start) {
     return;
   }
 
-  const textLength = getEditorText(editor).length;
-  const from = composerOffsetToPosition(start, textLength);
-  const to = composerOffsetToPosition(end, textLength);
+  const document = editor.state.doc;
+  const from = composerOffsetToPosition(start, document);
+  const to = composerOffsetToPosition(end, document);
   editor.chain().setTextSelection({ from, to }).focus().run();
   refreshCompletion();
 }

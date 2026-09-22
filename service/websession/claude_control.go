@@ -427,9 +427,10 @@ func (m *Manager) respondClaudeControl(
 	m.resumeActiveCallTimeout(run)
 	now := time.Now()
 	payload := map[string]any{
-		"iid":    pending.ItemID,
-		"prompt": pending.Prompt,
-		"act":    "approve",
+		"iid":     pending.ItemID,
+		"prompt":  pending.Prompt,
+		"command": pending.Command,
+		"act":     "approve",
 	}
 	if behavior != "allow" {
 		payload["act"] = "reject"
@@ -477,10 +478,11 @@ func (m *Manager) handleClaudeControlCancel(session tables.WebSessionTable, run 
 	now := time.Now()
 	eventType := "approval_res"
 	payload := map[string]any{
-		"iid":    pending.ItemID,
-		"prompt": pending.Prompt,
-		"act":    "cancel",
-		"err":    "Claude canceled this request.",
+		"iid":     pending.ItemID,
+		"prompt":  pending.Prompt,
+		"command": pending.Command,
+		"act":     "cancel",
+		"err":     "Claude canceled this request.",
 	}
 	if pending.Kind == pendingServerRequestUserInput {
 		eventType = "user_input_res"

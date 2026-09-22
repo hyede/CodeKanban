@@ -111,6 +111,49 @@ type codexAppServerClient struct {
 	mcpStatusMu        sync.Mutex
 }
 
+func (m *Manager) codexClientName() string {
+	if m != nil && m.cfg.CodexClientName != nil {
+		return strings.TrimSpace(m.cfg.CodexClientName())
+	}
+	return ""
+}
+
+func (m *Manager) codexClientTitle() string {
+	if m != nil && m.cfg.CodexClientTitle != nil {
+		return strings.TrimSpace(m.cfg.CodexClientTitle())
+	}
+	return ""
+}
+
+func (m *Manager) codexClientVersion() string {
+	if m != nil && m.cfg.CodexClientVersion != nil {
+		return strings.TrimSpace(m.cfg.CodexClientVersion())
+	}
+	return ""
+}
+
+// codexClientInfo builds the clientInfo object sent in the initialize handshake
+// with the Codex app-server, mirroring the fields Codex's protocol exposes.
+// Fields are only included when they have a value, so leaving the client
+// metadata blank omits individual fields; a fully blank config returns nil and
+// callers should not send a clientInfo object at all.
+func (m *Manager) codexClientInfo() map[string]any {
+	info := make(map[string]any)
+	if name := m.codexClientName(); name != "" {
+		info["name"] = name
+	}
+	if title := m.codexClientTitle(); title != "" {
+		info["title"] = title
+	}
+	if version := m.codexClientVersion(); version != "" {
+		info["version"] = version
+	}
+	if len(info) == 0 {
+		return nil
+	}
+	return info
+}
+
 type pendingServerRequestKind string
 
 const (
@@ -609,15 +652,15 @@ func (m *Manager) runCodexAppServerSession(
 		waitCh <- client.cmd.Wait()
 	}()
 
-	if _, err := client.request(ctx, "initialize", map[string]any{
-		"clientInfo": map[string]any{
-			"name":    "codekanban-web-session",
-			"version": "0.0.0",
-		},
+	initializeRequest := map[string]any{
 		"capabilities": map[string]any{
 			"experimentalApi": true,
 		},
-	}); err != nil {
+	}
+	if clientInfo := m.codexClientInfo(); clientInfo != nil {
+		initializeRequest["clientInfo"] = clientInfo
+	}
+	if _, err := client.request(ctx, "initialize", initializeRequest); err != nil {
 		run.resolveBootstrap(err)
 		m.waitAndFailCodexAppServer(session, run, client, waitCh, stderrDone, stderrBuffer, err)
 		return
@@ -637,10 +680,8 @@ func (m *Manager) runCodexAppServerSession(
 	}
 	supportsMultiAgentV2 = activeMultiAgentV2
 	if err := m.updateRuntimeState(ctx, session.ID, map[string]any{
-		"applied_context_window_setting":     session.ContextWindowSetting,
-		"codex_model_metadata_fallback":      false,
-		"session_context_window_tokens":      0,
-		"session_context_window_observed_at": nil,
+		"applied_context_window_setting": session.ContextWindowSetting,
+		"codex_model_metadata_fallback":  false,
 	}); err != nil {
 		run.resolveBootstrap(err)
 		m.waitAndFailCodexAppServer(session, run, client, waitCh, stderrDone, stderrBuffer, err)
@@ -916,30 +957,8 @@ drainLoop:
 	}
 	stopAndDrainRollout()
 
-	if ctx.Err() != nil {
-		abortPayload := activeCallTimeoutAbortPayload(session, run.abortEventPayload())
-		now := time.Now()
-		_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
-			ID:        utils.NewID(),
-			Seq:       0,
-			Type:      "run_abort",
-			RunID:     run.runID,
-			Timestamp: now,
-			Payload:   abortPayload,
-		})
-		_ = m.updateRuntimeState(
-			context.Background(),
-			session.ID,
-			applyAssistantStateUpdates(map[string]any{
-				"status":                     string(StatusIdle),
-				"updated_at":                 now,
-				"auto_retry_attempt":         0,
-				"auto_retry_next_at":         nil,
-				"auto_retry_last_error_code": nil,
-			}, AssistantStateNone, now),
-		)
-		m.cancelAutoRetryTimer(session.ID)
-		m.broadcastSessionSummary(context.Background(), session.ID)
+	if ctx.Err() != nil || run.abortRequestedSnapshot() {
+		m.finishAbortedRun(session.ID, session, run)
 		return
 	}
 
@@ -1249,6 +1268,7 @@ func (m *Manager) handleCodexAppServerMessage(
 			m.ensureCodexRolloutThreadAttachedAsync(session, run, client, threadID, "")
 			m.appendCodexSubAgentState(session, run, threadID, turnID, map[string]any{
 				"status": string(WebSessionSubAgentRunning),
+				"active": true,
 				"turnId": turnID,
 			})
 			return codexTurnOutcomeNone, nil
@@ -1280,6 +1300,8 @@ func (m *Manager) handleCodexAppServerMessage(
 	case "thread/tokenUsage/updated":
 		if isRootEvent {
 			m.handleCodexAppServerUsage(session, run, message.Params)
+		} else {
+			m.handleCodexSubAgentUsage(session, run, threadID, turnID, message.Params)
 		}
 		return codexTurnOutcomeNone, nil
 	case "warning":
@@ -1333,6 +1355,7 @@ func (m *Manager) handleCodexAppServerMessage(
 			}
 			if nextStatus := codexTurnSubAgentStatus(status); nextStatus != "" {
 				payload["status"] = string(nextStatus)
+				payload["active"] = nextStatus == WebSessionSubAgentRunning
 			}
 			m.appendCodexSubAgentState(session, run, threadID, turnID, payload)
 			return codexTurnOutcomeNone, nil
@@ -1375,6 +1398,7 @@ func (m *Manager) handleCodexAppServerMessage(
 		if !isRootEvent {
 			m.appendCodexSubAgentState(session, run, threadID, turnID, map[string]any{
 				"status": string(WebSessionSubAgentShutdown),
+				"active": false,
 			})
 		}
 		return codexTurnOutcomeNone, nil
@@ -1397,6 +1421,7 @@ func (m *Manager) handleCodexAppServerMessage(
 			if lifecycle != "" {
 				m.appendCodexSubAgentState(session, run, threadID, turnID, map[string]any{
 					"status": string(lifecycle),
+					"active": webSessionSubAgentIsActive(lifecycle),
 				})
 			}
 		}
@@ -2513,7 +2538,7 @@ func (m *Manager) handleCodexSubAgentActivity(
 	kind := strings.ToLower(strings.TrimSpace(stringValue(item["kind"])))
 	status := WebSessionSubAgentStatus("")
 	switch kind {
-	case "started", "interacted":
+	case "started":
 		status = WebSessionSubAgentRunning
 	case "interrupted":
 		status = WebSessionSubAgentInterrupted
@@ -2525,6 +2550,7 @@ func (m *Manager) handleCodexSubAgentActivity(
 	}
 	if status != "" {
 		statePayload["status"] = string(status)
+		statePayload["active"] = kind == "started"
 	}
 	m.appendCodexSubAgentState(session, run, agentThreadID, "", statePayload)
 
@@ -2540,6 +2566,29 @@ func (m *Manager) handleCodexSubAgentActivity(
 			"agentThreadId": agentThreadID,
 			"path":          path,
 			"kind":          kind,
+		},
+	})
+}
+
+func (m *Manager) handleCodexSubAgentUsage(
+	session tables.WebSessionTable,
+	run *activeRun,
+	threadID string,
+	turnID string,
+	params json.RawMessage,
+) {
+	payload := decodeRawObject(params)
+	tokenUsage := decodeRawObject(payload["tokenUsage"])
+	total, ok := parseCodexTokenUsageSnapshot(tokenUsage["total"])
+	if !ok {
+		return
+	}
+	m.appendCodexSubAgentState(session, run, threadID, turnID, map[string]any{
+		"usage": map[string]any{
+			"input_tokens":        total.InputTokens,
+			"cached_input_tokens": total.CachedInputTokens,
+			"output_tokens":       total.OutputTokens,
+			"total_tokens":        total.TotalTokens,
 		},
 	})
 }
