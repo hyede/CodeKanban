@@ -220,6 +220,7 @@ func (m *Manager) CatchUpSession(
 	for _, row := range rows {
 		response.Items = append(response.Items, mapHistoryItemRowWithSession(row, sessionID))
 	}
+	response.Items = dropSuppressedPiExtensionNotes(response.Items)
 
 	scheduledInputs, err := m.scheduledInputsSnapshot(ctx, sessionID)
 	if err != nil {

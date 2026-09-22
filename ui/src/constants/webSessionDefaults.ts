@@ -5,6 +5,9 @@ import type {
 } from '@/types/models';
 
 export const DEFAULT_WEB_SESSION_CODEX_MODEL = 'default';
+export const DEFAULT_WEB_SESSION_CODEX_CLIENT_NAME = 'codekanban-web-session';
+export const DEFAULT_WEB_SESSION_CODEX_CLIENT_TITLE = 'Code Kanban Web Session';
+export const DEFAULT_WEB_SESSION_CODEX_CLIENT_VERSION = '0.0.0';
 export const DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT: WebSessionCodexDefaultReasoningEffort =
   'default';
 export const DEFAULT_WEB_SESSION_CODEX_PERMISSION_LEVEL: WebSessionCodexDefaultPermissionLevel =

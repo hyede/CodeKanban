@@ -14,6 +14,15 @@ import (
 
 const piToolProgressInterval = 100 * time.Millisecond
 
+// piToolHistoryKind is the history kind stamped on every Pi tool call.
+//
+// Pi reports heterogeneous tools (bash, file edits, MCP and extension tools)
+// so they are classified as dynamic tool calls: that makes them eligible for the
+// shared compact-tool folding, keeps the tool name as the row label, and leaves
+// the active-call timeout policy alone because dynamic_tool_call still resolves
+// to the generic tool policy in activeCallTimeoutKindFromTool.
+const piToolHistoryKind = "dynamic_tool_call"
+
 type piRPCMessage struct {
 	Role         string `json:"role"`
 	Timestamp    int64  `json:"timestamp"`
@@ -326,7 +335,7 @@ func (m *Manager) handlePiToolExecution(dispatch *piRuntimeRun, event piRPCEvent
 	_, err := m.appendAndBroadcast(context.Background(), dispatch.session.ID, dispatch.session, Event{
 		ID: utils.NewID(), Type: eventType, RunID: dispatch.run.runID, ParentID: snapshot.parentID,
 		Timestamp: now, Payload: map[string]any{
-			"tid": snapshot.id, "name": firstNonEmpty(snapshot.name, "Tool"), "kind": "tool",
+			"tid": snapshot.id, "name": firstNonEmpty(snapshot.name, "Tool"), "kind": piToolHistoryKind,
 			"in": snapshot.args, "out": snapshot.output, "ok": !payload.IsError,
 		},
 	})
@@ -458,8 +467,11 @@ func (m *Manager) handlePiExtensionUIRequest(dispatch *piRuntimeRun, raw json.Ra
 		text := firstNonEmpty(strings.TrimSpace(request.Message), strings.TrimSpace(request.StatusText), strings.Join(request.WidgetLines, "\n"), strings.TrimSpace(request.Text), strings.TrimSpace(request.Title))
 		if text != "" {
 			level := strings.ToLower(strings.TrimSpace(request.NotifyType))
+			// Extension notify probes (rtk rewrite traces and similar debug
+			// chatter) only matter when the extension flags them as warnings
+			// or errors; the rest never leave the backend.
 			if level != "warning" && level != "error" {
-				level = "info"
+				return nil
 			}
 			m.appendRunNote(dispatch.session.ID, dispatch.session, dispatch.run, level, truncateToolOutput("tool", text), map[string]any{"code": "pi_extension_ui_" + request.Method})
 		}
@@ -662,6 +674,14 @@ func (m *Manager) respondPiExtensionRequest(
 		return errors.New("Pi extension response run is no longer active")
 	}
 	now := time.Now()
+	if eventType == "approval_res" && request.Command != "" {
+		if eventPayload == nil {
+			eventPayload = map[string]any{}
+		}
+		if strings.TrimSpace(stringValue(eventPayload["command"])) == "" {
+			eventPayload["command"] = request.Command
+		}
+	}
 	if err := m.updateRuntimeState(context.Background(), session.ID, applyAssistantStateUpdates(map[string]any{"updated_at": now}, AssistantStateWorking, now)); err != nil {
 		runtime.stop(errors.New("Pi extension response state update failed"))
 		return err
@@ -732,7 +752,7 @@ func (m *Manager) finishPiSettledProjection(dispatch *piRuntimeRun) error {
 		if _, err := m.appendAndBroadcast(context.Background(), dispatch.session.ID, dispatch.session, Event{
 			ID: utils.NewID(), Type: "tool_end", RunID: dispatch.run.runID, ParentID: tool.parentID,
 			Timestamp: time.Now(), Payload: map[string]any{
-				"tid": tool.id, "name": firstNonEmpty(tool.name, "Tool"), "kind": "tool",
+				"tid": tool.id, "name": firstNonEmpty(tool.name, "Tool"), "kind": piToolHistoryKind,
 				"in": tool.args, "out": tool.output, "ok": false,
 			},
 		}); err != nil {
@@ -752,7 +772,7 @@ func (m *Manager) finishPiSettledProjection(dispatch *piRuntimeRun) error {
 		return err
 	}
 	if strings.TrimSpace(lastError) != "" {
-		return errors.New("Pi assistant run failed")
+		return fmt.Errorf("Pi assistant run failed: %s", truncateString(strings.TrimSpace(lastError), 2000))
 	}
 	return nil
 }

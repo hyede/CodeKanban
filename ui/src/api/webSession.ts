@@ -312,6 +312,7 @@ export type WebSessionScheduledInputRecord = {
     | string;
   action?: 'message' | 'execute_plan' | string;
   targetId?: string;
+  contextWindowSettingSnapshot?: number | null;
   mode?: 'send' | 'interrupt' | 'redirect' | 'queue' | string;
   exitPlanMode?: boolean;
   status?: 'scheduled' | 'failed' | 'expired' | 'dispatched' | 'canceled' | string;
@@ -354,7 +355,12 @@ export type WebSessionSubAgentRecord = {
     | 'shutdown'
     | 'not_found'
     | string;
+  active?: boolean;
   summary?: string;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
   currentTurnId?: string | null;
   latestItemId?: string | null;
   latestOrderIndex?: number;
@@ -538,6 +544,23 @@ export const webSessionApi = {
         .send()) ?? {};
     if (!body.item?.session) {
       throw new Error('failed to create edited message branch');
+    }
+    return body.item;
+  },
+
+  async forkMessage(
+    projectId: string,
+    sessionId: string,
+    itemId: string
+  ): Promise<WebSessionHydrationTarget> {
+    const body =
+      (await http
+        .Post<
+          ItemResponse<WebSessionHydrationTarget>
+        >(`/projects/${projectId}/web-sessions/${sessionId}/messages/${itemId}/fork`, {})
+        .send()) ?? {};
+    if (!body.item?.session) {
+      throw new Error('failed to fork AI session');
     }
     return body.item;
   },

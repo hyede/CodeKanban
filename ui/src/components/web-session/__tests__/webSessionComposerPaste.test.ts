@@ -192,6 +192,19 @@ describe('webSessionComposerPaste', () => {
     );
   });
 
+  it('normalizes only CRLF and CR while preserving paste whitespace and blank lines', () => {
+    const plan = buildPlan({
+      document: documentWith(
+        paragraph(text('  code\t  '), image(PNG_DATA_URL), text('\r\n\n  next  '))
+      ),
+      html: '<word-html>',
+    });
+
+    expect(renderWebSessionComposerPastePlan(plan!, ['[Image #1]'])).toBe(
+      '  code\t  [Image #1]\n\n  next  '
+    );
+  });
+
   it('appends direct images when HTML has no image position', () => {
     const image = new File(['image'], 'clipboard-image.png', { type: 'image/png' });
     const plan = buildPlan({ imageFiles: [image], plainText: 'Copied text' });

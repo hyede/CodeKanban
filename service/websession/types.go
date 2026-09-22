@@ -8,6 +8,7 @@ const (
 	AgentClaude Agent = "claude"
 	AgentCodex  Agent = "codex"
 	AgentPi     Agent = "pi"
+	AgentDevin  Agent = "devin"
 )
 
 type ClaudeRuntime string
@@ -23,6 +24,7 @@ const (
 	SessionBackendLegacyExec     SessionBackend = "legacy_exec"
 	SessionBackendCodexAppServer SessionBackend = "codex_app_server"
 	SessionBackendPiRPC          SessionBackend = "pi_rpc"
+	SessionBackendDevinACP       SessionBackend = "devin_acp"
 )
 
 type CodexAppServerState string
@@ -512,31 +514,33 @@ type PendingInput struct {
 	LastErrorCode string             `json:"lastErrorCode,omitempty"`
 	CreatedAt     time.Time          `json:"createdAt"`
 
-	codexMessageID    string
-	codexSteerReceipt *codexSteerReceipt
+	contextWindowSetting *int64
+	codexMessageID       string
+	codexSteerReceipt    *codexSteerReceipt
 }
 
 type ScheduledInput struct {
-	ID               string                         `json:"id"`
-	DependsOnID      string                         `json:"dependsOnId,omitempty"`
-	DependencyStatus ScheduledInputDependencyStatus `json:"dependencyStatus"`
-	Action           ScheduledInputAction           `json:"action"`
-	TargetID         string                         `json:"targetId,omitempty"`
-	Mode             ScheduledInputMode             `json:"mode"`
-	ExitPlanMode     bool                           `json:"exitPlanMode,omitempty"`
-	Text             string                         `json:"text"`
-	AttachmentIDs    []string                       `json:"attachmentIds"`
-	ScheduleKind     ScheduledInputScheduleKind     `json:"scheduleKind"`
-	ScheduledFor     *time.Time                     `json:"scheduledFor"`
-	IdleSince        *time.Time                     `json:"idleSince,omitempty"`
-	BlockingReasons  []ScheduledInputBlockingReason `json:"blockingReasons"`
-	ConditionError   string                         `json:"conditionError,omitempty"`
-	Status           ScheduledInputStatus           `json:"status"`
-	LastError        string                         `json:"lastError,omitempty"`
-	CreatedAt        time.Time                      `json:"createdAt"`
-	UpdatedAt        time.Time                      `json:"updatedAt"`
-	SentAt           *time.Time                     `json:"sentAt,omitempty"`
-	CanceledAt       *time.Time                     `json:"canceledAt,omitempty"`
+	ID                           string                         `json:"id"`
+	DependsOnID                  string                         `json:"dependsOnId,omitempty"`
+	DependencyStatus             ScheduledInputDependencyStatus `json:"dependencyStatus"`
+	Action                       ScheduledInputAction           `json:"action"`
+	TargetID                     string                         `json:"targetId,omitempty"`
+	ContextWindowSettingSnapshot *int64                         `json:"contextWindowSettingSnapshot,omitempty"`
+	Mode                         ScheduledInputMode             `json:"mode"`
+	ExitPlanMode                 bool                           `json:"exitPlanMode,omitempty"`
+	Text                         string                         `json:"text"`
+	AttachmentIDs                []string                       `json:"attachmentIds"`
+	ScheduleKind                 ScheduledInputScheduleKind     `json:"scheduleKind"`
+	ScheduledFor                 *time.Time                     `json:"scheduledFor"`
+	IdleSince                    *time.Time                     `json:"idleSince,omitempty"`
+	BlockingReasons              []ScheduledInputBlockingReason `json:"blockingReasons"`
+	ConditionError               string                         `json:"conditionError,omitempty"`
+	Status                       ScheduledInputStatus           `json:"status"`
+	LastError                    string                         `json:"lastError,omitempty"`
+	CreatedAt                    time.Time                      `json:"createdAt"`
+	UpdatedAt                    time.Time                      `json:"updatedAt"`
+	SentAt                       *time.Time                     `json:"sentAt,omitempty"`
+	CanceledAt                   *time.Time                     `json:"canceledAt,omitempty"`
 }
 
 type PendingUserInput struct {
@@ -634,19 +638,24 @@ const (
 )
 
 type WebSessionSubAgent struct {
-	ThreadID         string                   `json:"threadId"`
-	ParentThreadID   *string                  `json:"parentThreadId,omitempty"`
-	Path             string                   `json:"path,omitempty"`
-	Nickname         string                   `json:"nickname,omitempty"`
-	Role             string                   `json:"role,omitempty"`
-	Status           WebSessionSubAgentStatus `json:"status"`
-	Summary          string                   `json:"summary,omitempty"`
-	CurrentTurnID    *string                  `json:"currentTurnId,omitempty"`
-	LatestItemID     *string                  `json:"latestItemId,omitempty"`
-	LatestOrderIndex int64                    `json:"latestOrderIndex,omitempty"`
-	StartedAt        *time.Time               `json:"startedAt,omitempty"`
-	LastActivityAt   *time.Time               `json:"lastActivityAt,omitempty"`
-	EndedAt          *time.Time               `json:"endedAt,omitempty"`
+	ThreadID          string                   `json:"threadId"`
+	ParentThreadID    *string                  `json:"parentThreadId,omitempty"`
+	Path              string                   `json:"path,omitempty"`
+	Nickname          string                   `json:"nickname,omitempty"`
+	Role              string                   `json:"role,omitempty"`
+	Status            WebSessionSubAgentStatus `json:"status"`
+	Active            bool                     `json:"active"`
+	Summary           string                   `json:"summary,omitempty"`
+	InputTokens       int64                    `json:"inputTokens,omitempty"`
+	CachedInputTokens int64                    `json:"cachedInputTokens,omitempty"`
+	OutputTokens      int64                    `json:"outputTokens,omitempty"`
+	TotalTokens       int64                    `json:"totalTokens,omitempty"`
+	CurrentTurnID     *string                  `json:"currentTurnId,omitempty"`
+	LatestItemID      *string                  `json:"latestItemId,omitempty"`
+	LatestOrderIndex  int64                    `json:"latestOrderIndex,omitempty"`
+	StartedAt         *time.Time               `json:"startedAt,omitempty"`
+	LastActivityAt    *time.Time               `json:"lastActivityAt,omitempty"`
+	EndedAt           *time.Time               `json:"endedAt,omitempty"`
 }
 
 type ImportResult struct {

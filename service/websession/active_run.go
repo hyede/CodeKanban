@@ -19,6 +19,7 @@ type activeRun struct {
 	projectID                 string
 	agent                     Agent
 	backend                   SessionBackend
+	contextWindowSetting      int64
 	runID                     string
 	fromAutoRetry             bool
 	hiddenBootstrap           bool
@@ -39,6 +40,7 @@ type activeRun struct {
 	done                      chan struct{}
 	mu                        sync.Mutex
 	forceTerminateRequested   bool
+	abortRequested            bool
 	stdin                     io.WriteCloser
 	recentRuntimeLines        []string
 	pendingApproval           string
@@ -51,6 +53,7 @@ type activeRun struct {
 	piResponseHistoryErr      error
 	piResponseRequest         *pendingServerRequest
 	app                       *codexAppServerClient
+	devinApp                  *devinACPClient
 	codexThreadID             string
 	codexTurnID               string
 	assistantDeltaSeen        map[string]bool
@@ -212,6 +215,15 @@ func (r *activeRun) command() *exec.Cmd {
 	return r.cmd
 }
 
+func (r *activeRun) abortRequestedSnapshot() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.abortRequested
+}
+
 func (r *activeRun) setCodexAppServer(client *codexAppServerClient) {
 	if r == nil {
 		return
@@ -228,6 +240,24 @@ func (r *activeRun) codexAppServer() *codexAppServerClient {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.app
+}
+
+func (r *activeRun) setDevinACP(client *devinACPClient) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.devinApp = client
+	r.mu.Unlock()
+}
+
+func (r *activeRun) devinACP() *devinACPClient {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.devinApp
 }
 
 func (r *activeRun) setCodexSteerTarget(threadID string, turnID string) {

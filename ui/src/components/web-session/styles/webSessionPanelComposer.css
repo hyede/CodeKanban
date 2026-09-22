@@ -387,10 +387,6 @@
   flex-shrink: 0;
 }
 
-.model-select {
-  width: 176px;
-}
-
 .claude-runtime-select {
   width: 72px;
 }
@@ -401,8 +397,8 @@
 }
 
 :global(.web-session-model-select-menu.is-pi-model-catalog) {
-  width: min(340px, calc(100vw - 64px)) !important;
-  min-width: min(340px, calc(100vw - 64px)) !important;
+  width: min(280px, calc(100vw - 64px)) !important;
+  min-width: min(280px, calc(100vw - 64px)) !important;
   max-width: calc(100vw - 64px) !important;
 }
 
@@ -411,22 +407,251 @@
 }
 
 :global(.web-session-model-select-menu .n-base-select-option__content) {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   max-width: 128px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+:global(.model-option-detail) {
+  display: grid;
+  gap: 4px;
+  max-width: 260px;
+}
+
+:global(.model-option-detail-title) {
+  color: var(--n-text-color-1);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 17px;
+}
+
+:global(.model-option-detail-description) {
+  color: var(--n-text-color-2);
+  font-size: 12px;
+  line-height: 17px;
+  white-space: normal;
+}
+
+:global(.model-option-detail-meta) {
+  color: var(--n-text-color-3);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: normal;
+}
+
 :global(.web-session-model-select-menu.is-pi-model-catalog .n-base-select-option__content) {
-  max-width: 286px;
+  max-width: 220px;
+}
+
+:global(.web-session-model-select-menu .n-base-select-option__content > span:first-child) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:global(.web-session-model-select-menu .model-option-accent) {
+  margin-left: 4px;
+  color: var(--n-primary-color);
+  font-weight: 500;
+}
+
+:global(.web-session-model-select-menu .model-option-price) {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--n-text-color-3);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+:global(.web-session-model-select-menu .model-option-remove) {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin: 0 2px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--n-text-color-3);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 3px;
+  opacity: 0.55;
+}
+
+:global(.web-session-model-select-menu .model-option-remove:hover) {
+  opacity: 1;
+  color: var(--n-error-color);
+  background: color-mix(in srgb, var(--n-error-color) 12%, transparent);
+}
+
+:global(.web-session-model-select-menu .model-option-description) {
+  margin-left: auto;
+  color: var(--n-text-color-3);
+  font-size: 11px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.web-session-model-select-menu .model-option-description.is-free) {
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--n-success-color) 45%, transparent);
+  border-radius: 4px;
+  color: var(--n-success-color);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+:global(.web-session-model-select-menu .model-option-badge) {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 15px;
+}
+
+:global(.web-session-model-select-menu .model-option-badge.is-new) {
+  border-color: color-mix(in srgb, var(--n-success-color) 45%, transparent);
+  color: var(--n-success-color);
+}
+
+:global(.web-session-model-select-menu .model-option-badge.is-promo) {
+  border-color: color-mix(in srgb, var(--n-info-color) 45%, transparent);
+  color: var(--n-info-color);
+}
+
+:global(.web-session-model-select-menu .model-option-badge.is-beta) {
+  border-color: color-mix(in srgb, var(--n-warning-color) 45%, transparent);
+  color: var(--n-warning-color);
 }
 
 :global(.pi-model-search-header) {
-  padding: 8px;
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--n-action-divider-color);
+}
+
+:global(.pi-model-search-header .n-input),
+:global(.pi-model-search-header .n-input.n-input--focus) {
+  background-color: transparent;
+  --n-height: 24px !important;
+  --n-font-size: 12px !important;
+  --n-padding-left: 6px !important;
+  --n-padding-right: 6px !important;
+}
+
+:global(.web-session-model-select-menu.is-pi-model-catalog .n-base-select-menu-option-wrapper),
+:global(.web-session-model-select-menu.is-pi-model-catalog .v-vl-visible-items) {
+  padding-top: 2px !important;
 }
 
 .reasoning-select {
   width: 82px;
+}
+
+.fusion-config-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--n-border-color);
+  border-radius: 5px;
+  background: var(--n-color);
+  color: var(--n-text-color-3);
+  cursor: pointer;
+}
+
+.fusion-config-panel {
+  display: grid;
+  gap: 8px;
+  width: 300px;
+  max-width: min(300px, calc(100vw - 32px));
+}
+
+.fusion-config-title {
+  color: var(--n-text-color-1);
+  font-weight: 600;
+}
+
+.fusion-config-description {
+  color: var(--n-text-color-3);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.fusion-config-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+  font-size: 12px;
+  color: var(--n-text-color-2);
+}
+
+.fusion-config-row > span:first-child {
+  flex-shrink: 0;
+}
+
+.fusion-config-row :deep(.n-select) {
+  width: 172px;
+  flex-shrink: 0;
+}
+
+.fusion-config-row :deep(.n-base-selection-label) {
+  text-align: right;
+  font-size: 12px;
+}
+
+.fusion-config-divider {
+  height: 1px;
+  background: var(--n-divider-color);
+  margin: 2px 0;
+}
+
+.fusion-config-section-title {
+  font-size: 12px;
+  color: var(--n-text-color-2);
+}
+
+.fusion-config-cost-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.fusion-config-cost-item {
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--n-action-color);
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--n-text-color-3);
+  min-width: 0;
+}
+
+.fusion-config-cost-label {
+  overflow-wrap: anywhere;
+}
+
+.fusion-config-cost-price {
+  color: var(--n-text-color-1);
 }
 
 .composer-mode-switch {

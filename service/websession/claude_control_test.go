@@ -364,6 +364,19 @@ func TestClaudeControlRequestApprovalUsesToolResponse(t *testing.T) {
 	if stringValue(result["behavior"]) != "allow" || stringValue(decodeRawObject(result["updatedInput"])["command"]) != "echo hello" {
 		t.Fatalf("unexpected Claude approval response: %#v", message)
 	}
+	history, err := manager.History(context.Background(), session.ID, 20, nil)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	var responseCommand string
+	for _, item := range history.Items {
+		if item.Detail != nil && item.Detail.Type == "approval_response" {
+			responseCommand = item.Detail.Command
+		}
+	}
+	if responseCommand != "echo hello" {
+		t.Fatalf("expected approval history to retain command, got %q", responseCommand)
+	}
 }
 
 func TestClaudePlanControlClearsWaitingStateOnRejectAndCancel(t *testing.T) {

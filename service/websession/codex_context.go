@@ -26,6 +26,8 @@ const (
 	codexBinaryCapabilityCacheTTL = 5 * time.Minute
 	codexModelCatalogCacheTTL     = 5 * time.Minute
 	codexModelCatalogTimeout      = 3 * time.Second
+	devinModelCatalogCacheTTL     = 5 * time.Minute
+	devinModelCatalogTimeout      = 5 * time.Second
 )
 
 var (
@@ -45,18 +47,21 @@ type codexContextWindowCache struct {
 type codexBinaryCapabilityCache = runtimeCapabilityCache[WebSessionRuntimeConfig]
 
 type codexModelCatalogCache = runtimeCapabilityCache[[]CodexModelInfo]
+type devinModelCatalogCache = runtimeCapabilityCache[[]DevinModelInfo]
 
 type codexContextWindowResolver struct {
-	mu     sync.RWMutex
-	cache  codexContextWindowCache
-	bins   codexBinaryCapabilityCache
-	models codexModelCatalogCache
+	mu          sync.RWMutex
+	cache       codexContextWindowCache
+	bins        codexBinaryCapabilityCache
+	models      codexModelCatalogCache
+	devinModels devinModelCatalogCache
 }
 
 type runtimeCapabilityProbeHooks struct {
 	codexBinary func() (WebSessionRuntimeConfig, error)
 	codexModels func() ([]CodexModelInfo, error)
 	pi          func() (piRuntimeProbeResult, error)
+	devinModels func() ([]DevinModelInfo, error)
 }
 
 type CodexModelInfo struct {
@@ -64,6 +69,28 @@ type CodexModelInfo struct {
 	DisplayName               string            `json:"displayName"`
 	DefaultReasoningEffort    ReasoningEffort   `json:"defaultReasoningEffort"`
 	SupportedReasoningEfforts []ReasoningEffort `json:"supportedReasoningEfforts"`
+}
+
+type DevinModelInfo struct {
+	Model                     string            `json:"model"`
+	DisplayName               string            `json:"displayName"`
+	Family                    string            `json:"family,omitempty"`
+	DefaultReasoningEffort    ReasoningEffort   `json:"defaultReasoningEffort"`
+	SupportedReasoningEfforts []ReasoningEffort `json:"supportedReasoningEfforts"`
+	MaxContextTokens          int64             `json:"maxContextTokens"`
+	MaxOutputTokens           int64             `json:"maxOutputTokens"`
+	CostTier                  string            `json:"costTier,omitempty"`
+	CostSummary               string            `json:"costSummary,omitempty"`
+	Description               string            `json:"description,omitempty"`
+	Recommended               bool              `json:"recommended,omitempty"`
+	IsNew                     bool              `json:"isNew,omitempty"`
+	IsBeta                    bool              `json:"isBeta,omitempty"`
+	IsPromo                   bool              `json:"isPromo,omitempty"`
+	SupportsImages            bool              `json:"supportsImages,omitempty"`
+
+	// supportsImagesSet tracks whether the model catalog actually provided the
+	// supports_images flag; older CLI versions omit it entirely.
+	supportsImagesSet bool
 }
 
 type AgentPermissionModeCapability struct {
@@ -79,6 +106,7 @@ type AgentCapability struct {
 	SupportsImages           bool                            `json:"supportsImages"`
 	SupportsCompaction       bool                            `json:"supportsCompaction"`
 	SupportsSteer            bool                            `json:"supportsSteer"`
+	SupportsFork             bool                            `json:"supportsFork"`
 	SupportsFollowUp         bool                            `json:"supportsFollowUp"`
 	SupportsGoal             bool                            `json:"supportsGoal"`
 	SupportsSubAgentRegistry bool                            `json:"supportsSubAgentRegistry"`
@@ -96,23 +124,36 @@ type PiModelInfo struct {
 }
 
 type WebSessionRuntimeConfig struct {
-	Agents                 map[Agent]AgentCapability `json:"agents"`
-	CapabilitiesRefreshing bool                      `json:"capabilitiesRefreshing"`
-	Model                  string                    `json:"model,omitempty"`
-	ContextWindowTokens    int64                     `json:"contextWindowTokens"`
-	CompactLimitTokens     int64                     `json:"compactLimitTokens"`
-	Source                 ContextWindowSource       `json:"source"`
-	Models                 []CodexModelInfo          `json:"models"`
-	PiModels               []PiModelInfo             `json:"piModels"`
-	HasCodex               bool                      `json:"hasCodex"`
-	HasClaudeCode          bool                      `json:"hasClaudeCode"`
-	CodexVersion           *string                   `json:"codexVersion,omitempty"`
-	HasPi                  bool                      `json:"hasPi"`
-	PiVersion              *string                   `json:"piVersion,omitempty"`
-	SupportsPiWebSession   bool                      `json:"supportsPiWebSession"`
-	PiRPCCompatible        bool                      `json:"piRpcCompatible"`
-	PiMinVersion           string                    `json:"piMinVersion"`
-	PiDiagnostics          string                    `json:"piDiagnostics,omitempty"`
+	Agents                  map[Agent]AgentCapability `json:"agents"`
+	CapabilitiesRefreshing  bool                      `json:"capabilitiesRefreshing"`
+	Model                   string                    `json:"model,omitempty"`
+	ContextWindowTokens     int64                     `json:"contextWindowTokens"`
+	CompactLimitTokens      int64                     `json:"compactLimitTokens"`
+	Source                  ContextWindowSource       `json:"source"`
+	Models                  []CodexModelInfo          `json:"models"`
+	DevinModels             []DevinModelInfo          `json:"devinModels"`
+	PiModels                []PiModelInfo             `json:"piModels"`
+	CCRModels               []CCRModelInfo            `json:"ccrModels"`
+	HasCodex                bool                      `json:"hasCodex"`
+	HasClaudeCode           bool                      `json:"hasClaudeCode"`
+	CodexVersion            *string                   `json:"codexVersion,omitempty"`
+	HasPi                   bool                      `json:"hasPi"`
+	PiVersion               *string                   `json:"piVersion,omitempty"`
+	HasDevin                bool                      `json:"hasDevin"`
+	DevinVersion            *string                   `json:"devinVersion,omitempty"`
+	SupportsDevinWebSession bool                      `json:"supportsDevinWebSession"`
+	// SupportsDevinSessionFork reports whether the installed Devin CLI's ACP
+	// agent advertises the private revert extension that backs session forks.
+	SupportsDevinSessionFork bool `json:"supportsDevinSessionFork"`
+	// SupportsDevinSubAgents reports whether the installed Devin CLI's ACP
+	// agent advertises the private sub-agent extension
+	// (_meta["cognition.ai/subagentControl"]) that feeds the sub-agent
+	// registry.
+	SupportsDevinSubAgents bool   `json:"supportsDevinSubAgents"`
+	SupportsPiWebSession   bool   `json:"supportsPiWebSession"`
+	PiRPCCompatible        bool   `json:"piRpcCompatible"`
+	PiMinVersion           string `json:"piMinVersion"`
+	PiDiagnostics          string `json:"piDiagnostics,omitempty"`
 	// SupportsWebSession reports whether ordinary Codex web sessions can run.
 	SupportsWebSession   bool   `json:"supportsWebSession"`
 	WebSessionMinVersion string `json:"webSessionMinCodexVersion"`
@@ -190,6 +231,19 @@ func decorateSessionSummaryWithContext(summary *SessionSummary, config codexSess
 		summary.ContextWindowSource = ContextWindowSourceUnavailable
 		return
 	}
+	if normalizeAgent(summary.Agent) == AgentDevin {
+		// Devin reports its authoritative context window on usage_update.size.
+		// Preserve that observed value; there is no local Devin model catalog
+		// from which to infer an unknown window safely before the first update.
+		if summary.ContextWindowTokens != nil &&
+			*summary.ContextWindowTokens > 0 &&
+			summary.ContextWindowSource == ContextWindowSourceSessionUsage {
+			return
+		}
+		summary.ContextWindowTokens = nil
+		summary.ContextWindowSource = ContextWindowSourceUnavailable
+		return
+	}
 	if normalizeAgent(summary.Agent) != AgentCodex {
 		summary.ContextWindowTokens = nil
 		summary.ContextWindowSource = ContextWindowSourceUnavailable
@@ -219,6 +273,7 @@ func defaultCodexRuntimeConfig() WebSessionRuntimeConfig {
 		Source:                 ContextWindowSourceUnavailable,
 		Models:                 []CodexModelInfo{},
 		PiModels:               []PiModelInfo{},
+		CCRModels:              []CCRModelInfo{},
 		HasCodex:               false,
 		HasClaudeCode:          false,
 		SupportsWebSession:     false,
@@ -364,6 +419,19 @@ func runtimeAgentCapabilities(config WebSessionRuntimeConfig) map[Agent]AgentCap
 			SupportsSubAgentRegistry: false,
 			PermissionModes:          availablePermissionModes(true, false, false),
 		},
+		AgentDevin: {
+			Installed:                config.HasDevin,
+			Version:                  config.DevinVersion,
+			SupportsWebSession:       config.SupportsDevinWebSession,
+			SupportsImages:           false,
+			SupportsCompaction:       false,
+			SupportsSteer:            false,
+			SupportsFork:             config.SupportsDevinWebSession && config.SupportsDevinSessionFork,
+			SupportsFollowUp:         true,
+			SupportsGoal:             false,
+			SupportsSubAgentRegistry: config.SupportsDevinWebSession && config.SupportsDevinSubAgents,
+			PermissionModes:          availablePermissionModes(true, true, false),
+		},
 	}
 }
 
@@ -395,6 +463,14 @@ func (m *Manager) getWebSessionRuntimeConfigWithModels(force bool) WebSessionRun
 	if config.HasCodex {
 		config.Models = m.getCodexModelCatalog(force)
 	}
+	if config.HasDevin {
+		config.DevinModels = m.getDevinModelCatalog(force)
+	} else {
+		config.DevinModels = []DevinModelInfo{}
+	}
+	if m.ccrRuntimeAvailable() {
+		config.CCRModels = m.getCCRModelCatalog(force)
+	}
 	return config
 }
 
@@ -410,7 +486,19 @@ func (m *Manager) getWebSessionRuntimeConfigWithModelsBackground() WebSessionRun
 	} else if config.Models == nil {
 		config.Models = []CodexModelInfo{}
 	}
-	config.CapabilitiesRefreshing = binaryRefreshing || piRefreshing || modelsRefreshing
+	devinModelsRefreshing := false
+	if config.HasDevin {
+		config.DevinModels, devinModelsRefreshing = m.getDevinModelCatalogBackground()
+	} else if config.DevinModels == nil {
+		config.DevinModels = []DevinModelInfo{}
+	}
+	ccrModelsRefreshing := false
+	if m.ccrRuntimeAvailable() {
+		config.CCRModels, ccrModelsRefreshing = m.getCCRModelCatalogBackground()
+	} else if config.CCRModels == nil {
+		config.CCRModels = []CCRModelInfo{}
+	}
+	config.CapabilitiesRefreshing = binaryRefreshing || piRefreshing || modelsRefreshing || ccrModelsRefreshing || devinModelsRefreshing
 	config.Agents = runtimeAgentCapabilities(config)
 	return config
 }
@@ -456,6 +544,11 @@ func mergeCodexBinaryCapabilities(config, binaryConfig WebSessionRuntimeConfig) 
 	config.MultiAgentV2MinVersion = binaryConfig.MultiAgentV2MinVersion
 	config.SupportsGoalMode = binaryConfig.SupportsGoalMode
 	config.GoalModeMinVersion = binaryConfig.GoalModeMinVersion
+	config.HasDevin = binaryConfig.HasDevin
+	config.DevinVersion = binaryConfig.DevinVersion
+	config.SupportsDevinWebSession = binaryConfig.SupportsDevinWebSession
+	config.SupportsDevinSessionFork = binaryConfig.SupportsDevinSessionFork
+	config.SupportsDevinSubAgents = binaryConfig.SupportsDevinSubAgents
 	return config
 }
 
@@ -476,9 +569,13 @@ func (m *Manager) probeCodexBinaryCapabilities() (result WebSessionRuntimeConfig
 	}
 	hasCodex := hasExecutable(m.cfg.CodexPath)
 	hasClaude := hasExecutable(m.cfg.ClaudePath)
+	hasDevin := hasExecutable(m.cfg.DevinPath)
 	codexVersion := (*string)(nil)
+	devinVersion := (*string)(nil)
 	supportsMultiAgentV2 := false
 	supportsGoalMode := false
+	supportsDevinFork := false
+	supportsDevinSubAgents := false
 	if hasCodex {
 		if version := detectCodexVersion(m.cfg.CodexPath); version != nil {
 			copied := *version
@@ -489,17 +586,28 @@ func (m *Manager) probeCodexBinaryCapabilities() (result WebSessionRuntimeConfig
 			probeErr = errors.New("failed to detect Codex version")
 		}
 	}
+	if hasDevin {
+		devinVersion = detectDevinVersion(m.cfg.DevinPath)
+		agentCapabilities := m.probeDevinACPAgentCapabilities()
+		supportsDevinFork = devinAgentSupportsRevert(agentCapabilities)
+		supportsDevinSubAgents = devinAgentSupportsSubAgents(agentCapabilities)
+	}
 
 	return WebSessionRuntimeConfig{
-		HasCodex:               hasCodex,
-		HasClaudeCode:          hasClaude,
-		CodexVersion:           codexVersion,
-		SupportsWebSession:     hasCodex,
-		WebSessionMinVersion:   "",
-		SupportsMultiAgentV2:   supportsMultiAgentV2,
-		MultiAgentV2MinVersion: multiAgentV2MinCodexVersion.String(),
-		SupportsGoalMode:       supportsGoalMode,
-		GoalModeMinVersion:     goalModeMinCodexVersion.String(),
+		HasCodex:                 hasCodex,
+		HasClaudeCode:            hasClaude,
+		CodexVersion:             codexVersion,
+		SupportsWebSession:       hasCodex,
+		WebSessionMinVersion:     "",
+		SupportsMultiAgentV2:     supportsMultiAgentV2,
+		MultiAgentV2MinVersion:   multiAgentV2MinCodexVersion.String(),
+		SupportsGoalMode:         supportsGoalMode,
+		GoalModeMinVersion:       goalModeMinCodexVersion.String(),
+		HasDevin:                 hasDevin,
+		DevinVersion:             devinVersion,
+		SupportsDevinWebSession:  hasDevin,
+		SupportsDevinSessionFork: supportsDevinFork,
+		SupportsDevinSubAgents:   supportsDevinSubAgents,
 	}, probeErr
 }
 
@@ -508,6 +616,10 @@ func cloneCodexBinaryConfig(config WebSessionRuntimeConfig) WebSessionRuntimeCon
 	if config.CodexVersion != nil {
 		version := *config.CodexVersion
 		cloned.CodexVersion = &version
+	}
+	if config.DevinVersion != nil {
+		version := *config.DevinVersion
+		cloned.DevinVersion = &version
 	}
 	return cloned
 }
@@ -550,7 +662,7 @@ func (m *Manager) probeCodexModelCatalog() (models []CodexModelInfo, probeErr er
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), codexModelCatalogTimeout)
 	defer cancel()
-	models, err := loadCodexModelCatalog(ctx, m.cfg.CodexPath)
+	models, err := loadCodexModelCatalog(ctx, m.cfg.CodexPath, m.codexClientInfo())
 	if err != nil {
 		return []CodexModelInfo{}, err
 	}
@@ -569,7 +681,151 @@ func cloneCodexModelCatalog(models []CodexModelInfo) []CodexModelInfo {
 	return cloned
 }
 
-func loadCodexModelCatalog(ctx context.Context, codexPath string) ([]CodexModelInfo, error) {
+func (m *Manager) getDevinModelCatalog(force bool) []DevinModelInfo {
+	if m == nil {
+		return []DevinModelInfo{}
+	}
+	return m.codexContextWindow.devinModels.get(
+		force,
+		runtimeCapabilityCachePolicy{successTTL: devinModelCatalogCacheTTL},
+		cloneDevinModelCatalog,
+		m.probeDevinModelCatalog,
+	)
+}
+
+func (m *Manager) getDevinModelCatalogBackground() ([]DevinModelInfo, bool) {
+	if m == nil {
+		return []DevinModelInfo{}, false
+	}
+	return m.codexContextWindow.devinModels.getBackground(
+		runtimeCapabilityCachePolicy{successTTL: devinModelCatalogCacheTTL},
+		cloneDevinModelCatalog,
+		m.probeDevinModelCatalog,
+	)
+}
+
+func (m *Manager) probeDevinModelCatalog() ([]DevinModelInfo, error) {
+	if m == nil || !hasExecutable(m.cfg.DevinPath) {
+		return []DevinModelInfo{}, nil
+	}
+	if m.runtimeCapabilityProbes.devinModels != nil {
+		return m.runtimeCapabilityProbes.devinModels()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), devinModelCatalogTimeout)
+	defer cancel()
+	parts := splitCommandParts(m.cfg.DevinPath)
+	if len(parts) == 0 {
+		return []DevinModelInfo{}, nil
+	}
+	cmd := exec.CommandContext(ctx, parts[0], append(parts[1:], "models", "list", "--format", "json")...)
+	output, err := cmd.Output()
+	if err != nil {
+		return []DevinModelInfo{}, err
+	}
+	return parseDevinModelCatalog(output)
+}
+
+func cloneDevinModelCatalog(models []DevinModelInfo) []DevinModelInfo {
+	cloned := make([]DevinModelInfo, len(models))
+	for i, model := range models {
+		cloned[i] = model
+		cloned[i].SupportedReasoningEfforts = append([]ReasoningEffort(nil), model.SupportedReasoningEfforts...)
+	}
+	return cloned
+}
+
+func parseDevinModelCatalog(data []byte) ([]DevinModelInfo, error) {
+	var payload struct {
+		Families []struct {
+			Label    string `json:"family_label"`
+			Variants []struct {
+				Model         string `json:"model_uid"`
+				Label         string `json:"label"`
+				MaxContext    int64  `json:"max_context_tokens"`
+				MaxOutput     int64  `json:"max_output_tokens"`
+				CostTier      string `json:"cost_tier"`
+				CostSummary   string `json:"cost_summary"`
+				Description   string `json:"description"`
+				Recommended   bool   `json:"recommended"`
+				IsRecommended bool   `json:"is_recommended"`
+				IsNew         bool   `json:"is_new"`
+				IsBeta        bool   `json:"is_beta"`
+				SupportsImage *bool  `json:"supports_images"`
+				ModelInfo     struct {
+					SupportsImages *bool `json:"supports_images"`
+				} `json:"model_info"`
+				PromoStatus json.RawMessage `json:"promo_status"`
+			} `json:"variants"`
+		} `json:"families"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	models := make([]DevinModelInfo, 0)
+	for _, family := range payload.Families {
+		for _, variant := range family.Variants {
+			model := strings.TrimSpace(variant.Model)
+			if model == "" {
+				continue
+			}
+			effort := devinReasoningEffortFromModel(model)
+			efforts := []ReasoningEffort{}
+			if effort != ReasoningEffortDefault {
+				efforts = []ReasoningEffort{effort}
+			}
+			costTier := strings.TrimSpace(variant.CostTier)
+			isPromo := strings.EqualFold(costTier, "promotion") ||
+				(len(variant.PromoStatus) > 0 && string(variant.PromoStatus) != "null")
+			supportsImagesSet := variant.SupportsImage != nil || variant.ModelInfo.SupportsImages != nil
+			supportsImages := (variant.SupportsImage != nil && *variant.SupportsImage) ||
+				(variant.ModelInfo.SupportsImages != nil && *variant.ModelInfo.SupportsImages)
+			models = append(models, DevinModelInfo{
+				Model: model, DisplayName: strings.TrimSpace(variant.Label), Family: strings.TrimSpace(family.Label),
+				DefaultReasoningEffort: effort, SupportedReasoningEfforts: efforts,
+				MaxContextTokens: variant.MaxContext, MaxOutputTokens: variant.MaxOutput,
+				CostTier: costTier, CostSummary: strings.TrimSpace(variant.CostSummary),
+				Description:       strings.TrimSpace(variant.Description),
+				Recommended:       variant.Recommended || variant.IsRecommended,
+				IsNew:             variant.IsNew,
+				IsBeta:            variant.IsBeta,
+				IsPromo:           isPromo,
+				SupportsImages:    supportsImages,
+				supportsImagesSet: supportsImagesSet,
+			})
+		}
+	}
+	return models, nil
+}
+
+func devinReasoningEffortFromModel(model string) ReasoningEffort {
+	value := strings.ToLower(strings.TrimSpace(model))
+	// Fast, priority, and context-window suffixes follow the effort token in
+	// Devin model ids, so inspect the full id instead of only its last segment.
+	switch {
+	case strings.Contains(value, "-xhigh"):
+		return ReasoningEffortXHigh
+	case strings.Contains(value, "-medium"):
+		return ReasoningEffortMedium
+	case strings.Contains(value, "-minimal"):
+		return ReasoningEffortMinimal
+	case strings.Contains(value, "-none"):
+		return ReasoningEffortNone
+	case strings.Contains(value, "-low"):
+		return ReasoningEffortLow
+	case strings.Contains(value, "-high"):
+		return ReasoningEffortHigh
+	case strings.Contains(value, "-max"):
+		return ReasoningEffortMax
+	default:
+		return ReasoningEffortDefault
+	}
+}
+
+func loadCodexModelCatalog(
+	ctx context.Context,
+	codexPath string,
+	clientInfo map[string]any,
+) ([]CodexModelInfo, error) {
 	client, stderr, err := startCodexAppServer(ctx, codexPath, "")
 	if err != nil {
 		return nil, err
@@ -579,15 +835,15 @@ func loadCodexModelCatalog(ctx context.Context, codexPath string) ([]CodexModelI
 	}()
 	defer stopCodexAppServerProbe(client)
 
-	if _, err := client.request(ctx, "initialize", map[string]any{
-		"clientInfo": map[string]any{
-			"name":    "codekanban-runtime-config",
-			"version": "0.0.0",
-		},
+	initializeRequest := map[string]any{
 		"capabilities": map[string]any{
 			"experimentalApi": true,
 		},
-	}); err != nil {
+	}
+	if clientInfo != nil {
+		initializeRequest["clientInfo"] = clientInfo
+	}
+	if _, err := client.request(ctx, "initialize", initializeRequest); err != nil {
 		return nil, err
 	}
 
@@ -690,6 +946,26 @@ func hasExecutable(command string) bool {
 }
 
 func detectCodexVersion(command string) *string {
+	parts := splitCommandParts(command)
+	if len(parts) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, parts[0], append(parts[1:], "--version")...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	match := codexVersionPattern.FindString(string(output))
+	if strings.TrimSpace(match) == "" {
+		return nil
+	}
+	version := strings.TrimSpace(match)
+	return &version
+}
+
+func detectDevinVersion(command string) *string {
 	parts := splitCommandParts(command)
 	if len(parts) == 0 {
 		return nil

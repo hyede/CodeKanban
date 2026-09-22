@@ -146,6 +146,15 @@
               tokens
             </span>
           </div>
+          <div v-if="sessionUsageWithSubAgents" class="context-usage-stat">
+            <span class="context-usage-stat__label">
+              {{ t('webSession.contextUsageSessionTotal') }}
+            </span>
+            <span class="context-usage-total-value">
+              {{ formatWebSessionTokenCount(sessionUsageWithSubAgents.totalTokens) }}
+              tokens
+            </span>
+          </div>
         </div>
 
         <div class="context-usage-divider"></div>
@@ -937,6 +946,34 @@
                         </template>
                         {{ timelineUserMessageEditTitle }}
                       </n-tooltip>
+                      <n-tooltip
+                        v-if="canForkTimelineUserMessage(item)"
+                        trigger="hover"
+                        placement="top"
+                        :delay="100"
+                      >
+                        <template #trigger>
+                          <n-button
+                            quaternary
+                            circle
+                            size="small"
+                            class="user-message-navigation-button user-message-fork-button"
+                            :loading="devinForkPendingItemId === item.id"
+                            :disabled="
+                              isRunActive ||
+                              (devinForkPendingItemId !== '' && devinForkPendingItemId !== item.id)
+                            "
+                            :title="timelineUserMessageForkTitle"
+                            :aria-label="timelineUserMessageForkTitle"
+                            @click.stop="forkTimelineUserMessage(item)"
+                          >
+                            <template #icon>
+                              <n-icon><GitBranchOutline /></n-icon>
+                            </template>
+                          </n-button>
+                        </template>
+                        {{ timelineUserMessageForkTitle }}
+                      </n-tooltip>
                       <n-tooltip trigger="hover" placement="top" :delay="100">
                         <template #trigger>
                           <n-button
@@ -1065,6 +1102,11 @@
                               renderHighlightedPlainText(item.tool.output, timelineSearchQuery)
                             "
                           ></code></pre>
+                          <WebSessionStreamingMarkdown
+                            v-else-if="isStreamingPlanMarkdownBlock(item)"
+                            class="chat-markdown"
+                            :blocks="getPlanStreamingBlocks(item)"
+                          />
                           <div
                             v-else
                             class="chat-markdown"
@@ -1127,18 +1169,28 @@
                   </div>
 
                   <WebSessionReasoningSummary
-                    v-else-if="isCodexReasoningBlock(item) && item.tool"
-                    :text="item.tool.output || ''"
-                    :label="t('webSession.reasoningSummary')"
+                    v-else-if="isReasoningDisclosureBlock(item) && item.tool"
+                    :text="getReasoningMarkdownText(item)"
+                    :label="reasoningDisclosureLabel(item)"
+                    :summary="reasoningDisclosurePreview(item)"
+                    :streaming="isReasoningStreaming(item)"
                     :time="formatTime(item.timestamp)"
                     :time-title="formatDateTime(item.timestamp)"
-                    :expanded="isToolExpanded(item.tool.id)"
-                    @toggle="toggleToolExpanded(item.tool)"
+                    :expanded="isReasoningDisclosureExpanded(item.tool)"
+                    @toggle="toggleReasoningDisclosure(item.tool)"
                   >
+                    <WebSessionStreamingMarkdown
+                      v-if="
+                        isReasoningDisclosureExpanded(item.tool) &&
+                        isStreamingReasoningMarkdownBlock(item)
+                      "
+                      class="chat-markdown reasoning-stream-body"
+                      :blocks="getReasoningStreamingBlocks(item)"
+                    />
                     <div
-                      v-if="isToolExpanded(item.tool.id)"
+                      v-else-if="isReasoningDisclosureExpanded(item.tool)"
                       class="chat-markdown"
-                      v-html="renderMarkdown(item.tool.output || '')"
+                      v-html="renderMarkdown(getReasoningMarkdownText(item))"
                     ></div>
                   </WebSessionReasoningSummary>
 
@@ -1200,7 +1252,7 @@
                       </div>
                       <div v-if="item.tool.output" class="tool-section">
                         <div class="tool-section-label">{{ t('webSession.toolOutput') }}</div>
-                        <pre class="tool-code">{{ item.tool.output }}</pre>
+                        <pre class="tool-code">{{ stripMagicContextTags(item.tool.output) }}</pre>
                       </div>
                       <div
                         v-else-if="shouldShowToolPendingPlaceholder(item.tool)"
@@ -1349,7 +1401,7 @@
                         </div>
                         <div v-if="item.tool.output" class="tool-section">
                           <div class="tool-section-label">{{ t('webSession.toolOutput') }}</div>
-                          <pre class="tool-code">{{ item.tool.output }}</pre>
+                          <pre class="tool-code">{{ stripMagicContextTags(item.tool.output) }}</pre>
                         </div>
                         <div
                           v-else-if="shouldShowToolPendingPlaceholder(item.tool)"
@@ -1395,6 +1447,12 @@
                       >
                         {{ historyInteractionPrompt(item) }}
                       </div>
+
+                      <pre
+                        v-if="historyInteractionCommand(item)"
+                        class="approval-command history-interaction-command"
+                        >{{ historyInteractionCommand(item) }}</pre
+                      >
 
                       <div
                         v-if="item.detail.questions?.length"
@@ -1552,6 +1610,13 @@
                         v-if="shouldShowMessageRawToggle(item) && isBlockRawMode(item, 'message')"
                         class="item-text item-text--raw timeline-raw-text"
                       ><code v-html="renderHighlightedPlainText(item.text, timelineSearchQuery)"></code></pre>
+                      <WebSessionStreamingMarkdown
+                        v-else-if="
+                          isStreamingMessageMarkdownBlock(item) && getDisplayBlockText(item)
+                        "
+                        class="item-text chat-markdown"
+                        :blocks="getMessageStreamingBlocks(item)"
+                      />
                       <div
                         v-else-if="getDisplayBlockText(item)"
                         class="item-text chat-markdown"
@@ -2096,15 +2161,24 @@
                     :style="modelSelectStyle"
                     :menu-props="modelSelectMenuProps"
                     :render-option="renderModelOption"
+                    :virtual-scroll="selectedAgent === 'pi'"
                     size="small"
                     :options="modelOptions"
                   >
-                    <template v-if="selectedAgent === 'pi' && showAllPiModels" #header>
+                    <template
+                      v-if="
+                        (selectedAgent === 'pi' && showAllPiModels) ||
+                        (selectedAgent === 'devin' && showAllDevinModels)
+                      "
+                      #header
+                    >
                       <div class="pi-model-search-header">
                         <n-input
+                          v-if="selectedAgent === 'pi'"
                           ref="piModelSearchInputRef"
                           v-model:value="piModelSearchQuery"
                           clearable
+                          :bordered="false"
                           size="small"
                           :placeholder="t('webSession.modelSearchPlaceholder')"
                           :aria-label="t('webSession.modelSearchPlaceholder')"
@@ -2118,9 +2192,113 @@
                             <n-icon size="15" aria-hidden="true"><SearchOutline /></n-icon>
                           </template>
                         </n-input>
+                        <n-input
+                          v-else
+                          ref="devinModelSearchInputRef"
+                          v-model:value="devinModelSearchQuery"
+                          clearable
+                          :bordered="false"
+                          size="small"
+                          :placeholder="t('webSession.modelSearchPlaceholder')"
+                          :aria-label="t('webSession.modelSearchPlaceholder')"
+                          @focus="handleDevinModelSearchFocus"
+                          @blur="handleDevinModelSearchBlur"
+                        >
+                          <template #prefix>
+                            <n-icon size="15" aria-hidden="true"><SearchOutline /></n-icon>
+                          </template>
+                        </n-input>
                       </div>
                     </template>
                   </n-select>
+                  <n-popover
+                    v-if="isDevinFusionModel"
+                    trigger="click"
+                    placement="top-start"
+                    :show-arrow="false"
+                  >
+                    <template #trigger>
+                      <button
+                        type="button"
+                        class="fusion-config-trigger"
+                        aria-label="Fusion settings"
+                      >
+                        <n-icon><FunnelOutline /></n-icon>
+                      </button>
+                    </template>
+                    <div class="fusion-config-panel">
+                      <div class="fusion-config-title">Fusion</div>
+                      <div v-if="fusionSelectedMeta?.description" class="fusion-config-description">
+                        {{ fusionSelectedMeta.description }}
+                      </div>
+                      <div v-if="fusionContextLabel" class="fusion-config-description">
+                        {{ fusionContextLabel }}
+                      </div>
+                      <div class="fusion-config-row">
+                        <span>{{ t('webSession.fusionLead') }}</span>
+                        <n-select
+                          v-model:value="fusionLead"
+                          size="small"
+                          :bordered="false"
+                          :consistent-menu-width="false"
+                          :options="fusionLeadOptions"
+                        />
+                      </div>
+                      <div class="fusion-config-row">
+                        <span>{{ t('webSession.fusionEffort') }}</span>
+                        <n-select
+                          v-model:value="fusionEffort"
+                          size="small"
+                          :bordered="false"
+                          :consistent-menu-width="false"
+                          :options="fusionEffortOptions"
+                        />
+                      </div>
+                      <div class="fusion-config-row">
+                        <span>{{ t('webSession.fusionSidekick') }}</span>
+                        <n-select
+                          v-model:value="fusionSidekick"
+                          size="small"
+                          :bordered="false"
+                          :consistent-menu-width="false"
+                          :options="fusionSidekickOptions"
+                        />
+                      </div>
+                      <div v-if="fusionSidekickEffortOptions.length > 0" class="fusion-config-row">
+                        <span>{{ t('webSession.fusionSidekickEffort') }}</span>
+                        <n-select
+                          v-model:value="fusionSidekickEffort"
+                          size="small"
+                          :bordered="false"
+                          :consistent-menu-width="false"
+                          :options="fusionSidekickEffortOptions"
+                        />
+                      </div>
+                      <div class="fusion-config-row">
+                        <span>{{ t('webSession.fusionFastMode') }}</span>
+                        <n-switch v-model:value="fusionFast" size="small" />
+                      </div>
+                      <template v-if="fusionCostItems.length > 0">
+                        <div class="fusion-config-divider" />
+                        <div class="fusion-config-section-title">
+                          {{ t('webSession.fusionCost') }}
+                        </div>
+                        <div class="fusion-config-cost-grid">
+                          <div
+                            v-for="item in fusionCostItems"
+                            :key="item.label"
+                            class="fusion-config-cost-item"
+                          >
+                            <span class="fusion-config-cost-label">{{ item.label }}</span>
+                            <span class="fusion-config-cost-price">
+                              <strong>{{ item.price }}</strong>
+                              <template v-if="item.unit"> / {{ item.unit }}</template>
+                            </span>
+                          </div>
+                        </div>
+                      </template>
+                    </div>
+                  </n-popover>
                   <n-select
                     v-if="selectedAgent === 'claude'"
                     v-model:value="selectedClaudeRuntime"
@@ -2131,7 +2309,12 @@
                     :options="claudeRuntimeOptions"
                   />
                   <n-select
-                    v-if="selectedAgent === 'codex' || selectedAgent === 'pi'"
+                    v-if="
+                      (selectedAgent === 'codex' ||
+                        selectedAgent === 'pi' ||
+                        selectedAgent === 'devin') &&
+                      !isDevinFusionModel
+                    "
                     :show="isMobile ? undefined : showReasoningSelector"
                     v-model:value="selectedReasoningEffort"
                     @update:show="handleReasoningSelectorShowChange"
@@ -3393,9 +3576,11 @@ import {
 } from '@vueuse/core';
 import { storeToRefs } from 'pinia';
 import {
+  NButton,
   NCheckbox,
   NIcon,
   NInput,
+  NPopover,
   useDialog,
   useMessage,
   type DialogReactive,
@@ -3478,7 +3663,12 @@ import {
 } from '@/constants/webSessionActivityDisplayMode';
 import { getAssistantIconByType } from '@/utils/assistantIcon';
 import { isDarkHex } from '@/utils/color';
-import { renderHighlightedPlainText, renderMarkdown } from '@/utils/markdown';
+import {
+  renderHighlightedPlainText,
+  renderMarkdown,
+  renderStreamingMarkdownBlocks,
+} from '@/utils/markdown';
+import { stripMagicContextTags } from '@/utils/magicContextTags';
 import {
   buildImagePlaceholder,
   buildImageViewPreviewUrl,
@@ -3511,6 +3701,7 @@ import WebSessionMessageEditDialog from '@/components/web-session/WebSessionMess
 import WebSessionMobileSessionDrawer from '@/components/web-session/WebSessionMobileSessionDrawer.vue';
 import WebSessionScheduledSendDialog from '@/components/web-session/WebSessionScheduledSendDialog.vue';
 import WebSessionReasoningSummary from '@/components/web-session/WebSessionReasoningSummary.vue';
+import WebSessionStreamingMarkdown from '@/components/web-session/WebSessionStreamingMarkdown.vue';
 import WebSessionSidebar from '@/components/web-session/WebSessionSidebar.vue';
 import { useWebSessionSidebarResize } from '@/components/web-session/useWebSessionSidebarResize';
 import WebSessionSkillCatalogPanel from '@/components/web-session/WebSessionSkillCatalogPanel.vue';
@@ -3551,17 +3742,35 @@ import {
 import {
   CLAUDE_RUNTIME_OPTIONS,
   CLAUDE_MODEL_OPTIONS,
+  resolveCCRModelOptions,
   CODEX_ADDITIONAL_MODEL_OPTIONS,
   CODEX_MODEL_OPTIONS,
   CODEX_PRIMARY_MODEL_OPTIONS,
+  DEVIN_MODEL_OPTIONS,
   CUSTOM_MODEL_VALUE,
   MORE_MODELS_VALUE,
   defaultModelForAgent as resolveDefaultModelForAgent,
   defaultPermissionLevelForAgent as resolveDefaultPermissionLevelForAgent,
   defaultReasoningEffortForAgent as resolveDefaultReasoningEffortForAgent,
   filterPiModelOptionGroups,
+  parseDevinCostSummary,
+  rememberCustomModel,
   rememberPiFrequentModel,
+  removeCustomModel,
   resolveCodexReasoningEfforts,
+  resolveDevinModelOptions,
+  resolveDevinModelForReasoning,
+  resolveDevinModelOptionGroups,
+  duplicateDevinModelOptionValue,
+  normalizeDevinModelOptionValue,
+  resolveDevinSpecialModelOptions,
+  resolveDevinFusionModel,
+  resolveDevinFusionModelConfigs,
+  resolveDevinReasoningEfforts,
+  resolveDevinSelectedReasoningEffort,
+  filterDevinModelOptionGroups,
+  resolveCustomModelOptions,
+  resolveDefaultClaudeRuntime,
   shouldSuppressPiModelMenuClose,
   resolvePiModelOptionGroups,
   resolvePiModelOptions,
@@ -4061,6 +4270,7 @@ const showJumpToBottom = ref(false);
 const devCyberPolicySessionId = ref('');
 const lastTimelineScrollTop = ref(0);
 let timelineScrollSyncVersion = 0;
+let timelineScrollSyncScheduled = false;
 let pendingUserInputTimelineAnchor: {
   sessionId: string;
   requestKey: string;
@@ -4275,7 +4485,16 @@ let routeWriteFlight: Promise<void> | null = null;
 const IMAGE_ATTACHMENT_NAME_PATTERN = /\.(png|jpe?g|gif|webp|bmp|svg|tiff?)$/i;
 
 const draftAgent = ref<WebSessionAgent>('codex');
-const draftClaudeRuntime = ref<WebSessionClaudeRuntimeOption>('claude');
+// The composer's claude runtime falls back to the configured session default
+// until the user picks a runtime explicitly; viewing or creating a session
+// re-anchors the fallback to the configured default.
+const draftClaudeRuntimeOverride = ref<WebSessionClaudeRuntimeOption | null>(null);
+const draftClaudeRuntime = computed<WebSessionClaudeRuntimeOption>({
+  get: () => draftClaudeRuntimeOverride.value ?? defaultClaudeRuntimeForSession(),
+  set: value => {
+    draftClaudeRuntimeOverride.value = value;
+  },
+});
 const draftModel = ref(defaultModelForAgent('codex'));
 const draftReasoningEffort = ref<WebSessionReasoningEffort>(
   defaultReasoningEffortForAgent('codex')
@@ -4515,6 +4734,7 @@ const runtimeCapabilityFor = (agent: WebSessionAgent) =>
 const runtimeCodexCapability = computed(() => runtimeCapabilityFor('codex'));
 const runtimeClaudeCapability = computed(() => runtimeCapabilityFor('claude'));
 const runtimePiCapability = computed(() => runtimeCapabilityFor('pi'));
+const runtimeDevinCapability = computed(() => runtimeCapabilityFor('devin'));
 const piRuntimeCapabilitiesLoading = computed(() =>
   isPiRuntimeCapabilityPending(codexRuntimeConfigReady.value, runtimeConfig.value)
 );
@@ -4548,6 +4768,7 @@ const piUnavailableAgentLabel = computed(() => {
 });
 const runtimeHasCodex = computed(() => runtimeCodexCapability.value.supportsWebSession);
 const runtimeHasClaudeCode = computed(() => runtimeClaudeCapability.value.supportsWebSession);
+const runtimeHasDevin = computed(() => runtimeDevinCapability.value.supportsWebSession);
 const runtimeCodexVersion = computed(() => codexRuntimeConfig.value?.codexVersion?.trim() || '');
 const runtimeMultiAgentV2MinVersion = computed(
   () =>
@@ -5335,6 +5556,50 @@ function isCodexReasoningBlock(block: WebSessionBlock) {
   return currentSession.value?.agent === 'codex' && isReasoningBlock(block);
 }
 
+/**
+ * Pi turns routinely emit reasoning plus tool calls without any assistant text,
+ * so Pi thinking is surfaced even while the global "show AI reasoning" switch is
+ * off. It reuses the same low-key disclosure header as Codex rather than a card.
+ */
+function isPiReasoningBlock(block: WebSessionBlock) {
+  return currentSession.value?.agent === 'pi' && isReasoningBlock(block);
+}
+
+function isReasoningDisclosureBlock(block: WebSessionBlock) {
+  return isCodexReasoningBlock(block) || isPiReasoningBlock(block);
+}
+
+function isReasoningStreaming(block: WebSessionBlock) {
+  return isPiReasoningBlock(block) && block.tool?.status === 'running';
+}
+
+function reasoningDisclosureLabel(block: WebSessionBlock) {
+  if (isReasoningStreaming(block)) {
+    return t('webSession.reasoningInProgress');
+  }
+  return isPiReasoningBlock(block)
+    ? t('webSession.toolReasoning')
+    : t('webSession.reasoningSummary');
+}
+
+/**
+ * Latest thought line, so a collapsed header reads like a live ticker. Reads the
+ * throttled stream text and scans backwards for the last line instead of
+ * splitting the whole body on every render.
+ */
+function reasoningDisclosurePreview(block: WebSessionBlock) {
+  if (!isPiReasoningBlock(block)) {
+    return '';
+  }
+  const text = getReasoningMarkdownText(block).replace(/\s+$/, '');
+  if (!text) {
+    return '';
+  }
+  const breakIndex = text.lastIndexOf('\n');
+  const line = breakIndex === -1 ? text : text.slice(breakIndex + 1);
+  return line.replace(/^#+\s*|\*\*/g, '').trim();
+}
+
 function isActivityDisplayBlock(block: WebSessionBlock) {
   if (block.kind !== 'tool' || !block.tool) {
     return false;
@@ -5434,7 +5699,7 @@ function shouldShowPlanRawToggle(block: WebSessionBlock) {
     block.kind === 'tool' && block.tool && isPlanTool(block.tool) && block.tool.output?.trim()
   );
 }
-type StreamingMarkdownSurface = 'message' | 'plan';
+type StreamingMarkdownSurface = 'message' | 'plan' | 'reasoning';
 
 function buildStreamingMarkdownKey(block: WebSessionBlock, surface: StreamingMarkdownSurface) {
   return `${block.key}:${surface}`;
@@ -5450,8 +5715,24 @@ function isStreamingPlanMarkdownBlock(block: WebSessionBlock) {
   );
 }
 
+function isStreamingReasoningMarkdownBlock(block: WebSessionBlock) {
+  return isReasoningDisclosureBlock(block) && block.tool?.status === 'running';
+}
+
+/**
+ * Thinking is re-rendered on every delta, so while it streams we read the
+ * throttled snapshot and the template renders it as plain text. Markdown is
+ * only parsed once the segment settles.
+ */
+function getReasoningMarkdownText(block: WebSessionBlock) {
+  if (!isStreamingReasoningMarkdownBlock(block)) {
+    return block.tool?.output ?? '';
+  }
+  return getEffectiveStreamingMarkdownText(block, 'reasoning');
+}
+
 function getStreamingMarkdownText(block: WebSessionBlock, surface: StreamingMarkdownSurface) {
-  if (surface === 'plan') {
+  if (surface === 'reasoning' || surface === 'plan') {
     return block.tool?.output ?? '';
   }
   return getDisplayBlockText(block);
@@ -5470,6 +5751,22 @@ function getMessageMarkdownText(block: WebSessionBlock) {
     return getDisplayBlockText(block);
   }
   return getEffectiveStreamingMarkdownText(block, 'message');
+}
+
+/**
+ * Streaming bodies render block by block: settled blocks keep their HTML, so a
+ * growing message only re-renders its tail instead of the whole body.
+ */
+function getMessageStreamingBlocks(block: WebSessionBlock) {
+  return renderStreamingMarkdownBlocks(
+    `message:${block.key}`,
+    getMessageMarkdownText(block),
+    getMessageMarkdownRenderOptions(block)
+  );
+}
+
+function getReasoningStreamingBlocks(block: WebSessionBlock) {
+  return renderStreamingMarkdownBlocks(`reasoning:${block.key}`, getReasoningMarkdownText(block));
 }
 
 function getMessageMarkdownRenderOptions(block: WebSessionBlock) {
@@ -5493,6 +5790,15 @@ function getPlanToolMarkdownRenderOptions(block: WebSessionBlock) {
     : timelineMarkdownRenderOptions.value;
   const query = timelineSearchQuery.value.trim();
   return query ? { ...options, textHighlightQuery: query } : options;
+}
+
+/** Same incremental block rendering the message and reasoning bodies use. */
+function getPlanStreamingBlocks(block: WebSessionBlock) {
+  return renderStreamingMarkdownBlocks(
+    `plan:${block.key}`,
+    getPlanToolMarkdownText(block),
+    getPlanToolMarkdownRenderOptions(block)
+  );
 }
 
 function getTimelineRawModeKey(block: WebSessionBlock, surface: TimelineRawSurface) {
@@ -5627,6 +5933,26 @@ const subAgentByThreadId = computed(
   () => new Map(knownSubAgents.value.map(agent => [agent.id, agent] as const))
 );
 const hasKnownSubAgents = computed(() => knownSubAgents.value.length > 0);
+const sessionUsageWithSubAgents = computed(() => {
+  const rootUsage = currentRealSession.value?.usage;
+  if (!rootUsage) {
+    return null;
+  }
+  const usage = {
+    inputTokens: Math.max(0, Number(rootUsage.inputTokens || 0)),
+    cachedInputTokens: Math.max(0, Number(rootUsage.cachedInputTokens || 0)),
+    outputTokens: Math.max(0, Number(rootUsage.outputTokens || 0)),
+  };
+  for (const agent of knownSubAgents.value) {
+    usage.inputTokens += Math.max(0, Number(agent.inputTokens || 0));
+    usage.cachedInputTokens += Math.max(0, Number(agent.cachedInputTokens || 0));
+    usage.outputTokens += Math.max(0, Number(agent.outputTokens || 0));
+  }
+  return {
+    ...usage,
+    totalTokens: usage.inputTokens + usage.outputTokens,
+  };
+});
 
 function subAgentStatusLabel(status: WebSessionSubAgentStatus) {
   return t(`webSession.subAgentStatus.${status}`);
@@ -5654,10 +5980,9 @@ function shouldRenderToolBlockInTimeline(block: WebSessionBlock) {
     return false;
   }
   if (isReasoningBlock(block)) {
-    if (isCodexReasoningBlock(block)) {
-      return hasReasoningContent(block);
-    }
-    return hasReasoningContent(block) || shouldShowToolPendingPlaceholder(block.tool);
+    // Codex and Pi thinking share the disclosure header, which renders nothing
+    // without text — keep empty reasoning rows out of the timeline entirely.
+    return hasReasoningContent(block);
   }
   const activeToolGroupId = liveState.value.tool?.groupId || '';
   const activeToolId = liveState.value.tool?.id || '';
@@ -5675,7 +6000,7 @@ function shouldRenderToolBlockInTimeline(block: WebSessionBlock) {
 
 const filteredTimelineBlocks = computed(() =>
   timelineBlocks.value.filter(block => {
-    if (!showWebSessionReasoning.value && isReasoningBlock(block)) {
+    if (!showWebSessionReasoning.value && isReasoningBlock(block) && !isPiReasoningBlock(block)) {
       return false;
     }
     if (isPlanChoiceRequestBlock(block)) {
@@ -5688,7 +6013,7 @@ const filteredTimelineBlocks = computed(() =>
   })
 );
 const visibleBlocks = computed(() =>
-  projectWebSessionVisibleTimelineBlocks(filteredTimelineBlocks.value)
+  projectWebSessionVisibleTimelineBlocks(filteredTimelineBlocks.value, currentSession.value?.agent)
 );
 const {
   inputRef: timelineSearchInputRef,
@@ -5779,6 +6104,15 @@ const streamingMarkdownTargets = computed(() =>
       if (text) {
         targets.push({
           key: buildStreamingMarkdownKey(block, 'plan'),
+          text,
+        });
+      }
+    }
+    if (isStreamingReasoningMarkdownBlock(block)) {
+      const text = block.tool?.output ?? '';
+      if (text) {
+        targets.push({
+          key: buildStreamingMarkdownKey(block, 'reasoning'),
           text,
         });
       }
@@ -6592,6 +6926,60 @@ function openTimelineUserMessageEdit(block: WebSessionBlock) {
   showMessageEditDialog.value = true;
 }
 
+const devinForkPendingItemId = ref('');
+const timelineUserMessageForkTitle = computed(() =>
+  isRunActive.value ? t('webSession.forkUserMessageRunning') : t('webSession.forkUserMessage')
+);
+
+function canForkTimelineUserMessage(block: WebSessionBlock) {
+  const session = currentRealSession.value;
+  return Boolean(
+    block.kind === 'user' &&
+      !block.deliveryState &&
+      session?.agent === 'devin' &&
+      session.nativeSessionId &&
+      runtimeDevinCapability.value.supportsFork === true
+  );
+}
+
+async function forkTimelineUserMessage(block: WebSessionBlock) {
+  const session = currentRealSession.value;
+  if (
+    !session ||
+    !canForkTimelineUserMessage(block) ||
+    isRunActive.value ||
+    devinForkPendingItemId.value !== ''
+  ) {
+    return;
+  }
+  devinForkPendingItemId.value = block.id;
+  try {
+    const target = await webSessionStore.forkSessionMessage(session.projectId, session.id, block.id);
+    const branch = target.session;
+    if (!branch) {
+      throw new Error(t('common.error'));
+    }
+    if (session.projectId !== props.projectId) {
+      projectStore.addRecentProject(session.projectId);
+      await router.push(buildProjectRouteLocation(session.projectId, branch.id));
+    } else {
+      clearArchivedPreviewSession();
+      activeArchivedPreviewId.value = '';
+      await nextTick();
+      insertTabAfter(branch.id, session.id);
+      await activateTabById(branch.id, { connectReal: false });
+      await syncWebSessionRouteSessionId(branch.id);
+      autoFollowBottom.value = true;
+      scrollToBottom(true);
+    }
+    message.success(t('webSession.forkSessionSuccess'));
+  } catch (error) {
+    message.error(formatSessionInteractionError(error));
+  } finally {
+    devinForkPendingItemId.value = '';
+  }
+}
+
 function handleMessageEditDialogVisibilityChange(show: boolean) {
   if (!show && messageEditSubmitting.value) {
     return;
@@ -7155,6 +7543,9 @@ const composerHint = computed(() => {
   }
   if (codexRuntimeConfig.value && selectedAgent.value === 'claude' && !runtimeHasClaudeCode.value) {
     return t('webSession.composerHintClaudeMissing');
+  }
+  if (codexRuntimeConfig.value && selectedAgent.value === 'devin' && !runtimeHasDevin.value) {
+    return t('webSession.composerHintDevinMissing');
   }
   if (selectedAgent.value === 'pi' && piRuntimeCapabilitiesLoading.value) {
     return t('webSession.composerHintPiChecking');
@@ -8769,12 +9160,23 @@ function buildSessionActionOptions(session: SessionTab | null): DropdownOption[]
     },
   ];
 
-  if (copyableSessionId) {
-    options.splice(2, 0, {
-      label: t('terminal.copyAISessionId'),
+  const sessionIdOptions: DropdownOption[] = [];
+  if (session && copyableSessionId) {
+    sessionIdOptions.push({
+      label: t('terminal.copyAgentSessionId', { agent: getAgentDisplayName(session.agent) }),
       key: 'copy-session-id',
       icon: renderDropdownIcon(CopyOutline),
     });
+  }
+  if (session && !isDraftSession(session)) {
+    sessionIdOptions.push({
+      label: t('terminal.copyCkbSessionId'),
+      key: 'copy-ckb-session-id',
+      icon: renderDropdownIcon(CopyOutline),
+    });
+  }
+  if (sessionIdOptions.length) {
+    options.splice(2, 0, ...sessionIdOptions);
   }
 
   if (canPiTree) {
@@ -8872,7 +9274,16 @@ async function handleSessionActionSelect(action: string, session: SessionTab | n
     }
     await copyText(sessionId, {
       failureMessage: t('terminal.copyFailed'),
-      successMessage: t('terminal.aiSessionIdCopied'),
+      successMessage: t('terminal.agentSessionIdCopied', {
+        agent: getAgentDisplayName(session.agent),
+      }),
+    });
+    return;
+  }
+  if (action === 'copy-ckb-session-id') {
+    await copyText(session.id, {
+      failureMessage: t('terminal.copyFailed'),
+      successMessage: t('terminal.ckbSessionIdCopied'),
     });
     return;
   }
@@ -9062,6 +9473,8 @@ const timelineContentVersion = computed(() =>
       const toolVersion = block.tool
         ? `${block.tool.id}:${block.tool.status}:${String(block.tool.output ?? '').length}:${toolGroupCount}:${groupItemsLength}`
         : '';
+      // Pi activity groups have no tool of their own; their members carry the
+      // command group identity, so toolVersion already tracks their progress.
       return `${block.key}:${block.kind}:${block.text.length}:${block.attachments.length}:${toolVersion}:${block.done ? 1 : 0}`;
     })
     .join('|')
@@ -9139,7 +9552,9 @@ function normalizeDraftSession(
     return null;
   }
   const agent: WebSessionAgent =
-    session.agent === 'claude' || session.agent === 'pi' ? session.agent : 'codex';
+    session.agent === 'claude' || session.agent === 'pi' || session.agent === 'devin'
+      ? session.agent
+      : 'codex';
   const requestedWorktreeId =
     typeof session.worktreeId === 'string' ? session.worktreeId || null : null;
   const presentation = resolveDraftProjectPresentation(agent, requestedWorktreeId, projectId);
@@ -9631,7 +10046,14 @@ function createDraftSession(forceAgent?: WebSessionAgent, options?: { title?: st
     worktreeId: context.worktreeId,
     orderIndex: Number.MAX_SAFE_INTEGER - draftSessions.value.length,
     agent: nextAgent,
-    claudeRuntime: source?.claudeRuntime === 'ccr' ? 'ccr' : draftClaudeRuntime.value,
+    claudeRuntime:
+      nextAgent === 'claude'
+        ? source?.agent === 'claude'
+          ? source.claudeRuntime === 'ccr'
+            ? 'ccr'
+            : 'claude'
+          : draftClaudeRuntime.value
+        : 'claude',
     title: options?.title || buildDraftTitle(nextAgent),
     model: defaultModelForAgent(nextAgent),
     reasoningEffort: defaultReasoningEffortForAgent(nextAgent),
@@ -9675,7 +10097,9 @@ function createDraftSession(forceAgent?: WebSessionAgent, options?: { title?: st
         ? 'codex_app_server'
         : nextAgent === 'pi'
           ? 'pi_rpc'
-          : 'claude_stream_json',
+          : nextAgent === 'devin'
+            ? 'devin_acp'
+            : 'claude_stream_json',
     syncState: 'missing',
     sourceCreatedAt: null,
     sourceUpdatedAt: null,
@@ -10747,20 +11171,34 @@ const agentOptions: Array<{ label: string; value: WebSessionAgent }> = [
   { label: 'Codex', value: 'codex' },
   { label: 'Claude', value: 'claude' },
   { label: 'Pi', value: 'pi' },
+  { label: 'Devin', value: 'devin' },
 ];
 const showAdditionalCodexModels = ref(false);
 const showAllPiModels = ref(false);
+const showAllDevinModels = ref(false);
 const showModelSelector = ref(false);
 const showReasoningSelector = ref(false);
 const keepAdditionalCodexModelsForNextOpen = ref(false);
 const keepAllPiModelsForNextOpen = ref(false);
 const piModelSearchQuery = ref('');
+const devinModelSearchQuery = ref('');
 const piModelSearchInputRef = ref<InstanceType<typeof NInput> | null>(null);
+const devinModelSearchInputRef = ref<InstanceType<typeof NInput> | null>(null);
 const piModelSearchFocused = ref(false);
 const piModelSearchComposing = ref(false);
+const devinModelSearchFocused = ref(false);
 const piFrequentModelValues = useStorage<string[]>('codekanban-web-session-pi-frequent-models', []);
+const devinFrequentModelValues = useStorage<string[]>(
+  'codekanban-web-session-devin-frequent-models',
+  []
+);
+type WebSessionCustomModelAgent = Extract<WebSessionAgent, 'claude' | 'codex' | 'devin'>;
+const customModelValuesByAgent = useStorage<Partial<Record<WebSessionCustomModelAgent, string[]>>>(
+  'codekanban-web-session-custom-models',
+  {}
+);
 type ComposerHoverSelector = 'model' | 'reasoning';
-const COMPOSER_SELECTOR_HOVER_CLOSE_DELAY = 120;
+const COMPOSER_SELECTOR_HOVER_CLOSE_DELAY = 360;
 const composerSelectorHoverCloseTimers: Record<ComposerHoverSelector, number | null> = {
   model: null,
   reasoning: null,
@@ -10769,19 +11207,44 @@ const MODEL_SELECT_MIN_WIDTH = 66;
 const MODEL_SELECT_MAX_WIDTH = 176;
 const MODEL_SELECT_BASE_WIDTH = 48;
 const MODEL_SELECT_CHAR_WIDTH = 7;
+const modelMenuHovered = ref(false);
+const modelOptionPopoverValues = ref<Set<string>>(new Set());
 const modelSelectMenuProps = computed(() => {
-  const piCatalogOpen = selectedAgent.value === 'pi' && showAllPiModels.value;
+  const piCatalogOpen =
+    (selectedAgent.value === 'pi' && showAllPiModels.value) ||
+    (selectedAgent.value === 'devin' && showAllDevinModels.value);
   return {
     class: piCatalogOpen
       ? 'web-session-model-select-menu is-pi-model-catalog'
       : 'web-session-model-select-menu',
     style: piCatalogOpen
-      ? { width: 'min(340px, calc(100vw - 64px))', maxWidth: 'calc(100vw - 64px)' }
+      ? { width: 'min(280px, calc(100vw - 64px))', maxWidth: 'calc(100vw - 64px)' }
       : { minWidth: '132px', maxWidth: '180px' },
-    onMouseenter: () => handleComposerSelectorPointerEnter('model'),
-    onMouseleave: () => handleComposerSelectorPointerLeave('model'),
+    placement: 'top-start',
+    flip: false,
+    onMouseenter: () => {
+      modelMenuHovered.value = true;
+      handleComposerSelectorPointerEnter('model');
+    },
+    onMouseleave: () => {
+      modelMenuHovered.value = false;
+      handleComposerSelectorPointerLeave('model');
+    },
   };
 });
+
+function handleModelOptionPopoverShow(value: string, show: boolean) {
+  const next = new Set(modelOptionPopoverValues.value);
+  if (show) {
+    next.add(value);
+  } else {
+    next.delete(value);
+  }
+  modelOptionPopoverValues.value = next;
+  if (!show && next.size === 0 && !modelMenuHovered.value && showModelSelector.value) {
+    handleModelSelectorShowChange(false);
+  }
+}
 const reasoningSelectMenuProps = {
   class: 'web-session-reasoning-select-menu',
   onMouseenter: () => handleComposerSelectorPointerEnter('reasoning'),
@@ -10813,7 +11276,9 @@ const agentDropdownOptions = computed<DropdownOption[]>(() =>
             !piRuntimeCapabilitiesLoading.value &&
             !runtimePiCapability.value.supportsWebSession
           ? piUnavailableAgentLabel.value
-          : option.label,
+          : option.value === 'devin' && codexRuntimeConfig.value && !runtimeHasDevin.value
+            ? t('webSession.devinNotInstalledAgentLabel')
+            : option.label,
     key: option.value,
     value: option.value,
   }))
@@ -10825,11 +11290,17 @@ function getAgentIcon(agent: WebSessionAgent | string) {
   if (agent === 'claude') {
     return getAssistantIconByType('claude-code');
   }
-  return getAssistantIconByType(agent === 'pi' ? 'pi' : 'codex');
+  if (agent === 'pi') {
+    return getAssistantIconByType('pi');
+  }
+  return getAssistantIconByType(agent === 'devin' ? 'devin' : 'codex');
 }
 
 function getAgentDisplayName(agent: WebSessionAgent) {
-  return agent === 'claude' ? 'Claude Code' : agent === 'pi' ? 'Pi' : 'Codex';
+  if (agent === 'claude') return 'Claude Code';
+  if (agent === 'pi') return 'Pi';
+  if (agent === 'devin') return 'Devin';
+  return 'Codex';
 }
 
 const selectedAgentTitle = computed(() =>
@@ -10842,7 +11313,7 @@ async function handleAgentDropdownSelect(key: string | number) {
     return;
   }
   const next = String(key);
-  if (next !== 'claude' && next !== 'codex' && next !== 'pi') {
+  if (next !== 'claude' && next !== 'codex' && next !== 'pi' && next !== 'devin') {
     return;
   }
   if (next === 'pi' && !(await ensurePiProjectTrust(true))) {
@@ -10895,7 +11366,9 @@ function getKnownModelLabel(value?: string | null) {
   return (
     [
       ...CLAUDE_MODEL_OPTIONS,
+      ...resolveCCRModelOptions(runtimeConfig.value?.ccrModels ?? []),
       ...CODEX_MODEL_OPTIONS,
+      ...resolveDevinModelOptions(runtimeConfig.value?.devinModels ?? []),
       ...resolvePiModelOptions(runtimeConfig.value?.piModels ?? []),
     ].find(option => option.value === normalizedModel)?.label ?? normalizedModel
   );
@@ -10903,30 +11376,150 @@ function getKnownModelLabel(value?: string | null) {
 
 function renderModelOption(info: {
   node: VNode;
-  option: { type?: unknown; label?: unknown; menuLabel?: unknown };
+  option: {
+    type?: unknown;
+    label?: unknown;
+    value?: unknown;
+    menuLabel?: unknown;
+    accentLabel?: unknown;
+    description?: unknown;
+    removable?: unknown;
+    badges?: unknown;
+    inputPrice?: unknown;
+    detail?: {
+      title?: string;
+      description?: string;
+      cost?: string;
+      contextTokens?: number;
+      outputTokens?: number;
+      efforts?: WebSessionReasoningEffort[];
+    };
+  };
   selected: boolean;
 }) {
   if (info.option.type === 'group') {
     return info.node;
   }
-  return h('div', info.node.props ?? {}, [
-    h(
-      'div',
-      {
-        class: 'n-base-select-option__content',
-      },
-      String(info.option.menuLabel ?? info.option.label ?? '')
-    ),
-    info.selected
-      ? h(
-          'div',
-          {
-            class: 'n-base-select-option__check',
-          },
-          '✓'
-        )
-      : null,
-  ]);
+  const description = String(info.option.description || '');
+  const menuLabel = String(info.option.menuLabel ?? info.option.label ?? '');
+  const accentLabel = String(info.option.accentLabel || '').trim();
+  const inputPrice = String(info.option.inputPrice || '').trim();
+  const removable = info.option.removable === true;
+  const badgeLabels: Record<string, string> = {
+    new: 'New',
+    promo: 'Promotion',
+    beta: 'Beta',
+  };
+  const badges = Array.isArray(info.option.badges)
+    ? info.option.badges.map(badge => String(badge)).filter(badge => badge in badgeLabels)
+    : [];
+  const optionNode = h(
+    'div',
+    {
+      ...info.node.props,
+      ...(removable ? { 'data-devin-recent': 'true' } : {}),
+    },
+    [
+      h('div', { class: 'n-base-select-option__content' }, [
+        accentLabel
+          ? h('span', [menuLabel, h('span', { class: 'model-option-accent' }, accentLabel)])
+          : h('span', menuLabel),
+        ...badges.map(badge =>
+          h('span', { class: `model-option-badge is-${badge}` }, badgeLabels[badge])
+        ),
+        description.toLowerCase() === 'free'
+          ? h('span', { class: 'model-option-description is-free' }, description)
+          : null,
+      ]),
+      description.toLowerCase() !== 'free' && inputPrice
+        ? h('span', { class: 'model-option-price' }, inputPrice)
+        : null,
+      removable
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'model-option-remove',
+              'aria-label': t('webSession.removeRecentModel'),
+              'data-devin-recent': 'true',
+              onClick: (event: MouseEvent) => {
+                event.stopPropagation();
+                event.preventDefault();
+                removeRecentDevinModel(String(info.option.value ?? ''));
+              },
+              onMousedown: (event: MouseEvent) => {
+                event.stopPropagation();
+                event.preventDefault();
+              },
+            },
+            '✕'
+          )
+        : null,
+      info.selected
+        ? h(
+            'div',
+            {
+              class: 'n-base-select-option__check',
+            },
+            '✓'
+          )
+        : null,
+    ]
+  );
+  const detail = info.option.detail;
+  if (!detail || isMobile.value) {
+    return optionNode;
+  }
+  const costLabel =
+    detail.cost && ['free', 'promotion'].includes(detail.cost.toLowerCase())
+      ? detail.cost[0].toUpperCase() + detail.cost.slice(1).toLowerCase()
+      : detail.cost;
+  const metaParts = [
+    costLabel,
+    detail.contextTokens
+      ? t('webSession.modelDetailContext', {
+          count: formatWebSessionTokenCount(detail.contextTokens),
+        })
+      : '',
+    detail.outputTokens
+      ? t('webSession.modelDetailOutput', {
+          count: formatWebSessionTokenCount(detail.outputTokens),
+        })
+      : '',
+  ].filter(Boolean);
+  if (detail.efforts?.length) {
+    metaParts.push(
+      t('webSession.modelDetailEfforts', {
+        list: detail.efforts.map(effort => reasoningEffortLabel(effort)).join(' / '),
+      })
+    );
+  }
+  return h(
+    NPopover,
+    {
+      trigger: 'hover',
+      placement: 'right-start',
+      showArrow: false,
+      delay: 200,
+      duration: 300,
+      keepAliveOnHover: true,
+      'onUpdate:show': (show: boolean) =>
+        handleModelOptionPopoverShow(String(info.option.value ?? ''), show),
+    },
+    {
+      trigger: () => optionNode,
+      default: () =>
+        h('div', { class: 'model-option-detail' }, [
+          detail.title ? h('div', { class: 'model-option-detail-title' }, detail.title) : null,
+          detail.description
+            ? h('div', { class: 'model-option-detail-description' }, detail.description)
+            : null,
+          metaParts.length
+            ? h('div', { class: 'model-option-detail-meta' }, metaParts.join(' · '))
+            : null,
+        ]),
+    }
+  );
 }
 
 function withCurrentModelOption(
@@ -10996,15 +11589,49 @@ function resolveModelSelectWidth(label: string) {
   return clamp(MODEL_SELECT_MIN_WIDTH, width, MODEL_SELECT_MAX_WIDTH);
 }
 
+function configuredDefaultModelFor(agent: WebSessionAgent) {
+  switch (agent) {
+    case 'claude':
+      return developerConfig.value.webSessionClaudeDefaultModel;
+    case 'pi':
+      return developerConfig.value.webSessionPiDefaultModel;
+    case 'devin':
+      return developerConfig.value.webSessionDevinDefaultModel;
+    default:
+      return developerConfig.value.webSessionCodexDefaultModel;
+  }
+}
+
+function configuredDefaultReasoningEffortFor(agent: WebSessionAgent) {
+  switch (agent) {
+    case 'claude':
+      return developerConfig.value.webSessionClaudeDefaultReasoningEffort;
+    case 'pi':
+      return developerConfig.value.webSessionPiDefaultReasoningEffort;
+    case 'devin':
+      return developerConfig.value.webSessionDevinDefaultReasoningEffort;
+    default:
+      return developerConfig.value.webSessionCodexDefaultReasoningEffort;
+  }
+}
+
+function defaultClaudeRuntimeForSession(): WebSessionClaudeRuntimeOption {
+  return resolveDefaultClaudeRuntime(developerConfig.value.webSessionClaudeDefaultRuntime);
+}
+
+function effectiveComposerClaudeRuntime(): WebSessionClaudeRuntimeOption {
+  if (currentSession.value?.agent === 'claude') {
+    return currentSession.value.claudeRuntime === 'ccr' ? 'ccr' : 'claude';
+  }
+  return draftClaudeRuntime.value;
+}
+
 function defaultModelForAgent(agent: WebSessionAgent) {
-  return resolveDefaultModelForAgent(agent, developerConfig.value.webSessionCodexDefaultModel);
+  return resolveDefaultModelForAgent(agent, configuredDefaultModelFor(agent));
 }
 
 function defaultReasoningEffortForAgent(agent: WebSessionAgent): WebSessionReasoningEffort {
-  return resolveDefaultReasoningEffortForAgent(
-    agent,
-    developerConfig.value.webSessionCodexDefaultReasoningEffort
-  );
+  return resolveDefaultReasoningEffortForAgent(agent, configuredDefaultReasoningEffortFor(agent));
 }
 
 function defaultPermissionLevelForAgent(agent: WebSessionAgent): 'default' | 'elevated' | 'yolo' {
@@ -11045,6 +11672,13 @@ function reasoningEffortForModel(
   model: string,
   currentEffort: WebSessionReasoningEffort
 ): WebSessionReasoningEffort {
+  if (selectedAgent.value === 'devin') {
+    return resolveDevinSelectedReasoningEffort(
+      runtimeConfig.value?.devinModels ?? [],
+      model,
+      currentEffort
+    );
+  }
   const supported = supportedCodexReasoningEfforts(model);
   if (!supported || currentEffort === 'default' || supported.includes(currentEffort)) {
     return currentEffort;
@@ -11076,8 +11710,10 @@ function withCurrentReasoningEffortOption(
 
 function piModelMenuInteractionState() {
   return {
-    catalogOpen: selectedAgent.value === 'pi' && showAllPiModels.value,
-    searchFocused: piModelSearchFocused.value,
+    catalogOpen:
+      (selectedAgent.value === 'pi' && showAllPiModels.value) ||
+      (selectedAgent.value === 'devin' && showAllDevinModels.value),
+    searchFocused: piModelSearchFocused.value || devinModelSearchFocused.value,
     searchComposing: piModelSearchComposing.value,
   };
 }
@@ -11085,6 +11721,16 @@ function piModelMenuInteractionState() {
 function resetPiModelSearchInteraction() {
   piModelSearchFocused.value = false;
   piModelSearchComposing.value = false;
+  devinModelSearchFocused.value = false;
+}
+
+function handleDevinModelSearchFocus() {
+  devinModelSearchFocused.value = true;
+  clearComposerSelectorHoverCloseTimer('model');
+}
+
+function handleDevinModelSearchBlur() {
+  devinModelSearchFocused.value = false;
 }
 
 function refocusPiModelSearch() {
@@ -11123,6 +11769,39 @@ function handlePiModelSearchEscape(event: KeyboardEvent) {
   handleModelSelectorShowChange(false);
 }
 
+function removeRecentDevinModel(model: string) {
+  const value = model.trim();
+  if (!value) {
+    return;
+  }
+  devinFrequentModelValues.value = devinFrequentModelValues.value.filter(item => item !== value);
+}
+
+function scrollDevinModelMenuToRecent() {
+  const menu = document.querySelector<HTMLElement>(
+    '.web-session-model-select-menu.is-pi-model-catalog'
+  );
+  if (!menu) {
+    return;
+  }
+  const pending = menu.querySelector<HTMLElement>('.n-base-select-option--pending');
+  if (pending) {
+    pending.scrollIntoView({ block: 'nearest' });
+    return;
+  }
+  const target = menu.querySelector<HTMLElement>(
+    '.n-base-select-option[data-devin-recent="true"]'
+  );
+  if (target) {
+    target.scrollIntoView({ block: 'nearest' });
+    return;
+  }
+  const scroller = menu.querySelector<HTMLElement>('.n-scrollbar-container');
+  if (scroller) {
+    scroller.scrollTop = 0;
+  }
+}
+
 function handleModelSelectorShowChange(show: boolean) {
   if (!show && shouldSuppressPiModelMenuClose('show-change', piModelMenuInteractionState())) {
     return;
@@ -11135,6 +11814,11 @@ function handleModelSelectorShowChange(show: boolean) {
     piModelSearchQuery.value = '';
     resetPiModelSearchInteraction();
   }
+  if (show && selectedAgent.value === 'devin') {
+    showAllDevinModels.value = true;
+    devinModelSearchQuery.value = '';
+    nextTick(() => window.setTimeout(scrollDevinModelMenuToRecent, 40));
+  }
   if (show) {
     keepAdditionalCodexModelsForNextOpen.value = false;
     keepAllPiModelsForNextOpen.value = false;
@@ -11143,8 +11827,13 @@ function handleModelSelectorShowChange(show: boolean) {
     }
   } else {
     resetPiModelSearchInteraction();
+    devinModelSearchQuery.value = '';
   }
   showModelSelector.value = show;
+  if (!show) {
+    modelMenuHovered.value = false;
+    modelOptionPopoverValues.value = new Set();
+  }
 }
 
 function handleReasoningSelectorShowChange(show: boolean) {
@@ -11182,6 +11871,9 @@ function handleComposerSelectorPointerLeave(selector: ComposerHoverSelector) {
     return;
   }
   clearComposerSelectorHoverCloseTimer(selector);
+  if (selector === 'model' && modelOptionPopoverValues.value.size > 0) {
+    return;
+  }
   if (
     selector === 'model' &&
     shouldSuppressPiModelMenuClose('pointer-leave', piModelMenuInteractionState())
@@ -11190,6 +11882,9 @@ function handleComposerSelectorPointerLeave(selector: ComposerHoverSelector) {
   }
   composerSelectorHoverCloseTimers[selector] = window.setTimeout(() => {
     composerSelectorHoverCloseTimers[selector] = null;
+    if (selector === 'model' && modelOptionPopoverValues.value.size > 0) {
+      return;
+    }
     setComposerSelectorShow(selector, false);
   }, COMPOSER_SELECTOR_HOVER_CLOSE_DELAY);
 }
@@ -11217,12 +11912,233 @@ const piDefaultPrimaryModelOptions = computed(() =>
 const piPrimaryModelOptions = computed(() =>
   resolvePiPrimaryModelOptions(runtimeConfig.value?.piModels ?? [], piFrequentModelValues.value)
 );
+const devinModelOptionGroups = computed(() =>
+  resolveDevinModelOptionGroups(
+    runtimeConfig.value?.devinModels ?? [],
+    devinFrequentModelValues.value,
+    currentSession.value?.model ?? draftModel.value,
+    {
+      recent: t('webSession.recentlyUsedModels'),
+      recommended: t('webSession.recommendedModels'),
+      all: t('webSession.allModels'),
+    }
+  )
+);
+const devinSpecialModelOptions = computed(() =>
+  resolveDevinSpecialModelOptions(
+    runtimeConfig.value?.devinModels ?? [],
+    currentSession.value?.model ?? draftModel.value
+  )
+);
+const fusionModelConfigs = computed(() =>
+  resolveDevinFusionModelConfigs(runtimeConfig.value?.devinModels ?? [])
+);
+const fusionSelectedMeta = computed(
+  () => runtimeConfig.value?.devinModels?.find(model => model.model === selectedModel.value) ?? null
+);
+const fusionCostItems = computed(() =>
+  parseDevinCostSummary(fusionSelectedMeta.value?.costSummary)
+);
+const fusionContextLabel = computed(() =>
+  fusionSelectedMeta.value?.maxContextTokens
+    ? t('webSession.modelDetailContext', {
+        count: formatWebSessionTokenCount(fusionSelectedMeta.value.maxContextTokens),
+      })
+    : ''
+);
+const fusionSelectedConfig = computed(
+  () => fusionModelConfigs.value.find(config => config.model === selectedModel.value) ?? null
+);
+const isDevinFusionModel = computed(
+  () => selectedAgent.value === 'devin' && selectedModel.value.startsWith('fusion-')
+);
+const fusionLeadOptions = computed(() =>
+  [...new Set(fusionModelConfigs.value.map(config => config.lead))].map(value => ({
+    label: value,
+    value,
+  }))
+);
+const fusionEffortOptions = computed(() =>
+  [
+    ...new Set(
+      fusionModelConfigs.value
+        .filter(config => config.lead === fusionSelectedConfig.value?.lead)
+        .map(config => config.effort)
+    ),
+  ].map(value => ({ label: value, value }))
+);
+const fusionSidekickOptions = computed(() =>
+  [...new Set(fusionModelConfigs.value.map(config => config.sidekick))].map(value => ({
+    label: value,
+    value,
+  }))
+);
+const fusionSidekickEffortOptions = computed(() =>
+  [
+    ...new Set(
+      fusionModelConfigs.value
+        .filter(
+          config =>
+            config.lead === fusionSelectedConfig.value?.lead &&
+            config.effort === fusionSelectedConfig.value?.effort &&
+            config.sidekick === fusionSelectedConfig.value?.sidekick
+        )
+        .map(config => config.sidekickEffort)
+        .filter(Boolean)
+    ),
+  ].map(value => ({ label: value, value }))
+);
+function applyFusionSelection(
+  patch: Partial<{
+    lead: string;
+    effort: string;
+    sidekick: string;
+    sidekickEffort: string;
+    fast: boolean;
+  }>
+) {
+  const current = fusionSelectedConfig.value;
+  if (!current) return;
+  selectedModel.value = resolveDevinFusionModel(fusionModelConfigs.value, {
+    lead: patch.lead ?? current.lead,
+    effort: patch.effort ?? current.effort,
+    sidekick: patch.sidekick ?? current.sidekick,
+    sidekickEffort: patch.sidekickEffort ?? current.sidekickEffort,
+    fast: patch.fast ?? current.fast,
+  });
+}
+const fusionLead = computed({
+  get: () => fusionSelectedConfig.value?.lead ?? '',
+  set: value => applyFusionSelection({ lead: value }),
+});
+const fusionEffort = computed({
+  get: () => fusionSelectedConfig.value?.effort ?? '',
+  set: value => applyFusionSelection({ effort: value }),
+});
+const fusionSidekick = computed({
+  get: () => fusionSelectedConfig.value?.sidekick ?? '',
+  set: value => applyFusionSelection({ sidekick: value }),
+});
+const fusionSidekickEffort = computed({
+  get: () => fusionSelectedConfig.value?.sidekickEffort ?? '',
+  set: value => applyFusionSelection({ sidekickEffort: value }),
+});
+const fusionFast = computed({
+  get: () => fusionSelectedConfig.value?.fast ?? false,
+  set: value => applyFusionSelection({ fast: value }),
+});
+const filteredDevinModelOptionGroups = computed(() =>
+  filterDevinModelOptionGroups(devinModelOptionGroups.value, devinModelSearchQuery.value)
+);
+
+function customModelsForAgent(agent: WebSessionCustomModelAgent) {
+  const values = customModelValuesByAgent.value[agent];
+  return Array.isArray(values) ? values : [];
+}
+
+function setCustomModelsForAgent(agent: WebSessionCustomModelAgent, values: string[]) {
+  customModelValuesByAgent.value = { ...customModelValuesByAgent.value, [agent]: values };
+}
+
+function builtinModelValuesForAgent(agent: WebSessionAgent) {
+  if (agent === 'claude') {
+    const values = CLAUDE_MODEL_OPTIONS.map(option => option.value);
+    if (effectiveComposerClaudeRuntime() === 'ccr') {
+      return [
+        ...resolveCCRModelOptions(runtimeConfig.value?.ccrModels ?? []).map(option => option.value),
+        ...values,
+      ];
+    }
+    return values;
+  }
+  if (agent === 'codex') {
+    return CODEX_MODEL_OPTIONS.map(option => option.value);
+  }
+  if (agent === 'devin') {
+    return [
+      ...DEVIN_MODEL_OPTIONS.map(option => option.value),
+      ...resolveDevinModelOptions(runtimeConfig.value?.devinModels ?? []).map(
+        option => option.value
+      ),
+    ];
+  }
+  return resolvePiModelOptions(runtimeConfig.value?.piModels ?? []).map(option => option.value);
+}
+
+function recordUsedDevinModel(session?: Pick<WebSessionSummary, 'agent' | 'model'> | null) {
+  if (session?.agent !== 'devin') {
+    return;
+  }
+  const model = String(session.model || '').trim();
+  if (!model) {
+    return;
+  }
+  devinFrequentModelValues.value = rememberPiFrequentModel(devinFrequentModelValues.value, model);
+}
+
+function rememberCustomModelForAgent(agent: WebSessionCustomModelAgent, model: string) {
+  const normalizedModel = model.trim();
+  if (!normalizedModel || builtinModelValuesForAgent(agent).includes(normalizedModel)) {
+    return;
+  }
+  setCustomModelsForAgent(agent, rememberCustomModel(customModelsForAgent(agent), normalizedModel));
+}
+
+const customModelOptions = computed(() => {
+  const agent = selectedAgent.value;
+  if (agent !== 'claude' && agent !== 'codex' && agent !== 'devin') {
+    return [];
+  }
+  return resolveCustomModelOptions(customModelsForAgent(agent), builtinModelValuesForAgent(agent));
+});
 
 const modelOptions = computed(() => {
   const activeModel = currentSession.value?.model ?? draftModel.value;
   if (selectedAgent.value === 'claude') {
+    const ccrOptions =
+      effectiveComposerClaudeRuntime() === 'ccr'
+        ? resolveCCRModelOptions(runtimeConfig.value?.ccrModels ?? [])
+        : [];
+    const builtinOptions = ccrOptions.length > 0 ? ccrOptions : [...CLAUDE_MODEL_OPTIONS];
     return [
-      ...withCurrentModelOption(CLAUDE_MODEL_OPTIONS, activeModel),
+      ...withCurrentModelOption([...builtinOptions, ...customModelOptions.value], activeModel),
+      { label: t('webSession.customModel'), value: CUSTOM_MODEL_VALUE },
+    ];
+  }
+  if (selectedAgent.value === 'devin') {
+    const dynamicOptions = resolveDevinModelOptions(runtimeConfig.value?.devinModels ?? []);
+    if (dynamicOptions.length > 0) {
+      const groups = filteredDevinModelOptionGroups.value;
+      const recentValues = new Set(
+        groups
+          .find(group => group.key === 'devin-recent')
+          ?.children.map(option => option.value) ?? []
+      );
+      const specialOptions = devinSpecialModelOptions.value
+        .filter(option =>
+          devinModelSearchQuery.value.trim()
+            ? [option.label, option.value, option.description, option.modelDescription]
+                .filter(Boolean)
+                .join(' ')
+                .toLowerCase()
+                .includes(devinModelSearchQuery.value.trim().toLowerCase())
+            : true
+        )
+        .map(option =>
+          recentValues.has(option.value)
+            ? { ...option, value: duplicateDevinModelOptionValue(option.value) }
+            : option
+        );
+      return [...specialOptions, ...groups];
+    }
+    return [
+      ...withCurrentModelOption(
+        [
+          ...(dynamicOptions.length ? dynamicOptions : DEVIN_MODEL_OPTIONS),
+          ...customModelOptions.value,
+        ],
+        activeModel
+      ),
       { label: t('webSession.customModel'), value: CUSTOM_MODEL_VALUE },
     ];
   }
@@ -11239,12 +12155,18 @@ const modelOptions = computed(() => {
   }
   if (!showAdditionalCodexModels.value) {
     return [
-      ...withCurrentModelOption(CODEX_PRIMARY_MODEL_OPTIONS, activeModel),
+      ...withCurrentModelOption(
+        [...CODEX_PRIMARY_MODEL_OPTIONS, ...customModelOptions.value],
+        activeModel
+      ),
       { label: t('webSession.customModel'), value: CUSTOM_MODEL_VALUE },
       { label: t('webSession.moreModels'), value: MORE_MODELS_VALUE },
     ];
   }
-  const primaryOptions = withCurrentModelOption(CODEX_PRIMARY_MODEL_OPTIONS, activeModel);
+  const primaryOptions = withCurrentModelOption(
+    [...CODEX_PRIMARY_MODEL_OPTIONS, ...customModelOptions.value],
+    activeModel
+  );
   const additionalOptions = CODEX_ADDITIONAL_MODEL_OPTIONS.filter(
     option => !primaryOptions.some(primary => primary.value === option.value)
   );
@@ -11262,6 +12184,12 @@ const reasoningEffortOptions = computed(() => {
       selectedModel.value
     );
     return values.map(value => ({ label: reasoningEffortLabel(value), value }));
+  }
+  if (selectedAgent.value === 'devin') {
+    return resolveDevinReasoningEfforts(
+      runtimeConfig.value?.devinModels ?? [],
+      selectedModel.value
+    ).map(value => ({ label: reasoningEffortLabel(value), value }));
   }
   const supported =
     selectedAgent.value === 'codex' ? supportedCodexReasoningEfforts(selectedModel.value) : null;
@@ -11291,12 +12219,14 @@ const selectedAgent = computed({
   set: value => {
     const next = value as WebSessionAgent;
     const firstPiModel = piPrimaryModelOptions.value[0]?.value;
-    const nextModel = next === 'pi' && firstPiModel ? firstPiModel : defaultModelForAgent(next);
+    const configuredDefault = defaultModelForAgent(next);
+    const nextModel =
+      next === 'pi' && !configuredDefault && firstPiModel ? firstPiModel : configuredDefault;
     const nextReasoningEffort = defaultReasoningEffortForAgent(next);
     const nextPermissionLevel = defaultPermissionLevelForAgent(next);
     draftAgent.value = next;
-    if (next === 'codex') {
-      draftClaudeRuntime.value = 'claude';
+    if (next !== 'claude') {
+      draftClaudeRuntimeOverride.value = null;
     }
     draftModel.value = nextModel;
     draftReasoningEffort.value = nextReasoningEffort;
@@ -11329,7 +12259,7 @@ const selectedAgent = computed({
 const selectedModel = computed({
   get: () => currentSession.value?.model ?? draftModel.value,
   set: value => {
-    const next = String(value);
+    const next = normalizeDevinModelOptionValue(String(value));
     if (next === MORE_MODELS_VALUE) {
       if (selectedAgent.value === 'pi') {
         showAllPiModels.value = true;
@@ -11356,9 +12286,15 @@ const selectedModel = computed({
     }
     const currentEffort = currentSession.value?.reasoningEffort ?? draftReasoningEffort.value;
     const nextEffort =
-      selectedAgent.value === 'codex'
-        ? reasoningEffortForModel(next, currentEffort)
-        : currentEffort;
+      selectedAgent.value === 'devin'
+        ? resolveDevinSelectedReasoningEffort(
+            runtimeConfig.value?.devinModels ?? [],
+            next,
+            'default'
+          )
+        : selectedAgent.value === 'codex'
+          ? reasoningEffortForModel(next, currentEffort)
+          : currentEffort;
     draftModel.value = next;
     draftReasoningEffort.value = nextEffort;
     if (isDraftSession(currentSession.value)) {
@@ -11413,13 +12349,32 @@ const selectedClaudeRuntime = computed<WebSessionClaudeRuntimeOption>({
 });
 
 const selectedReasoningEffort = computed<WebSessionReasoningEffort>({
-  get: () => currentSession.value?.reasoningEffort ?? draftReasoningEffort.value,
+  get: () => {
+    const current = currentSession.value?.reasoningEffort ?? draftReasoningEffort.value;
+    return selectedAgent.value === 'devin'
+      ? resolveDevinSelectedReasoningEffort(
+          runtimeConfig.value?.devinModels ?? [],
+          selectedModel.value,
+          current
+        )
+      : current;
+  },
   set: value => {
     const next = value as WebSessionReasoningEffort;
+    const nextModel =
+      selectedAgent.value === 'devin'
+        ? resolveDevinModelForReasoning(
+            runtimeConfig.value?.devinModels ?? [],
+            selectedModel.value,
+            next
+          )
+        : selectedModel.value;
+    draftModel.value = nextModel;
     draftReasoningEffort.value = next;
     if (isDraftSession(currentSession.value)) {
       updateActiveDraftSession(current => ({
         ...current,
+        model: nextModel,
         reasoningEffort: next,
         updatedAt: new Date().toISOString(),
       }));
@@ -11427,8 +12382,12 @@ const selectedReasoningEffort = computed<WebSessionReasoningEffort>({
     }
     if (currentRealSession.value) {
       const noticeKey = getRuntimeSwitchNoticeKey();
-      void webSessionStore
-        .updateReasoningEffort(currentRealSession.value.id, next)
+      void (async () => {
+        if (nextModel !== selectedModel.value) {
+          await webSessionStore.updateModel(currentRealSession.value!.id, nextModel);
+        }
+        await webSessionStore.updateReasoningEffort(currentRealSession.value!.id, next);
+      })()
         .then(() => showRuntimeSwitchNotice(noticeKey))
         .catch(error => {
           message.error(error instanceof Error ? error.message : t('common.error'));
@@ -11557,20 +12516,110 @@ function setWorkflowMode(mode: 'default' | 'plan') {
     });
 }
 
+function openCustomModelManageDialog(agent: WebSessionCustomModelAgent) {
+  dialog.create({
+    title: t('webSession.customModelManageTitle'),
+    content: () => {
+      const models = customModelsForAgent(agent);
+      if (!models.length) {
+        return h(
+          'div',
+          {
+            style: 'padding:2px 0 4px;color:var(--n-text-color-3);font-size:13px;line-height:1.5;',
+          },
+          t('webSession.customModelManageEmpty')
+        );
+      }
+      return h(
+        'div',
+        {
+          style:
+            'display:flex;flex-direction:column;gap:2px;min-width:240px;max-height:320px;overflow-y:auto;',
+        },
+        models.map(model =>
+          h(
+            'div',
+            { key: model, style: 'display:flex;align-items:center;gap:8px;padding:1px 0;' },
+            [
+              h(
+                'span',
+                {
+                  style:
+                    'flex:1 1 auto;min-width:0;overflow-wrap:anywhere;font-size:13px;line-height:1.6;',
+                },
+                model
+              ),
+              h(
+                NButton,
+                {
+                  size: 'tiny',
+                  quaternary: true,
+                  type: 'error',
+                  title: t('webSession.customModelDelete'),
+                  'aria-label': `${t('webSession.customModelDelete')} ${model}`,
+                  onClick: () => {
+                    setCustomModelsForAgent(
+                      agent,
+                      removeCustomModel(customModelsForAgent(agent), model)
+                    );
+                  },
+                },
+                { icon: () => h(NIcon, { size: 14 }, { default: () => h(TrashOutline) }) }
+              ),
+            ]
+          )
+        )
+      );
+    },
+    showIcon: false,
+    closeOnEsc: true,
+  });
+}
+
 function openCustomModelDialog() {
   const inputValue = ref((currentSession.value?.model ?? draftModel.value).trim());
+  const selectedAgentValue = selectedAgent.value;
+  const customModelAgent: WebSessionCustomModelAgent | null =
+    selectedAgentValue === 'claude' ||
+    selectedAgentValue === 'codex' ||
+    selectedAgentValue === 'devin'
+      ? selectedAgentValue
+      : null;
   dialog.create({
     title: t('webSession.customModelTitle'),
     content: () =>
-      h(NInput, {
-        value: inputValue.value,
-        'onUpdate:value': (value: string) => {
-          inputValue.value = value;
-        },
-        maxlength: 128,
-        autofocus: true,
-        placeholder: t('webSession.customModelPlaceholder'),
-      }),
+      h('div', { style: 'display:flex;flex-direction:column;gap:10px;' }, [
+        h(NInput, {
+          value: inputValue.value,
+          'onUpdate:value': (value: string) => {
+            inputValue.value = value;
+          },
+          maxlength: 128,
+          autofocus: true,
+          placeholder: t('webSession.customModelPlaceholder'),
+        }),
+        customModelAgent
+          ? h(
+              'div',
+              { style: 'display:flex;justify-content:flex-end;' },
+              h(
+                NButton,
+                {
+                  size: 'tiny',
+                  text: true,
+                  type: 'primary',
+                  onClick: () => {
+                    openCustomModelManageDialog(customModelAgent);
+                  },
+                },
+                {
+                  default: () =>
+                    `${t('webSession.customModelManage')} (${customModelsForAgent(customModelAgent).length})`,
+                }
+              )
+            )
+          : null,
+      ]),
     positiveText: t('common.save'),
     negativeText: t('common.cancel'),
     showIcon: false,
@@ -11582,9 +12631,12 @@ function openCustomModelDialog() {
         message.warning(t('webSession.customModelEmpty'));
         return false;
       }
+      if (customModelAgent) {
+        rememberCustomModelForAgent(customModelAgent, nextModel);
+      }
       const currentEffort = currentSession.value?.reasoningEffort ?? draftReasoningEffort.value;
       const nextEffort =
-        selectedAgent.value === 'codex'
+        selectedAgent.value === 'codex' || selectedAgent.value === 'devin'
           ? reasoningEffortForModel(nextModel, currentEffort)
           : currentEffort;
       draftModel.value = nextModel;
@@ -11798,7 +12850,7 @@ function handleActivityDisplayClick(block: WebSessionBlock) {
 }
 
 function shouldHideTimelineMeta(item: WebSessionBlock) {
-  if (isCodexReasoningBlock(item)) {
+  if (isReasoningDisclosureBlock(item)) {
     return true;
   }
   if (!Number.isFinite(item.timestamp) || item.timestamp <= 0) {
@@ -12014,6 +13066,27 @@ function toggleToolExpanded(tool: NonNullable<WebSessionBlock['tool']>) {
   };
 }
 
+/**
+ * Reasoning disclosures auto-open while Pi is still thinking and fold away once
+ * the segment settles, unless the reader claimed them with a click. The
+ * auto-opened body is the capped scroll box, so the live stream grows inside a
+ * stable frame instead of stretching the timeline.
+ */
+function isReasoningDisclosureExpanded(tool: NonNullable<WebSessionBlock['tool']>) {
+  const claimed = expandedTools.value[tool.id];
+  if (claimed !== undefined) {
+    return claimed;
+  }
+  return currentSession.value?.agent === 'pi' && tool.status === 'running';
+}
+
+function toggleReasoningDisclosure(tool: NonNullable<WebSessionBlock['tool']>) {
+  expandedTools.value = {
+    ...expandedTools.value,
+    [tool.id]: !isReasoningDisclosureExpanded(tool),
+  };
+}
+
 function showPlanActions(toolId: string) {
   return Boolean(
     currentRealSession.value &&
@@ -12099,6 +13172,40 @@ function historyInteractionPrompt(item: WebSessionBlock) {
     return '';
   }
   return item.detail?.prompt?.trim() || item.text?.trim() || '';
+}
+
+function historyInteractionCommand(item: WebSessionBlock) {
+  if (item.detail?.type !== 'approval_request' && item.detail?.type !== 'approval_response') {
+    return '';
+  }
+  const direct = item.detail.command?.trim() || '';
+  if (direct) {
+    return direct;
+  }
+  const payload = asRecord(item.payload);
+  const payloadCommand = typeof payload?.command === 'string' ? payload.command.trim() : '';
+  if (payloadCommand) {
+    return payloadCommand;
+  }
+  if (item.detail.type !== 'approval_response') {
+    return '';
+  }
+  const prompt = item.detail.prompt?.trim() || '';
+  if (!prompt) {
+    return '';
+  }
+  for (let index = blocks.value.length - 1; index >= 0; index -= 1) {
+    const candidate = blocks.value[index];
+    if (
+      candidate.timestamp > item.timestamp ||
+      candidate.detail?.type !== 'approval_request' ||
+      candidate.detail.prompt?.trim() !== prompt
+    ) {
+      continue;
+    }
+    return candidate.detail.command?.trim() || '';
+  }
+  return '';
 }
 
 function historyInteractionBadgeClass(item: WebSessionBlock) {
@@ -12654,8 +13761,10 @@ async function handleCreateSession(
         agent,
         claudeRuntime:
           agent === 'claude'
-            ? source?.claudeRuntime === 'ccr'
-              ? 'ccr'
+            ? source?.agent === 'claude'
+              ? source.claudeRuntime === 'ccr'
+                ? 'ccr'
+                : 'claude'
               : draftClaudeRuntime.value
             : 'claude',
         model: source?.model || draftModel.value || defaultModelForAgent(agent),
@@ -12709,7 +13818,7 @@ async function handleCreateSession(
     options.onCreated?.(session);
     if (shouldActivateCreatedSession) {
       draftAgent.value = session.agent;
-      draftClaudeRuntime.value = session.claudeRuntime === 'ccr' ? 'ccr' : 'claude';
+      draftClaudeRuntimeOverride.value = null;
       draftModel.value = session.model;
       draftReasoningEffort.value =
         session.reasoningEffort || defaultReasoningEffortForAgent(session.agent);
@@ -12750,7 +13859,7 @@ async function handleStartDraftSession(forceAgent?: WebSessionAgent) {
   }
   const draft = createDraftSession(forceAgent);
   draftAgent.value = draft.agent;
-  draftClaudeRuntime.value = draft.claudeRuntime === 'ccr' ? 'ccr' : 'claude';
+  draftClaudeRuntimeOverride.value = null;
   draftModel.value = draft.model || defaultModelForAgent(draft.agent);
   draftReasoningEffort.value = draft.reasoningEffort || defaultReasoningEffortForAgent(draft.agent);
   draftWorkflowMode.value = draft.workflowMode;
@@ -13532,6 +14641,7 @@ async function handleRetryTimelineUserMessage(item: WebSessionBlock) {
       attachments: item.attachments,
       freshContext: item.freshContext,
     });
+    recordUsedDevinModel(prepared.session);
     recordSubmittedPrompt(item.text, prepared.session.projectId || props.projectId);
     if (prepared.navigateProjectId && isCurrentVisibleSession(prepared.session.id)) {
       projectStore.addRecentProject(prepared.navigateProjectId);
@@ -13562,6 +14672,7 @@ async function continueErroredSession(session: WebSessionSummary) {
     shouldActivate: () => isCurrentVisibleSession(sourceSessionId),
   });
   await webSessionStore.sendMessage(prepared.session.id, 'continue', []);
+  recordUsedDevinModel(prepared.session);
   if (prepared.navigateProjectId && isCurrentVisibleSession(prepared.session.id)) {
     projectStore.addRecentProject(prepared.navigateProjectId);
     await router.push(buildProjectRouteLocation(prepared.navigateProjectId, prepared.session.id));
@@ -13712,6 +14823,7 @@ async function handleSubmit() {
       beginAwaitingRuntime(session.id, submitKind, submitStartedAt);
     }
     submissionSucceeded = true;
+    recordUsedDevinModel(session);
     recordSubmittedPrompt(draftText, session.projectId || submitProjectId);
     const isCurrentSubmissionSession = isCurrentVisibleSession(session.id);
     if (prepared.navigateProjectId && isCurrentSubmissionSession) {
@@ -13805,6 +14917,7 @@ async function handleConfirmScheduledSend() {
         dependsOnId: scheduledDependsOnId.value || undefined,
       }
     );
+    recordUsedDevinModel(session);
     recordSubmittedPrompt(draftText, session.projectId || submitProjectId);
     clearComposerDraftAfterSubmit(draftSessionId, submitProjectId);
     const isCurrentSubmissionSession = isCurrentVisibleSession(session.id);
@@ -13970,6 +15083,7 @@ async function handlePreinput(mode: 'redirect' | 'queue') {
       { attachments }
     );
     submissionSucceeded = true;
+    recordUsedDevinModel(session);
     recordSubmittedPrompt(draftText, session.projectId || submitProjectId);
     if (isCurrentVisibleSession(session.id)) {
       isMobileComposerSettingsExpanded.value = false;
@@ -14803,6 +15917,9 @@ async function handlePlanCardImplement() {
         'Implement the plan.',
         []
       );
+      if (sendResult.accepted) {
+        recordUsedDevinModel(targetSession);
+      }
       if (sendResult.accepted && !sendResult.runtimeObserved) {
         beginAwaitingRuntime(targetSession.id, 'execute_plan', submitStartedAt);
       }
@@ -14842,6 +15959,9 @@ async function handlePlanCardImplementFreshContext() {
     const sendResult = await webSessionStore.sendMessage(sourceSession.id, prompt, [], undefined, {
       freshContext: true,
     });
+    if (sendResult.accepted) {
+      recordUsedDevinModel(sourceSession);
+    }
     if (sendResult.accepted && !sendResult.runtimeObserved) {
       beginAwaitingRuntime(sourceSession.id, 'execute_plan', submitStartedAt);
     }
@@ -15054,6 +16174,7 @@ function cancelTimelinePositionRestore() {
 
 function invalidateTimelineScrollSync() {
   timelineScrollSyncVersion += 1;
+  timelineScrollSyncScheduled = false;
 }
 
 function cancelTimelinePositionRestoreForUserInteraction(container: HTMLDivElement) {
@@ -15291,9 +16412,19 @@ function syncScrollToBottom() {
 }
 
 function scheduleScrollToBottom(force = false) {
+  // Content streams faster than the two animation frames this waits for, so an
+  // already scheduled run has to be kept instead of replaced: it reads the live
+  // scroll height when it executes, which is the position we want anyway.
+  // Bumping the version again would cancel it before it ever ran, leaving
+  // streaming output permanently unscrolled.
+  if (timelineScrollSyncScheduled && !force) {
+    return;
+  }
   const scheduledVersion = ++timelineScrollSyncVersion;
+  timelineScrollSyncScheduled = true;
   nextTick(() => {
     const run = () => {
+      timelineScrollSyncScheduled = false;
       const container = timelineScrollRef.value;
       if (
         !container ||
@@ -16596,7 +17727,7 @@ watch(
       return;
     }
     draftAgent.value = session.agent;
-    draftClaudeRuntime.value = session.claudeRuntime === 'ccr' ? 'ccr' : 'claude';
+    draftClaudeRuntimeOverride.value = null;
     draftModel.value = session.model || defaultModelForAgent(session.agent);
     draftReasoningEffort.value =
       session.reasoningEffort || defaultReasoningEffortForAgent(session.agent);
@@ -16963,7 +18094,11 @@ useResizeObserver(timelineScrollRef, entries => {
 watch(
   () => selectedAgent.value,
   value => {
-    if (!draftModel.value || (value === 'claude' && draftModel.value.startsWith('gpt-'))) {
+    if (
+      !draftModel.value ||
+      (value === 'claude' && draftModel.value.startsWith('gpt-')) ||
+      (value === 'devin' && !builtinModelValuesForAgent('devin').includes(draftModel.value))
+    ) {
       draftModel.value = defaultModelForAgent(value);
     }
     if (value === 'codex' && !draftModel.value.startsWith('gpt-')) {

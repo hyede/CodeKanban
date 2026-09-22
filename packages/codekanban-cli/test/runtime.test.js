@@ -114,8 +114,8 @@ test('CLI workflow command supports Claude Code Router runtime', { concurrency: 
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.agent, 'claude');
   assert.equal(payload.claudeRuntime, 'ccr');
-  assert.equal(payload.command, 'ccr code --model sonnet');
-  assert.deepEqual(payload.argv, ['ccr', 'code', '--model', 'sonnet']);
+  assert.equal(payload.command, 'ccr default-claude-code cli -- --model sonnet');
+  assert.deepEqual(payload.argv, ['ccr', 'default-claude-code', 'cli', '--', '--model', 'sonnet']);
 });
 
 test('CLI workflow start forwards Claude runtime to the SDK client', { concurrency: false }, async () => {
@@ -137,7 +137,7 @@ test('CLI workflow start forwards Claude runtime to the SDK client', { concurren
     clientFactory: () => ({
       async startWorkflow(input) {
         calls.push(input);
-        return { command: 'ccr code', claudeRuntime: input.claudeRuntime };
+        return { command: 'ccr default-claude-code cli --', claudeRuntime: input.claudeRuntime };
       },
     }),
   });

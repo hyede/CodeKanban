@@ -556,9 +556,10 @@ func (m *Manager) applyEventToHistoryCacheDB(
 			ObservedAt:     ptr(event.Timestamp),
 			Level:          level,
 			Detail: &HistoryDetail{
-				Type:   "approval_response",
-				Prompt: stringValue(payload["prompt"]),
-				Action: action,
+				Type:    "approval_response",
+				Prompt:  stringValue(payload["prompt"]),
+				Command: stringValue(payload["command"]),
+				Action:  action,
 			},
 			Payload: payload,
 		})
@@ -747,4 +748,33 @@ func (m *Manager) maybeSyncSessionAfterRun(session tables.WebSessionTable) {
 		}
 		_ = m.broadcastResyncRequired(context.Background(), session.ID, resyncReasonHistoryReconciled)
 	}()
+}
+
+// Pi extension UI probes (rtk rewrite traces and similar debug chatter) are
+// persisted as info-level notes, but they are backend-only: no matter whether
+// they predate the emission-side suppression, they never reach the frontend.
+func isSuppressedPiExtensionNote(item HistoryItem) bool {
+	if item.Kind != "system" || item.ItemType != "note" {
+		return false
+	}
+	code := stringValue(item.Payload["code"])
+	if !strings.HasPrefix(code, "pi_extension_ui_") {
+		return false
+	}
+	level := firstNonEmpty(
+		strings.ToLower(strings.TrimSpace(item.Level)),
+		strings.ToLower(stringValue(item.Payload["lvl"])),
+		"info",
+	)
+	return level != "warning" && level != "error"
+}
+
+func dropSuppressedPiExtensionNotes(items []HistoryItem) []HistoryItem {
+	filtered := make([]HistoryItem, 0, len(items))
+	for _, item := range items {
+		if !isSuppressedPiExtensionNote(item) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }

@@ -169,7 +169,6 @@ test('CodeKanbanClient web session HTTP methods call the expected endpoints', as
       assert.deepEqual(body, {
         worktreeId: 'w-main',
         agent: 'codex',
-        claudeRuntime: 'claude',
         model: 'gpt-5.4',
         reasoningEffort: 'high',
         workflowMode: 'plan',
@@ -453,7 +452,6 @@ test('CodeKanbanClient createWebSession auto-selects main worktree and delegates
       assert.deepEqual(body, {
         worktreeId: 'w-main',
         agent: 'codex',
-        claudeRuntime: 'claude',
         workflowMode: 'default',
         autoRetryEnabled: false,
         permissionMode: '',
@@ -476,6 +474,33 @@ test('CodeKanbanClient createWebSession auto-selects main worktree and delegates
 
   assert.equal(created.id, 'ws-created');
   assert.equal(created.worktreeId, 'w-main');
+});
+
+test('CodeKanbanClient createWebSession inherits the Claude runtime unless explicitly selected', async () => {
+  for (const claudeRuntime of [undefined, 'claude', 'ccr']) {
+    const handlers = new Map([
+      ['GET /api/v1/projects/p1/worktrees', () =>
+        createJsonResponse({ items: [{ id: 'w-main', projectId: 'p1', isMain: true }] })],
+      ['POST /api/v1/projects/p1/web-sessions', ({ body }) => {
+        assert.equal(body.agent, 'claude');
+        assert.equal(Object.hasOwn(body, 'claudeRuntime'), claudeRuntime !== undefined);
+        assert.equal(body.claudeRuntime, claudeRuntime);
+        return createJsonResponse({ item: { id: 'ws-created', projectId: 'p1' } }, 201);
+      }],
+    ]);
+    const client = new CodeKanbanClient({
+      baseURL: 'http://127.0.0.1:3000',
+      fetchImpl: createFetchMock(handlers),
+      WebSocketImpl: FakeWebSocket,
+    });
+
+    await client.createWebSession({
+      projectId: 'p1',
+      worktreeId: 'w-main',
+      agent: 'claude',
+      claudeRuntime,
+    });
+  }
 });
 
 test('CodeKanbanClient getWebSessionState uses projectId directly for polling reads', async () => {

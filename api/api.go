@@ -104,12 +104,42 @@ func Init(ctx context.Context, cfg *utils.AppConfig, assets embed.FS, info *AppI
 	webSessionManager, err := websession.NewManager(websession.Config{
 		DataDir:             utils.GetDataDir(),
 		AttachmentSizeLimit: cfg.AttachmentSizeLimit * 1024,
-		DefaultCodexModel: func() string {
-			return cfg.Developer.WebSessionCodexDefaultModel
+		DefaultAgentModel: func(agent websession.Agent) string {
+			switch agent {
+			case websession.AgentClaude:
+				return cfg.Developer.WebSessionClaudeDefaultModel
+			case websession.AgentPi:
+				return cfg.Developer.WebSessionPiDefaultModel
+			case websession.AgentDevin:
+				return cfg.Developer.WebSessionDevinDefaultModel
+			default:
+				return cfg.Developer.WebSessionCodexDefaultModel
+			}
+		},
+		DefaultClaudeRuntime: func() string {
+			return cfg.Developer.WebSessionClaudeDefaultRuntime
+		},
+		CodexClientName: func() string {
+			return cfg.Developer.WebSessionCodexClientName
+		},
+		CodexClientTitle: func() string {
+			return cfg.Developer.WebSessionCodexClientTitle
+		},
+		CodexClientVersion: func() string {
+			return cfg.Developer.WebSessionCodexClientVersion
 		},
 		DefaultCodexContextWindow: func() int64 { return cfg.Developer.WebSessionCodexContextWindow },
-		DefaultCodexReasoningEffort: func() websession.ReasoningEffort {
-			return websession.ReasoningEffort(cfg.Developer.WebSessionCodexDefaultReasoningEffort)
+		DefaultAgentReasoningEffort: func(agent websession.Agent) websession.ReasoningEffort {
+			switch agent {
+			case websession.AgentClaude:
+				return websession.ReasoningEffort(cfg.Developer.WebSessionClaudeDefaultReasoningEffort)
+			case websession.AgentPi:
+				return websession.ReasoningEffort(cfg.Developer.WebSessionPiDefaultReasoningEffort)
+			case websession.AgentDevin:
+				return websession.ReasoningEffort(cfg.Developer.WebSessionDevinDefaultReasoningEffort)
+			default:
+				return websession.ReasoningEffort(cfg.Developer.WebSessionCodexDefaultReasoningEffort)
+			}
 		},
 		DefaultCodexPermissionLevel: func() string {
 			return cfg.Developer.WebSessionCodexDefaultPermissionLevel
@@ -122,6 +152,9 @@ func Init(ctx context.Context, cfg *utils.AppConfig, assets embed.FS, info *AppI
 		},
 		ActiveCallTimeoutConfig: func() utils.WebSessionActiveCallTimeoutConfig {
 			return cfg.Developer.WebSessionActiveCallTimeout
+		},
+		TerminalShell: func() utils.TerminalShellConfig {
+			return cfg.Terminal.Shell
 		},
 	}, theLogger)
 	if err != nil {

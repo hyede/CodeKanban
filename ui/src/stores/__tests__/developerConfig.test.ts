@@ -34,6 +34,7 @@ describe('developer config store', () => {
   it('loads and caches normalized server defaults', async () => {
     getSendMock.mockResolvedValue({
       item: {
+        webSessionCodexClientName: ' custom-client ',
         webSessionCodexDefaultModel: ' custom-model ',
         webSessionCodexDefaultReasoningEffort: 'HIGH',
         webSessionCodexDefaultPermissionLevel: 'YOLO',
@@ -46,6 +47,7 @@ describe('developer config store', () => {
 
     expect(getMethodMock).toHaveBeenCalledTimes(1);
     expect(store.config.webSessionCodexDefaultModel).toBe('custom-model');
+    expect(store.config.webSessionCodexClientName).toBe('custom-client');
     expect(store.config.webSessionCodexDefaultReasoningEffort).toBe('high');
     expect(store.config.webSessionCodexDefaultPermissionLevel).toBe('yolo');
     expect(store.loaded).toBe(true);
@@ -55,6 +57,7 @@ describe('developer config store', () => {
     postSendMock.mockResolvedValue({ message: 'ok' });
     const store = useDeveloperConfigStore();
     const next = sanitizeDeveloperConfig({
+      webSessionCodexClientName: 'custom-client',
       webSessionCodexDefaultModel: 'gpt-5.6-terra',
       webSessionCodexDefaultReasoningEffort: 'max',
       webSessionCodexDefaultPermissionLevel: 'standard',
@@ -64,6 +67,7 @@ describe('developer config store', () => {
 
     expect(postMethodMock).toHaveBeenCalledWith('/system/developer-config/update', next);
     expect(store.config.webSessionCodexDefaultModel).toBe('gpt-5.6-terra');
+    expect(store.config.webSessionCodexClientName).toBe('custom-client');
     expect(store.config.webSessionCodexDefaultReasoningEffort).toBe('max');
     expect(store.config.webSessionCodexDefaultPermissionLevel).toBe('standard');
   });

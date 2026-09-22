@@ -59,7 +59,14 @@ export function resolveWebSessionDraftProjectPresentation(input: {
   );
   const projectName = normalizeText(project?.name);
   const projectPath = normalizeText(project?.path);
-  const baseAgent = input.agent === 'claude' ? 'Claude' : input.agent === 'pi' ? 'Pi' : 'Codex';
+  const baseAgent =
+    input.agent === 'claude'
+      ? 'Claude'
+      : input.agent === 'pi'
+        ? 'Pi'
+        : input.agent === 'devin'
+          ? 'Devin'
+          : 'Codex';
   const requestedWorktreeId = normalizeText(input.worktreeId);
   const worktree = requestedWorktreeId
     ? (input.worktrees ?? []).find(

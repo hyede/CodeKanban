@@ -21,10 +21,11 @@ import (
 
 const (
 	piMinVersion             = "0.84.1"
-	piProbeSuccessCacheTTL   = 5 * time.Minute
-	piProbeFailureCacheTTL   = time.Minute
+	piProbeSuccessCacheTTL   = 30 * time.Minute
+	piProbeFailureCacheTTL   = 5 * time.Minute
 	piVersionProbeTimeout    = 5 * time.Second
 	piProbeTimeout           = 5 * time.Second
+	piModelProbeTimeout      = 30 * time.Second
 	piProbeMaxFrameBytes     = 1024 * 1024
 	piDiagnosticNotInstalled = "not_installed"
 	piDiagnosticVersion      = "version_unknown"
@@ -215,7 +216,7 @@ func probePiRuntimeWithTimings(command, workingDir string) (piRuntimeProbeResult
 	timings.rpc = time.Since(rpcStartedAt)
 
 	result.compatible = true
-	modelCtx, modelCancel := context.WithTimeout(context.Background(), piProbeTimeout)
+	modelCtx, modelCancel := context.WithTimeout(context.Background(), piModelProbeTimeout)
 	modelStartedAt := time.Now()
 	result.models, _ = loadPiModelCatalog(modelCtx, command, workingDir)
 	timings.models = time.Since(modelStartedAt)
@@ -224,13 +225,16 @@ func probePiRuntimeWithTimings(command, workingDir string) (piRuntimeProbeResult
 }
 
 func loadPiModelCatalog(ctx context.Context, command, workingDir string) ([]PiModelInfo, error) {
+	// Extensions stay enabled so plugin-registered providers (e.g.
+	// pi-commandcode-provider) contribute their models: the session runtime
+	// loads them too, so a catalog without them would misreport availability.
+	// That makes this probe slower, hence piModelProbeTimeout above.
 	cmd, err := buildPiCommand(
 		ctx,
 		command,
 		"--mode", "rpc",
 		"--no-session",
 		"--no-approve",
-		"--no-extensions",
 		"--no-skills",
 		"--no-prompt-templates",
 		"--no-themes",

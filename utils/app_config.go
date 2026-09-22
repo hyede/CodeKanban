@@ -68,15 +68,25 @@ type TerminalShellConfig struct {
 }
 
 type DeveloperConfig struct {
-	EnableTerminalScrollback              bool                              `json:"enableTerminalScrollback" yaml:"enableTerminalScrollback"`
-	EnableTerminalStateSnapshot           bool                              `json:"enableTerminalStateSnapshot" yaml:"enableTerminalStateSnapshot"`
-	WebSessionCodexDefaultModel           string                            `json:"webSessionCodexDefaultModel" yaml:"webSessionCodexDefaultModel"`
-	WebSessionCodexContextWindow          int64                             `json:"webSessionCodexContextWindow" yaml:"webSessionCodexContextWindow"`
-	WebSessionCodexDefaultReasoningEffort string                            `json:"webSessionCodexDefaultReasoningEffort" yaml:"webSessionCodexDefaultReasoningEffort"`
-	WebSessionCodexDefaultPermissionLevel string                            `json:"webSessionCodexDefaultPermissionLevel" yaml:"webSessionCodexDefaultPermissionLevel"`
-	WebSessionCodexDefaultSyncMode        string                            `json:"webSessionCodexDefaultSyncMode" yaml:"webSessionCodexDefaultSyncMode"`
-	WebSessionAutoRetryDefaults           WebSessionAutoRetryDefaultsConfig `json:"webSessionAutoRetryDefaults" yaml:"webSessionAutoRetryDefaults"`
-	WebSessionActiveCallTimeout           WebSessionActiveCallTimeoutConfig `json:"webSessionActiveCallTimeout" yaml:"webSessionActiveCallTimeout"`
+	EnableTerminalScrollback               bool                              `json:"enableTerminalScrollback" yaml:"enableTerminalScrollback"`
+	EnableTerminalStateSnapshot            bool                              `json:"enableTerminalStateSnapshot" yaml:"enableTerminalStateSnapshot"`
+	WebSessionCodexClientName              string                            `json:"webSessionCodexClientName" yaml:"webSessionCodexClientName"`
+	WebSessionCodexClientTitle             string                            `json:"webSessionCodexClientTitle" yaml:"webSessionCodexClientTitle"`
+	WebSessionCodexClientVersion           string                            `json:"webSessionCodexClientVersion" yaml:"webSessionCodexClientVersion"`
+	WebSessionCodexDefaultModel            string                            `json:"webSessionCodexDefaultModel" yaml:"webSessionCodexDefaultModel"`
+	WebSessionCodexContextWindow           int64                             `json:"webSessionCodexContextWindow" yaml:"webSessionCodexContextWindow"`
+	WebSessionCodexDefaultReasoningEffort  string                            `json:"webSessionCodexDefaultReasoningEffort" yaml:"webSessionCodexDefaultReasoningEffort"`
+	WebSessionCodexDefaultPermissionLevel  string                            `json:"webSessionCodexDefaultPermissionLevel" yaml:"webSessionCodexDefaultPermissionLevel"`
+	WebSessionCodexDefaultSyncMode         string                            `json:"webSessionCodexDefaultSyncMode" yaml:"webSessionCodexDefaultSyncMode"`
+	WebSessionClaudeDefaultModel           string                            `json:"webSessionClaudeDefaultModel" yaml:"webSessionClaudeDefaultModel"`
+	WebSessionClaudeDefaultReasoningEffort string                            `json:"webSessionClaudeDefaultReasoningEffort" yaml:"webSessionClaudeDefaultReasoningEffort"`
+	WebSessionClaudeDefaultRuntime         string                            `json:"webSessionClaudeDefaultRuntime" yaml:"webSessionClaudeDefaultRuntime"`
+	WebSessionPiDefaultModel               string                            `json:"webSessionPiDefaultModel" yaml:"webSessionPiDefaultModel"`
+	WebSessionPiDefaultReasoningEffort     string                            `json:"webSessionPiDefaultReasoningEffort" yaml:"webSessionPiDefaultReasoningEffort"`
+	WebSessionDevinDefaultModel            string                            `json:"webSessionDevinDefaultModel" yaml:"webSessionDevinDefaultModel"`
+	WebSessionDevinDefaultReasoningEffort  string                            `json:"webSessionDevinDefaultReasoningEffort" yaml:"webSessionDevinDefaultReasoningEffort"`
+	WebSessionAutoRetryDefaults            WebSessionAutoRetryDefaultsConfig `json:"webSessionAutoRetryDefaults" yaml:"webSessionAutoRetryDefaults"`
+	WebSessionActiveCallTimeout            WebSessionActiveCallTimeoutConfig `json:"webSessionActiveCallTimeout" yaml:"webSessionActiveCallTimeout"`
 }
 
 type WebSessionAutoRetryDefaultsConfig struct {
@@ -133,6 +143,9 @@ const (
 	MaxPageTitleRunes                     = 64
 	WebSessionQuickInputRecentLimit       = 30
 	DefaultWebSessionCodexModel           = "gpt-5.6-sol"
+	DefaultWebSessionCodexClientName      = "codekanban-web-session"
+	DefaultWebSessionCodexClientTitle     = "Code Kanban Web Session"
+	DefaultWebSessionCodexClientVersion   = "0.0.0"
 	DefaultWebSessionCodexReasoningEffort = "xhigh"
 	DefaultWebSessionCodexPermissionLevel = "elevated"
 	DefaultWebSessionCodexSyncMode        = "fast"
@@ -439,14 +452,24 @@ func ReadConfig() *AppConfig {
 			ScrollbackBytes:       262144,
 		},
 		Developer: DeveloperConfig{
-			EnableTerminalScrollback:              false,
-			EnableTerminalStateSnapshot:           runtime.GOOS != "windows",
-			WebSessionCodexDefaultModel:           WebSessionCodexDefaultSetting,
-			WebSessionCodexDefaultReasoningEffort: WebSessionCodexDefaultSetting,
-			WebSessionCodexDefaultPermissionLevel: WebSessionCodexDefaultSetting,
-			WebSessionCodexDefaultSyncMode:        WebSessionCodexDefaultSetting,
-			WebSessionAutoRetryDefaults:           NormalizeWebSessionAutoRetryDefaultsConfig(defaultWebSessionAutoRetryDefaultsConfig),
-			WebSessionActiveCallTimeout:           NormalizeWebSessionActiveCallTimeoutConfig(defaultWebSessionActiveCallTimeoutConfig),
+			EnableTerminalScrollback:               false,
+			EnableTerminalStateSnapshot:            runtime.GOOS != "windows",
+			WebSessionCodexClientName:              DefaultWebSessionCodexClientName,
+			WebSessionCodexClientTitle:             DefaultWebSessionCodexClientTitle,
+			WebSessionCodexClientVersion:           DefaultWebSessionCodexClientVersion,
+			WebSessionCodexDefaultModel:            WebSessionCodexDefaultSetting,
+			WebSessionCodexDefaultReasoningEffort:  WebSessionCodexDefaultSetting,
+			WebSessionCodexDefaultPermissionLevel:  WebSessionCodexDefaultSetting,
+			WebSessionCodexDefaultSyncMode:         WebSessionCodexDefaultSetting,
+			WebSessionClaudeDefaultModel:           WebSessionCodexDefaultSetting,
+			WebSessionClaudeDefaultReasoningEffort: WebSessionCodexDefaultSetting,
+			WebSessionClaudeDefaultRuntime:         WebSessionCodexDefaultSetting,
+			WebSessionPiDefaultModel:               WebSessionCodexDefaultSetting,
+			WebSessionPiDefaultReasoningEffort:     WebSessionCodexDefaultSetting,
+			WebSessionDevinDefaultModel:            WebSessionCodexDefaultSetting,
+			WebSessionDevinDefaultReasoningEffort:  WebSessionCodexDefaultSetting,
+			WebSessionAutoRetryDefaults:            NormalizeWebSessionAutoRetryDefaultsConfig(defaultWebSessionAutoRetryDefaultsConfig),
+			WebSessionActiveCallTimeout:            NormalizeWebSessionActiveCallTimeoutConfig(defaultWebSessionActiveCallTimeoutConfig),
 		},
 		UI: UIConfig{
 			PageTitle:            DefaultPageTitle,
@@ -556,19 +579,36 @@ func NormalizeWebSessionQuickInputConfig(config WebSessionQuickInputConfig) WebS
 }
 
 func NormalizeDeveloperConfig(config DeveloperConfig) DeveloperConfig {
+	// Client metadata keep an explicitly stored empty string as the opt-out
+	// value; defaults for payloads written before these fields existed are
+	// backfilled by key existence in the config store, not here.
+	config.WebSessionCodexClientName = strings.TrimSpace(config.WebSessionCodexClientName)
+	config.WebSessionCodexClientTitle = strings.TrimSpace(config.WebSessionCodexClientTitle)
+	config.WebSessionCodexClientVersion = strings.TrimSpace(config.WebSessionCodexClientVersion)
 	if !ValidCodexContextWindow(config.WebSessionCodexContextWindow) {
 		config.WebSessionCodexContextWindow = 0
 	}
-	config.WebSessionCodexDefaultModel = strings.TrimSpace(config.WebSessionCodexDefaultModel)
-	if config.WebSessionCodexDefaultModel == "" ||
-		strings.EqualFold(config.WebSessionCodexDefaultModel, WebSessionCodexDefaultSetting) {
-		config.WebSessionCodexDefaultModel = WebSessionCodexDefaultSetting
-	}
+	config.WebSessionCodexDefaultModel = normalizeWebSessionAgentDefaultModel(config.WebSessionCodexDefaultModel)
 	config.WebSessionCodexDefaultReasoningEffort = normalizeWebSessionCodexReasoningEffort(
 		config.WebSessionCodexDefaultReasoningEffort,
 	)
 	config.WebSessionCodexDefaultPermissionLevel = normalizeWebSessionCodexPermissionLevel(
 		config.WebSessionCodexDefaultPermissionLevel,
+	)
+	config.WebSessionClaudeDefaultModel = normalizeWebSessionAgentDefaultModel(config.WebSessionClaudeDefaultModel)
+	config.WebSessionClaudeDefaultReasoningEffort = normalizeWebSessionCodexReasoningEffort(
+		config.WebSessionClaudeDefaultReasoningEffort,
+	)
+	config.WebSessionClaudeDefaultRuntime = normalizeWebSessionClaudeDefaultRuntime(
+		config.WebSessionClaudeDefaultRuntime,
+	)
+	config.WebSessionPiDefaultModel = normalizeWebSessionAgentDefaultModel(config.WebSessionPiDefaultModel)
+	config.WebSessionPiDefaultReasoningEffort = normalizeWebSessionCodexReasoningEffort(
+		config.WebSessionPiDefaultReasoningEffort,
+	)
+	config.WebSessionDevinDefaultModel = normalizeWebSessionAgentDefaultModel(config.WebSessionDevinDefaultModel)
+	config.WebSessionDevinDefaultReasoningEffort = normalizeWebSessionCodexReasoningEffort(
+		config.WebSessionDevinDefaultReasoningEffort,
 	)
 	switch strings.ToLower(strings.TrimSpace(config.WebSessionCodexDefaultSyncMode)) {
 	case WebSessionCodexDefaultSetting:
@@ -615,6 +655,9 @@ func NormalizeWebSessionAutoRetryDefaultsConfig(config WebSessionAutoRetryDefaul
 }
 
 func MergeDeveloperConfig(current DeveloperConfig, incoming DeveloperConfig) DeveloperConfig {
+	// Client metadata pass through verbatim: the settings UI always sends the
+	// full payload, and an explicitly cleared field is the opt-out signal, so
+	// preserving the previous value here would make clearing impossible.
 	if strings.TrimSpace(incoming.WebSessionCodexDefaultModel) == "" {
 		incoming.WebSessionCodexDefaultModel = current.WebSessionCodexDefaultModel
 	}
@@ -627,6 +670,27 @@ func MergeDeveloperConfig(current DeveloperConfig, incoming DeveloperConfig) Dev
 	if strings.TrimSpace(incoming.WebSessionCodexDefaultSyncMode) == "" {
 		incoming.WebSessionCodexDefaultSyncMode = current.WebSessionCodexDefaultSyncMode
 	}
+	if strings.TrimSpace(incoming.WebSessionClaudeDefaultModel) == "" {
+		incoming.WebSessionClaudeDefaultModel = current.WebSessionClaudeDefaultModel
+	}
+	if strings.TrimSpace(incoming.WebSessionClaudeDefaultReasoningEffort) == "" {
+		incoming.WebSessionClaudeDefaultReasoningEffort = current.WebSessionClaudeDefaultReasoningEffort
+	}
+	if strings.TrimSpace(incoming.WebSessionClaudeDefaultRuntime) == "" {
+		incoming.WebSessionClaudeDefaultRuntime = current.WebSessionClaudeDefaultRuntime
+	}
+	if strings.TrimSpace(incoming.WebSessionPiDefaultModel) == "" {
+		incoming.WebSessionPiDefaultModel = current.WebSessionPiDefaultModel
+	}
+	if strings.TrimSpace(incoming.WebSessionPiDefaultReasoningEffort) == "" {
+		incoming.WebSessionPiDefaultReasoningEffort = current.WebSessionPiDefaultReasoningEffort
+	}
+	if strings.TrimSpace(incoming.WebSessionDevinDefaultModel) == "" {
+		incoming.WebSessionDevinDefaultModel = current.WebSessionDevinDefaultModel
+	}
+	if strings.TrimSpace(incoming.WebSessionDevinDefaultReasoningEffort) == "" {
+		incoming.WebSessionDevinDefaultReasoningEffort = current.WebSessionDevinDefaultReasoningEffort
+	}
 	if incoming.WebSessionAutoRetryDefaults == (WebSessionAutoRetryDefaultsConfig{}) {
 		incoming.WebSessionAutoRetryDefaults = current.WebSessionAutoRetryDefaults
 	}
@@ -634,6 +698,14 @@ func MergeDeveloperConfig(current DeveloperConfig, incoming DeveloperConfig) Dev
 		incoming.WebSessionActiveCallTimeout = current.WebSessionActiveCallTimeout
 	}
 	return NormalizeDeveloperConfig(incoming)
+}
+
+func normalizeWebSessionAgentDefaultModel(value string) string {
+	normalized := strings.TrimSpace(value)
+	if normalized == "" || strings.EqualFold(normalized, WebSessionCodexDefaultSetting) {
+		return WebSessionCodexDefaultSetting
+	}
+	return normalized
 }
 
 func normalizeWebSessionCodexReasoningEffort(value string) string {
@@ -649,6 +721,16 @@ func normalizeWebSessionCodexReasoningEffort(value string) string {
 		"xhigh",
 		"max",
 		"ultra":
+		return normalized
+	default:
+		return WebSessionCodexDefaultSetting
+	}
+}
+
+func normalizeWebSessionClaudeDefaultRuntime(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "claude", "ccr":
 		return normalized
 	default:
 		return WebSessionCodexDefaultSetting

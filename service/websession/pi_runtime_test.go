@@ -55,8 +55,11 @@ func TestPiRPCSessionStatsPreservesUnavailableContextUsage(t *testing.T) {
 	observedAt := time.Now()
 	updates := map[string]any{}
 	applyPiContextUsageUpdates(updates, stats.ContextUsage, true, observedAt)
-	if updates["session_context_window_tokens"] != 0 || updates["session_context_window_observed_at"] != nil {
-		t.Fatalf("unavailable Pi context usage retained a usable window: %#v", updates)
+	if _, exists := updates["session_context_window_tokens"]; exists {
+		t.Fatalf("unavailable Pi context usage should preserve the recorded window: %#v", updates)
+	}
+	if _, exists := updates["session_context_window_observed_at"]; exists {
+		t.Fatalf("unavailable Pi context usage should preserve its observation timestamp: %#v", updates)
 	}
 	if updates["latest_token_count_updated_at"] != nil || updates["latest_token_count_total_tokens"] != 0 {
 		t.Fatalf("unavailable Pi context usage retained a latest snapshot: %#v", updates)
@@ -1937,6 +1940,13 @@ func historyContainsToolOutput(window HistoryWindow, toolID, output string) bool
 	for _, item := range window.Items {
 		if item.Tool != nil && item.Tool.ID == toolID && strings.Contains(item.Tool.Output, output) {
 			return true
+		}
+		// Adjacent Pi tools fold into one activity group, so a folded member is
+		// still independently projected inside the group items.
+		for _, groupItem := range decodeHistoryGroupItems(item.Payload) {
+			if groupItem.ToolID == toolID && strings.Contains(groupItem.Output, output) {
+				return true
+			}
 		}
 	}
 	return false

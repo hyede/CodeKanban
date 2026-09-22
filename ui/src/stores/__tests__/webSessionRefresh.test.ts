@@ -4700,6 +4700,14 @@ describe('webSession loading behavior', () => {
           summary: 'Inspecting the repository',
         },
         {
+          threadId: 'thread-child-started',
+          nickname: 'Singer',
+          role: 'worker',
+          status: 'running',
+          active: true,
+          summary: 'Waiting for the first child turn update',
+        },
+        {
           threadId: 'thread-child-idle',
           nickname: 'Kepler',
           role: 'worker',
@@ -4727,6 +4735,11 @@ describe('webSession loading behavior', () => {
           status: 'running',
         }),
         expect.objectContaining({
+          id: 'thread-child-started',
+          title: 'Singer [worker]',
+          status: 'running',
+        }),
+        expect.objectContaining({
           id: 'thread-child-done',
           title: 'Nova [reviewer]',
           status: 'completed',
@@ -4743,8 +4756,11 @@ describe('webSession loading behavior', () => {
     );
     expect(store.getLiveState(session.id)).toMatchObject({
       phase: 'starting',
-      activeSubAgentCount: 1,
-      activeSubAgents: [{ id: 'thread-child-running', title: 'Atlas [worker]' }],
+      activeSubAgentCount: 2,
+      activeSubAgents: [
+        { id: 'thread-child-running', title: 'Atlas [worker]' },
+        { id: 'thread-child-started', title: 'Singer [worker]' },
+      ],
     });
     expect(store.getLiveState(session.id).tool).toBeUndefined();
     expect(store.getBlocks(session.id)[0]?.sourceThreadId).toBe('thread-child-running');
