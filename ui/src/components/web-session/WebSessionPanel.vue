@@ -5524,6 +5524,7 @@ function handleWebSessionDocumentVisibilityChange() {
     beginWebSessionCatchUp('document-hidden');
     return;
   }
+  liveStateClockMs.value = Date.now();
   refreshTabHeaderLayout();
   void loadCodexRuntimeConfig();
   scheduleWebSessionCatchUp('document-visible');
@@ -5533,6 +5534,7 @@ function handleWebSessionWindowFocus() {
   if (!props.isActive || !isDocumentVisible()) {
     return;
   }
+  liveStateClockMs.value = Date.now();
   refreshTabHeaderLayout();
   void loadComposerDeveloperConfig(true);
   void loadCodexRuntimeConfig();
@@ -5543,6 +5545,7 @@ function handleWebSessionWindowPageShow() {
   if (!props.isActive || !isDocumentVisible()) {
     return;
   }
+  liveStateClockMs.value = Date.now();
   refreshTabHeaderLayout();
   void loadComposerDeveloperConfig(true);
   void loadCodexRuntimeConfig();
@@ -15292,10 +15295,9 @@ function pendingInputPreview(item: WebSessionPendingInput) {
 }
 
 function pendingInputTimingLabel(item: WebSessionPendingInput) {
+  const nowMs = Math.max(liveStateClockMs.value, Date.now());
   const remainingSeconds =
-    item.readyAt == null
-      ? 0
-      : Math.max(0, Math.ceil((item.readyAt - liveStateClockMs.value) / 1000));
+    item.readyAt == null ? 0 : Math.max(0, Math.ceil((item.readyAt - nowMs) / 1000));
   if (item.status === 'failed') {
     return t('webSession.pendingSteerFailed');
   }
@@ -15613,11 +15615,10 @@ function scheduledIdleStatusLabel(item: WebSessionScheduledInput) {
       .join(locale.value === 'zh-CN' ? '、' : ', ');
   }
   if (item.idleSince != null) {
+    const nowMs = Math.max(liveStateClockMs.value, Date.now());
     const remainingSeconds = Math.max(
       0,
-      Math.ceil(
-        (item.idleSince + scheduledIdleConfirmationWindowMs - liveStateClockMs.value) / 1000
-      )
+      Math.ceil((item.idleSince + scheduledIdleConfirmationWindowMs - nowMs) / 1000)
     );
     return remainingSeconds > 0
       ? t('webSession.scheduledIdleStabilizing', { seconds: remainingSeconds })
@@ -15629,11 +15630,10 @@ function scheduledIdleStatusLabel(item: WebSessionScheduledInput) {
 function scheduledInputTimeLabel(item: WebSessionScheduledInput) {
   if (item.scheduleKind === 'when_idle') {
     if (item.idleSince != null && item.blockingReasons.length === 0) {
+      const nowMs = Math.max(liveStateClockMs.value, Date.now());
       const remainingSeconds = Math.max(
         0,
-        Math.ceil(
-          (item.idleSince + scheduledIdleConfirmationWindowMs - liveStateClockMs.value) / 1000
-        )
+        Math.ceil((item.idleSince + scheduledIdleConfirmationWindowMs - nowMs) / 1000)
       );
       return remainingSeconds > 0
         ? t('webSession.scheduledIdleCountdownShort', { seconds: remainingSeconds })
