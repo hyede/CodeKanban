@@ -7382,6 +7382,8 @@ func mapSessionRecord(record tables.WebSessionTable) SessionSummary {
 			CachedInputTokens: record.TotalCachedInputTokens,
 			OutputTokens:      record.TotalOutputTokens,
 			Cost:              record.TotalCost,
+			AcuCost:           record.TotalAcuCost,
+			CreditCost:        record.TotalCreditCost,
 		},
 		LatestTurnUsage:         latestTurnUsage,
 		ContextEstimate:         contextEstimate,

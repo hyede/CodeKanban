@@ -1434,12 +1434,25 @@ type devinUsageUpdateValues struct {
 	cost        float64
 	costUSD     bool
 	hasTokens   bool
+	acu         float64
+	hasAcu      bool
+	credit      float64
+	hasCredit   bool
 }
 
 func devinUsageToken(meta map[string]any, keys ...string) (int64, bool) {
 	for _, key := range keys {
 		if value, ok := meta[key]; ok {
 			return int64(numberValue(value)), true
+		}
+	}
+	return 0, false
+}
+
+func devinUsageQuota(meta map[string]any, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		if value, ok := meta[key]; ok {
+			return numberValue(value), true
 		}
 	}
 	return 0, false
@@ -1456,6 +1469,8 @@ func parseDevinUsageUpdate(update map[string]any) devinUsageUpdateValues {
 	values.cachedInput = cachedRead + cachedWrite
 	values.output = out
 	values.hasTokens = hasIn || hasOut || hasCachedRead || hasCachedWrite
+	values.acu, values.hasAcu = devinUsageQuota(meta, "cognition.ai/totalAcuCost", "totalAcuCost")
+	values.credit, values.hasCredit = devinUsageQuota(meta, "cognition.ai/totalCreditCost", "totalCreditCost")
 	values.used = int64(numberValue(update["used"]))
 	values.size = int64(numberValue(update["size"]))
 	if cost := decodeRawObject(update["cost"]); len(cost) > 0 {
@@ -1539,6 +1554,14 @@ func (m *Manager) handleDevinUsageUpdate(session tables.WebSessionTable, run *ac
 	if costUSD {
 		updates["total_cost"] = gorm.Expr("total_cost + ?", values.cost)
 	}
+	// The agent reports session-cumulative quota totals, so they replace the
+	// stored values rather than accumulating per request.
+	if values.hasAcu {
+		updates["total_acu_cost"] = values.acu
+	}
+	if values.hasCredit {
+		updates["total_credit_cost"] = values.credit
+	}
 	_ = m.updateRuntimeState(context.Background(), session.ID, updates)
 	eventPayload := map[string]any{
 		"in":  values.input,
@@ -1551,10 +1574,16 @@ func (m *Manager) handleDevinUsageUpdate(session tables.WebSessionTable, run *ac
 	if costUSD {
 		eventPayload["cost"] = values.cost
 	}
+	if values.hasAcu {
+		eventPayload["acu"] = values.acu
+	}
+	if values.hasCredit {
+		eventPayload["crd"] = values.credit
+	}
 	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
 		ID: utils.NewID(), Type: "usage", RunID: run.runID, Timestamp: now, Payload: eventPayload,
 	})
-	if values.size > 0 {
+	if values.size > 0 || values.hasAcu || values.hasCredit {
 		m.broadcastSessionSummary(context.Background(), session.ID)
 	}
 }
@@ -1572,7 +1601,9 @@ func (m *Manager) applyDevinPromptUsageFallback(session tables.WebSessionTable, 
 	out := int64(numberValue(usage["outputTokens"]))
 	cin := int64(numberValue(usage["cachedReadTokens"])) + int64(numberValue(usage["cachedWriteTokens"]))
 	used := int64(numberValue(usage["totalTokens"]))
-	if in <= 0 && out <= 0 && cin <= 0 && used <= 0 {
+	acu, hasAcu := devinUsageQuota(usage, "totalAcuCost", "acuCost")
+	credit, hasCredit := devinUsageQuota(usage, "totalCreditCost", "creditCost")
+	if in <= 0 && out <= 0 && cin <= 0 && used <= 0 && !hasAcu && !hasCredit {
 		return
 	}
 	now := time.Now()
@@ -1582,6 +1613,12 @@ func (m *Manager) applyDevinPromptUsageFallback(session tables.WebSessionTable, 
 		"total_output_tokens":       gorm.Expr("total_output_tokens + ?", out),
 		"updated_at":                now,
 	}
+	if hasAcu {
+		updates["total_acu_cost"] = acu
+	}
+	if hasCredit {
+		updates["total_credit_cost"] = credit
+	}
 	if used > 0 {
 		updates["latest_token_count_input_tokens"] = in
 		updates["latest_token_count_cached_input_tokens"] = cin
@@ -1590,9 +1627,16 @@ func (m *Manager) applyDevinPromptUsageFallback(session tables.WebSessionTable, 
 		updates["latest_token_count_updated_at"] = now
 	}
 	_ = m.updateRuntimeState(context.Background(), session.ID, updates)
+	eventPayload := map[string]any{"in": in, "cin": cin, "out": out}
+	if hasAcu {
+		eventPayload["acu"] = acu
+	}
+	if hasCredit {
+		eventPayload["crd"] = credit
+	}
 	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
 		ID: utils.NewID(), Type: "usage", RunID: run.runID, Timestamp: now,
-		Payload: map[string]any{"in": in, "cin": cin, "out": out},
+		Payload: eventPayload,
 	})
 }
 

@@ -89,6 +89,8 @@ type WebSessionTable struct {
 	TotalCachedInputTokens            int64      `gorm:"type:integer;not null;default:0" json:"totalCachedInputTokens"`
 	TotalOutputTokens                 int64      `gorm:"type:integer;not null;default:0" json:"totalOutputTokens"`
 	TotalCost                         float64    `gorm:"type:real;not null;default:0" json:"totalCost"`
+	TotalAcuCost                      float64    `gorm:"type:real;not null;default:0" json:"totalAcuCost"`
+	TotalCreditCost                   float64    `gorm:"type:real;not null;default:0" json:"totalCreditCost"`
 	LastCompletedInputTokens          int64      `gorm:"type:integer;not null;default:0" json:"-"`
 	LastCompletedCachedInputTokens    int64      `gorm:"type:integer;not null;default:0" json:"-"`
 	LastCompletedOutputTokens         int64      `gorm:"type:integer;not null;default:0" json:"-"`

@@ -988,6 +988,8 @@ export default {
     contextUsageCumulativeNonCached: '累计非缓存消耗',
     contextUsageTotalUsage: '总消耗（含缓存）',
     contextUsageSessionTotal: '会话总消耗（含 Sub Agent）',
+    contextUsageDevinAcu: 'Devin 额度（ACU）',
+    contextUsageDevinCredits: 'Devin 额度（Credits）',
     contextUsageCurrentMarker: '当前',
     contextUsageWindowMarker: '上限',
     contextUsageShowExact: '显示精确值',

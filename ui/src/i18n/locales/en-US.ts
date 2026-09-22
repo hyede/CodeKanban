@@ -1029,6 +1029,8 @@ export default {
     contextUsageCumulativeNonCached: 'Cumulative non-cached usage',
     contextUsageTotalUsage: 'Total usage (cached included)',
     contextUsageSessionTotal: 'Session total (including sub agents)',
+    contextUsageDevinAcu: 'Devin quota (ACU)',
+    contextUsageDevinCredits: 'Devin quota (credits)',
     contextUsageCurrentMarker: 'Current',
     contextUsageWindowMarker: 'Limit',
     contextUsageShowExact: 'Show exact value',

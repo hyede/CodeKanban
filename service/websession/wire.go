@@ -178,9 +178,11 @@ type wireGoal struct {
 }
 
 type wireUsage struct {
-	InputTokens       int64 `json:"in"`
-	CachedInputTokens int64 `json:"cin"`
-	OutputTokens      int64 `json:"out"`
+	InputTokens       int64   `json:"in"`
+	CachedInputTokens int64   `json:"cin"`
+	OutputTokens      int64   `json:"out"`
+	AcuCost           float64 `json:"acu,omitempty"`
+	CreditCost        float64 `json:"crd,omitempty"`
 }
 
 type wireCtxEst struct {
@@ -594,6 +596,8 @@ func mapWireSession(session SessionSummary) *wireSess {
 			InputTokens:       session.Usage.InputTokens,
 			CachedInputTokens: session.Usage.CachedInputTokens,
 			OutputTokens:      session.Usage.OutputTokens,
+			AcuCost:           session.Usage.AcuCost,
+			CreditCost:        session.Usage.CreditCost,
 		},
 		ContextEstimate: wireCtxEst{
 			InputTokens:       session.ContextEstimate.InputTokens,

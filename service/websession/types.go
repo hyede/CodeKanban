@@ -129,6 +129,10 @@ type Usage struct {
 	CachedInputTokens int64   `json:"cachedInputTokens"`
 	OutputTokens      int64   `json:"outputTokens"`
 	Cost              float64 `json:"cost"`
+	// AcuCost/CreditCost are the session-level quota totals reported by the
+	// Devin agent's usage_update extension (_meta totalAcuCost/totalCreditCost).
+	AcuCost    float64 `json:"acuCost"`
+	CreditCost float64 `json:"creditCost"`
 }
 
 type ContextEstimate struct {

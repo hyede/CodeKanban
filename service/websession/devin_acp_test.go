@@ -852,6 +852,8 @@ func TestDevinACPUsageUpdateProjectsSessionStats(t *testing.T) {
 		"cognition.ai/inputTokens":      11899,
 		"cognition.ai/outputTokens":     27,
 		"cognition.ai/cachedReadTokens": 11776,
+		"cognition.ai/totalAcuCost":     1.5,
+		"cognition.ai/totalCreditCost":  0.75,
 	}})
 
 	record, err := manager.GetSession(context.Background(), session.ID)
@@ -874,8 +876,15 @@ func TestDevinACPUsageUpdateProjectsSessionStats(t *testing.T) {
 		t.Fatalf("unexpected context window: %d at=%v",
 			record.SessionContextWindowTokens, record.SessionContextWindowObservedAt)
 	}
+	if record.TotalAcuCost != 1.5 || record.TotalCreditCost != 0.75 {
+		t.Fatalf("unexpected quota totals: acu=%v credit=%v", record.TotalAcuCost, record.TotalCreditCost)
+	}
 
 	summary := manager.mapSessionSummary(record)
+	if summary.Usage.AcuCost != 1.5 || summary.Usage.CreditCost != 0.75 {
+		t.Fatalf("summary quota totals = acu %v credit %v, want 1.5/0.75",
+			summary.Usage.AcuCost, summary.Usage.CreditCost)
+	}
 	if summary.ContextEstimateMode != ContextEstimateModeLatestTokenCount {
 		t.Fatalf("context estimate mode = %q, want %q", summary.ContextEstimateMode, ContextEstimateModeLatestTokenCount)
 	}

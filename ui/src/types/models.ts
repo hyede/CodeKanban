@@ -314,6 +314,9 @@ export interface WebSessionUsage {
   cachedInputTokens: number;
   outputTokens: number;
   cost: number;
+  // Devin-reported session quota totals (usage_update totalAcuCost/totalCreditCost)
+  acuCost?: number;
+  creditCost?: number;
 }
 
 export interface WebSessionContextEstimate {

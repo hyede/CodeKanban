@@ -125,7 +125,7 @@
         </div>
 
         <div
-          v-if="contextUsageIndicator.available || contextUsageIndicator.hasUsage"
+          v-if="contextUsageIndicator.available || contextUsageIndicator.hasUsage || devinQuota"
           class="context-usage-total-stats"
         >
           <div class="context-usage-stat">
@@ -155,6 +155,20 @@
               tokens
             </span>
           </div>
+          <template v-if="devinQuota">
+            <div v-if="devinQuota.acu" class="context-usage-stat">
+              <span class="context-usage-stat__label">
+                {{ t('webSession.contextUsageDevinAcu') }}
+              </span>
+              <span class="context-usage-total-value">{{ devinQuota.acu }} ACU</span>
+            </div>
+            <div v-if="devinQuota.credit" class="context-usage-stat">
+              <span class="context-usage-stat__label">
+                {{ t('webSession.contextUsageDevinCredits') }}
+              </span>
+              <span class="context-usage-total-value">{{ devinQuota.credit }} credits</span>
+            </div>
+          </template>
         </div>
 
         <div class="context-usage-divider"></div>
@@ -5951,6 +5965,26 @@ const sessionUsageWithSubAgents = computed(() => {
   return {
     ...usage,
     totalTokens: usage.inputTokens + usage.outputTokens,
+  };
+});
+
+function formatDevinQuotaAmount(value: number) {
+  return new Intl.NumberFormat(locale.value, { maximumFractionDigits: 3 }).format(value);
+}
+
+const devinQuota = computed(() => {
+  const session = currentSession.value;
+  if (!session || session.agent !== 'devin') {
+    return null;
+  }
+  const acu = Math.max(0, Number(session.usage.acuCost || 0));
+  const credit = Math.max(0, Number(session.usage.creditCost || 0));
+  if (acu <= 0 && credit <= 0) {
+    return null;
+  }
+  return {
+    acu: acu > 0 ? formatDevinQuotaAmount(acu) : '',
+    credit: credit > 0 ? formatDevinQuotaAmount(credit) : '',
   };
 });
 

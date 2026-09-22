@@ -107,6 +107,8 @@ type WireSession = {
     in?: number;
     cin?: number;
     out?: number;
+    acu?: number;
+    crd?: number;
   };
   cea?: {
     in?: number;
@@ -3313,6 +3315,8 @@ export const useWebSessionStore = defineStore('web-session', () => {
         cachedInputTokens: session.usa?.cin ?? 0,
         outputTokens: session.usa?.out ?? 0,
         cost: session.cost ?? 0,
+        acuCost: session.usa?.acu ?? 0,
+        creditCost: session.usa?.crd ?? 0,
       },
       latestTurnUsage: session.ltu
         ? {
