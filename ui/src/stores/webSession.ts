@@ -5044,10 +5044,18 @@ export const useWebSessionStore = defineStore('web-session', () => {
     session: WebSessionSummary | null,
     accumulator: RuntimeAccumulator
   ): RuntimeProjection {
-    const approval =
+    let approval =
       session?.assistantState === 'waiting_approval'
         ? (snapshotApprovalsBySession.value[session.id] ?? accumulator.pendingApproval)
         : accumulator.pendingApproval;
+    if (approval?.kind === 'plan_approval' && session?.agent === 'devin') {
+      // Devin plan exits are answered through the plan card / send pipeline
+      // (resolveDevinPlanApprovalForSend), so the generic approval card would
+      // only stack a second set of actions on the same decision. Claude keeps
+      // the card: its run stays alive while the control request is pending,
+      // and approving it is the only way to unblock the agent.
+      approval = null;
+    }
     const userInput = accumulator.pendingUserInput;
     const assistantState = getSessionAssistantStateValue(session);
     const assistantStateUpdatedAt = getAssistantStateUpdatedAt(session);

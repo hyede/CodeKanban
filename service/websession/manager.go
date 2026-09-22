@@ -5619,6 +5619,7 @@ func (m *Manager) handleClaudeEvent(session tables.WebSessionTable, run *activeR
 						Timestamp: now,
 						Payload: map[string]any{
 							"iid":    request.ItemID,
+							"kind":   string(request.Kind),
 							"prompt": request.Prompt,
 						},
 					})
