@@ -1,3 +1,4 @@
+import { getMcpToolDisplayName } from './webSessionToolPresentation';
 import type { WebSessionBlock } from '@/stores/webSession';
 import { normalizeWebSessionActivityToolKind } from '@/constants/webSessionActivityDisplayMode';
 
@@ -373,8 +374,8 @@ function resolveCompactToolSummary(block: WebSessionBlock): string {
   }
   if (kind === 'mcp_tool_call') {
     return firstNonEmpty(
-      stringValue(input?.tool_name),
-      stringValue(input?.name),
+      getMcpToolDisplayName(input),
+      stringValue(input?.server),
       stringValue(meta?.subtitle),
       stringValue(block.tool.output)
     );
