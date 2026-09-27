@@ -22,6 +22,7 @@ import xml from 'highlight.js/lib/languages/xml';
 import yaml from 'highlight.js/lib/languages/yaml';
 import { Marked, type Tokens } from 'marked';
 import { stripMagicContextTags } from '@/utils/magicContextTags';
+import { createMarkdownMathExtension } from '@/utils/markdownMath';
 import { resolveCopyableAbsoluteHref } from '@/utils/messageLinkNavigation';
 
 type HljsLanguageModule = Parameters<typeof hljs.registerLanguage>[1];
@@ -129,10 +130,26 @@ function highlightRenderedText(value: string, query: string) {
   let result = '';
   let cursor = 0;
   let tagMatch: RegExpExecArray | null;
+  let mathTag = '';
+  let mathDepth = 0;
 
   while ((tagMatch = tagPattern.exec(value))) {
-    result += highlightRenderedTextSegment(value.slice(cursor, tagMatch.index), matcher);
-    result += tagMatch[0];
+    const segment = value.slice(cursor, tagMatch.index);
+    result += mathDepth ? segment : highlightRenderedTextSegment(segment, matcher);
+    const tag = tagMatch[0];
+    // Search marks would corrupt KaTeX's layout and MathML accessibility tree.
+    if (!mathDepth && /\bdata-markdown-math="true"/.test(tag)) {
+      mathTag = /^<(div|span)\b/.exec(tag)?.[1] ?? '';
+    }
+    if (mathTag) {
+      if (tag.startsWith('</' + mathTag + '>')) {
+        mathDepth -= 1;
+        if (!mathDepth) mathTag = '';
+      } else if (tag.startsWith('<' + mathTag + '>') || tag.startsWith('<' + mathTag + ' ')) {
+        mathDepth += 1;
+      }
+    }
+    result += tag;
     cursor = tagPattern.lastIndex;
   }
 
@@ -292,6 +309,7 @@ function createMarkdownRenderer(options: RenderMarkdownOptions = {}) {
     breaks: true,
     gfm: true,
   });
+  renderer.use(createMarkdownMathExtension());
 
   renderer.use({
     renderer: {

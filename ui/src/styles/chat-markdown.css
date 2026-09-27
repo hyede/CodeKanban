@@ -27,6 +27,28 @@
   margin: 0 0 0.9em;
 }
 
+.chat-markdown .markdown-math {
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.chat-markdown .markdown-math-block {
+  display: block;
+  max-width: 100%;
+  margin: 0 0 0.9em;
+  padding: 0.2em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.chat-markdown .markdown-math-block .katex-display {
+  margin: 0;
+}
+
+.chat-markdown .markdown-math-source {
+  white-space: pre-wrap;
+}
+
 .chat-markdown h1,
 .chat-markdown h2,
 .chat-markdown h3,
