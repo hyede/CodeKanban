@@ -1,5 +1,6 @@
 import { getMcpToolDisplayName } from './webSessionToolPresentation';
 import type { WebSessionBlock } from '@/stores/webSession';
+import type { WebSessionCommandExecutionGroupDetail } from '@/api/webSession';
 import { normalizeWebSessionActivityToolKind } from '@/constants/webSessionActivityDisplayMode';
 
 interface CompactTimelineGroupItem {
@@ -159,6 +160,56 @@ function getCommandGroupId(block: WebSessionBlock): string {
   return String(block.tool?.commandGroup?.id || '').trim();
 }
 
+function getCommandGroupSourceIds(block: WebSessionBlock): string[] {
+  const sourceIds = block.payload?.commandGroupSourceIds;
+  if (Array.isArray(sourceIds)) {
+    const ids = sourceIds.map(stringValue).filter(Boolean);
+    if (ids.length > 0) {
+      return ids;
+    }
+  }
+  const id = getCommandGroupId(block) || stringValue(block.tool?.id);
+  return id ? [id] : [];
+}
+
+export async function loadWebSessionCompactToolDetail(
+  block: WebSessionBlock,
+  loadGroupDetail: (groupId: string) => Promise<WebSessionCommandExecutionGroupDetail>
+): Promise<WebSessionCommandExecutionGroupDetail> {
+  // A projected row can merge several persisted groups, or synthesize a group
+  // from individual tools. Only the original source IDs are addressable by API.
+  const sourceIds = [...new Set(getCommandGroupSourceIds(block))];
+  const details = await Promise.all(sourceIds.map(id => loadGroupDetail(id)));
+  const latest = details[details.length - 1];
+  if (!latest) {
+    throw new Error('tool group is required');
+  }
+  if (details.length === 1) {
+    return latest;
+  }
+
+  const items = new Map<string, WebSessionCommandExecutionGroupDetail['items'][number]>();
+  for (const detail of details) {
+    for (const item of detail.items) {
+      items.set(item.toolId, item);
+    }
+  }
+  const mergedItems = [...items.values()];
+  return {
+    ...latest,
+    groupId: getCommandGroupId(block) || latest.groupId,
+    count: mergedItems.length,
+    firstSeq: Math.min(...details.map(detail => detail.firstSeq)),
+    lastSeq: Math.max(...details.map(detail => detail.lastSeq)),
+    status: mergedItems.some(item => item.status === 'running')
+      ? 'running'
+      : mergedItems.some(item => item.status === 'error')
+        ? 'error'
+        : 'done',
+    items: mergedItems,
+  };
+}
+
 function findGroupId(group: WebSessionBlock[]): string {
   for (const block of group) {
     const groupId = getCommandGroupId(block);
@@ -231,6 +282,7 @@ function buildGroupedCompactToolBlock(group: WebSessionBlock[], groupId: string)
   projected.payload = {
     ...projected.payload,
     groupItems: mergedGroupItems,
+    commandGroupSourceIds: [...new Set(group.flatMap(getCommandGroupSourceIds))],
   };
   projected.tool = {
     ...projected.tool,

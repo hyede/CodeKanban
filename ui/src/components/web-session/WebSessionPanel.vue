@@ -3803,7 +3803,10 @@ import {
   type TimelineRawSurface,
 } from '@/components/web-session/webSessionRawToggle';
 import { resolveWebSessionAttachmentPreviewMode } from '@/components/web-session/webSessionAttachmentPreview';
-import { projectWebSessionVisibleTimelineBlocks } from '@/components/web-session/webSessionCompactTimeline';
+import {
+  loadWebSessionCompactToolDetail,
+  projectWebSessionVisibleTimelineBlocks,
+} from '@/components/web-session/webSessionCompactTimeline';
 import {
   findLatestSubAgentActivityBlock,
   isTransportRetryActivityText,
@@ -13099,7 +13102,9 @@ async function openCommandExecutionDetail(block: WebSessionBlock) {
   }
 
   try {
-    const detail = await webSessionStore.loadCommandGroupDetail(requestSessionId, groupId);
+    const detail = await loadWebSessionCompactToolDetail(block, sourceId =>
+      webSessionStore.loadCommandGroupDetail(requestSessionId, sourceId)
+    );
     if (
       currentRealSession.value?.id === requestSessionId &&
       activeCommandExecutionGroupId.value === requestGroupId

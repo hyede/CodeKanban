@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import type { WebSessionCommandExecutionGroupDetail } from '@/api/webSession';
 import type { WebSessionBlock } from '@/stores/webSession';
 import {
   isEmptyAssistantBlock,
   isTransportRetryNoteBlock,
+  loadWebSessionCompactToolDetail,
   projectWebSessionCompactTimelineBlocks,
   projectWebSessionVisibleTimelineBlocks,
 } from '@/components/web-session/webSessionCompactTimeline';
@@ -178,6 +180,149 @@ function readGroupItems(block: WebSessionBlock): Array<Record<string, unknown>> 
   const raw = block.payload?.groupItems;
   return Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : [];
 }
+
+function buildToolDetail(
+  groupId: string,
+  toolIds: string[],
+  status: 'running' | 'done' | 'error' = 'done'
+): WebSessionCommandExecutionGroupDetail {
+  return {
+    groupId,
+    kind: 'command_execution',
+    title: 'CommandExecution',
+    summary: groupId,
+    count: toolIds.length,
+    firstSeq: 1,
+    lastSeq: toolIds.length * 2,
+    status,
+    latestToolId: toolIds[toolIds.length - 1],
+    items: toolIds.map(toolId => ({
+      toolId,
+      kind: 'command_execution',
+      title: 'CommandExecution',
+      summary: toolId,
+      command: toolId,
+      input: { command: toolId },
+      output: ('full output for ' + toolId).repeat(300),
+      status,
+      timestamp: '2026-04-20T12:00:00.000Z',
+    })),
+  };
+}
+
+describe('compact tool detail loading', () => {
+  it('loads Devin synthetic command groups through their original tool IDs', async () => {
+    const blocks = [buildCommandBlock('call-1'), buildCommandBlock('call-2')];
+    const [projected] = projectWebSessionCompactTimelineBlocks(blocks, 'devin');
+    const load = vi.fn(async (id: string) => {
+      if (!['call-1', 'call-2'].includes(id)) {
+        throw new Error('tool group not found');
+      }
+      return buildToolDetail(id, [id]);
+    });
+
+    const detail = await loadWebSessionCompactToolDetail(projected!, load);
+
+    expect(load.mock.calls).toEqual([['call-1'], ['call-2']]);
+    expect(detail.groupId).toBe(projected!.tool!.commandGroup!.id);
+    expect(detail.count).toBe(2);
+    expect(detail.items.map(item => item.toolId)).toEqual(['call-1', 'call-2']);
+    expect(detail.items[0]!.output).toBe(buildToolDetail('call-1', ['call-1']).items[0]!.output);
+  });
+
+  it('loads every persisted group when adjacent Devin rows have different group IDs', async () => {
+    const [projected] = projectWebSessionCompactTimelineBlocks(
+      [
+        buildCommandBlock('call-2', { groupId: 'group-1', count: 2 }),
+        buildCommandBlock('call-4', { groupId: 'group-2', count: 2 }),
+      ],
+      'devin'
+    );
+    const first = buildToolDetail('group-1', ['call-1', 'call-2']);
+    const second = buildToolDetail('group-2', ['call-3', 'call-4']);
+    second.firstSeq = 5;
+    second.lastSeq = 8;
+    const load = vi.fn(async (id: string) => (id === 'group-1' ? first : second));
+
+    const detail = await loadWebSessionCompactToolDetail(projected!, load);
+
+    expect(load.mock.calls).toEqual([['group-1'], ['group-2']]);
+    expect(detail.items.map(item => item.toolId)).toEqual(['call-1', 'call-2', 'call-3', 'call-4']);
+    expect(detail).toMatchObject({ count: 4, firstSeq: 1, lastSeq: 8, latestToolId: 'call-4' });
+  });
+
+  it('requests shared persisted groups once and keeps all server details', async () => {
+    const [projected] = projectWebSessionCompactTimelineBlocks([
+      buildCommandBlock('call-1', { groupId: 'group-1' }),
+      buildCommandBlock('call-2', { groupId: 'group-1', count: 3 }),
+    ]);
+    const fullDetail = buildToolDetail('group-1', ['call-0', 'call-1', 'call-2']);
+    const load = vi.fn(async () => fullDetail);
+
+    expect(await loadWebSessionCompactToolDetail(projected!, load)).toBe(fullDetail);
+    expect(load.mock.calls).toEqual([['group-1']]);
+  });
+
+  it('preserves original source IDs when synthetic file-change rows are folded again', async () => {
+    const [first] = projectWebSessionCompactTimelineBlocks([
+      buildFileChangeBlock('edit-1'),
+      buildFileChangeBlock('edit-2'),
+    ]);
+    const [projected] = projectWebSessionCompactTimelineBlocks([
+      first!,
+      buildFileChangeBlock('edit-3'),
+    ]);
+    const load = vi.fn(async (id: string) => buildToolDetail(id, [id]));
+
+    const detail = await loadWebSessionCompactToolDetail(projected!, load);
+
+    expect(load.mock.calls).toEqual([['edit-1'], ['edit-2'], ['edit-3']]);
+    expect(detail.count).toBe(3);
+  });
+
+  it('deduplicates overlapping group items while preserving current tool status', async () => {
+    const [projected] = projectWebSessionCompactTimelineBlocks([
+      buildCommandBlock('call-1', { groupId: 'group-1' }),
+      buildCommandBlock('call-2', { groupId: 'group-2' }),
+    ]);
+    const first = buildToolDetail('group-1', ['call-1', 'call-2']);
+    const second = buildToolDetail('group-2', ['call-2'], 'running');
+    const load = vi.fn(async (id: string) => (id === 'group-1' ? first : second));
+
+    const detail = await loadWebSessionCompactToolDetail(projected!, load);
+
+    expect(detail.items.map(item => item.toolId)).toEqual(['call-1', 'call-2']);
+    expect(detail.items[1]!.status).toBe('running');
+    expect(detail.status).toBe('running');
+    expect(detail.count).toBe(2);
+  });
+
+  it('loads single tools by their stored ID', async () => {
+    const block = buildDynamicToolBlock('read-1', 'Read file', { path: 'src/main.ts' });
+    const fullDetail = buildToolDetail('read-1', ['read-1']);
+    const load = vi.fn(async () => fullDetail);
+
+    expect(await loadWebSessionCompactToolDetail(block, load)).toBe(fullDetail);
+    expect(load.mock.calls).toEqual([['read-1']]);
+  });
+
+  it('reports source failures instead of presenting partial group details as complete', async () => {
+    const [projected] = projectWebSessionCompactTimelineBlocks([
+      buildCommandBlock('call-1'),
+      buildCommandBlock('call-2'),
+    ]);
+    const load = vi.fn(async (id: string) => {
+      if (id === 'call-2') {
+        throw new Error('failed to load tool group');
+      }
+      return buildToolDetail(id, [id]);
+    });
+
+    await expect(loadWebSessionCompactToolDetail(projected!, load)).rejects.toThrow(
+      'failed to load tool group'
+    );
+  });
+});
 
 describe('webSessionCompactTimeline', () => {
   it('identifies transport retry notes without treating ordinary notes as retries', () => {
