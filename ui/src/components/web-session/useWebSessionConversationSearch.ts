@@ -3,6 +3,7 @@ import {
   nextTick,
   onMounted,
   onScopeDispose,
+  onUpdated,
   ref,
   toValue,
   watch,
@@ -13,7 +14,9 @@ import { NInput } from 'naive-ui';
 import { webSessionApi, type SessionConversationSearchMatch } from '@/api/webSession';
 import type { WebSessionBlock } from '@/stores/webSession';
 import {
+  countWebSessionConversationSearchOccurrences,
   findWebSessionConversationSearchMatches,
+  isWebSessionConversationSearchKindEnabled,
   matchesWebSessionConversationSearchTarget,
   mergeWebSessionConversationSearchMatches,
   resolveWebSessionConversationSearchMatchIndex,
@@ -38,7 +41,9 @@ export type WebSessionConversationSearchOptions = {
   translate: Translate;
   onOpen: () => void;
   loadEarlierHistory: (sessionId: string) => Promise<boolean>;
-  scrollToBlock: (blockKey: string) => void;
+  scrollToBlock: (blockKey: string, highlight?: HTMLElement) => void;
+  getBlockElement?: (blockKey: string) => HTMLElement | undefined;
+  countOccurrences?: (block: WebSessionBlock, query: string) => number;
 };
 
 export function useWebSessionConversationSearch({
@@ -50,6 +55,8 @@ export function useWebSessionConversationSearch({
   onOpen,
   loadEarlierHistory,
   scrollToBlock,
+  getBlockElement,
+  countOccurrences = countWebSessionConversationSearchOccurrences,
 }: WebSessionConversationSearchOptions) {
   const inputRef = ref<InstanceType<typeof NInput> | null>(null);
   const openState = ref(false);
@@ -67,43 +74,49 @@ export function useWebSessionConversationSearch({
   let requestVersion = 0;
   let abortController: AbortController | null = null;
   let searchTimer: number | null = null;
-
-  function createMatchFromBlock(block: WebSessionBlock): WebSessionConversationSearchMatch {
-    return {
-      key: block.key,
-      id: block.id,
-      sourceThreadId: block.sourceThreadId ?? undefined,
-      sourceTurnId: block.sourceTurnId ?? undefined,
-      sourceItemId: block.sourceItemId ?? undefined,
-      orderIndex: block.orderIndex,
-      kind: block.kind,
-      toolId: block.tool?.id,
-      commandGroupId: block.tool?.commandGroup?.id,
-    };
-  }
+  let locateVersion = 0;
+  let activeHighlight: HTMLElement | null = null;
 
   const visibleRemoteMatches = computed(() =>
-    remoteMatches.value.map(match => {
-      const visibleBlock = visibleBlocks.value.find(block =>
-        matchesWebSessionConversationSearchTarget(block, match)
-      );
-      return visibleBlock ? createMatchFromBlock(visibleBlock) : match;
-    })
+    remoteMatches.value
+      .map(match => {
+        const visibleBlock = visibleBlocks.value.find(block =>
+          matchesWebSessionConversationSearchTarget(block, match)
+        );
+        if (!visibleBlock) return match;
+        // Loaded dialogue is authoritative, including source-only Markdown hits.
+        if (visibleBlock.kind === 'user' || visibleBlock.kind === 'assistant') return null;
+        // Compacted tools can omit the historical metadata that matched remotely.
+        return {
+          ...match,
+          id: visibleBlock.id,
+          orderIndex: visibleBlock.orderIndex,
+          kind: visibleBlock.kind,
+          toolId: visibleBlock.tool?.id,
+          commandGroupId: visibleBlock.tool?.commandGroup?.id,
+        };
+      })
+      .filter((match): match is SessionConversationSearchMatch => match !== null)
   );
   const normalizedQuery = computed(() => String(query.value ?? '').trim());
   const localMatches = computed(() =>
     findWebSessionConversationSearchMatches(
       visibleBlocks.value,
       normalizedQuery.value,
-      filters.value
+      filters.value,
+      countOccurrences
     )
   );
   const matches = computed(() =>
-    mergeWebSessionConversationSearchMatches(localMatches.value, visibleRemoteMatches.value)
+    mergeWebSessionConversationSearchMatches(
+      localMatches.value,
+      visibleRemoteMatches.value,
+      normalizedQuery.value
+    )
   );
   const currentMatch = computed(() => matches.value[currentIndex.value] ?? null);
-  const hasPrevious = computed(() => currentIndex.value > 0);
-  const hasNext = computed(() => currentIndex.value < matches.value.length - 1);
+  const hasPrevious = computed(() => matches.value.length > 1);
+  const hasNext = computed(() => matches.value.length > 1);
   const hasNonDefaultFilters = computed(() => {
     const currentFilters = filters.value;
     return (
@@ -177,6 +190,8 @@ export function useWebSessionConversationSearch({
   }
 
   function close() {
+    locateVersion += 1;
+    clearActiveHighlight();
     openState.value = false;
     query.value = '';
     filters.value = {
@@ -191,6 +206,8 @@ export function useWebSessionConversationSearch({
   }
 
   function resetForSessionChange() {
+    locateVersion += 1;
+    clearActiveHighlight();
     currentIndex.value = 0;
     clearTimer();
     clearRemoteState();
@@ -265,12 +282,14 @@ export function useWebSessionConversationSearch({
     }, null);
   }
 
-  async function ensureMatchLoaded(match: WebSessionConversationSearchMatch) {
+  async function ensureMatchLoaded(match: WebSessionConversationSearchMatch, version: number) {
     const session = currentSession.value;
     if (!session) {
       return;
     }
     while (
+      version === locateVersion &&
+      currentSession.value?.id === session.id &&
       !allBlocks.value.some(block => matchesWebSessionConversationSearchTarget(block, match))
     ) {
       if (!(await loadEarlierHistory(session.id))) {
@@ -280,11 +299,53 @@ export function useWebSessionConversationSearch({
   }
 
   async function locateMatch(match: WebSessionConversationSearchMatch) {
-    await ensureMatchLoaded(match);
+    const version = ++locateVersion;
+    await ensureMatchLoaded(match, version);
     await nextTick();
+    if (version !== locateVersion || !openState.value) return;
     const block = findBlock(match);
     if (block) {
-      scrollToBlock(block.key);
+      scrollToBlock(block.key, refreshActiveHighlight() ?? undefined);
+    }
+  }
+
+  function clearActiveHighlight() {
+    activeHighlight?.removeAttribute('data-search-active');
+    activeHighlight?.removeAttribute('aria-current');
+    activeHighlight = null;
+  }
+
+  function refreshActiveHighlight() {
+    const match = openState.value ? currentMatch.value : null;
+    const block = match ? findBlock(match) : null;
+    const highlight =
+      block && match
+        ? (getBlockElement?.(block.key)?.querySelectorAll<HTMLElement>(
+            '.markdown-search-highlight'
+          )[match.occurrenceIndex ?? 0] ?? null)
+        : null;
+    if (activeHighlight !== highlight) clearActiveHighlight();
+    activeHighlight = highlight;
+    activeHighlight?.setAttribute('data-search-active', 'true');
+    activeHighlight?.setAttribute('aria-current', 'true');
+    return activeHighlight;
+  }
+
+  function getBlockQuery(block: WebSessionBlock) {
+    return openState.value && isWebSessionConversationSearchKindEnabled(block.kind, filters.value)
+      ? normalizedQuery.value
+      : '';
+  }
+
+  function handleInputKeydown(event: KeyboardEvent) {
+    if (event.isComposing) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void navigate(event.shiftKey ? 'previous' : 'next');
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
     }
   }
 
@@ -331,11 +392,8 @@ export function useWebSessionConversationSearch({
           return;
         }
 
-        remoteMatches.value = mergeWebSessionConversationSearchMatches(
-          [],
-          [...remoteMatches.value, ...result.items]
-        );
-        if (locateInitialRemoteMatch && remoteMatches.value.length > 0) {
+        remoteMatches.value = [...remoteMatches.value, ...result.items];
+        if (locateInitialRemoteMatch && matches.value.length > 0) {
           locateInitialRemoteMatch = false;
           await nextTick();
           const latestMatchIndex = matches.value.length - 1;
@@ -388,10 +446,9 @@ export function useWebSessionConversationSearch({
     if (matches.value.length === 0) {
       return;
     }
-    const nextIndex = currentIndex.value + (direction === 'previous' ? -1 : 1);
-    if (nextIndex < 0 || nextIndex >= matches.value.length) {
-      return;
-    }
+    const nextIndex =
+      (currentIndex.value + (direction === 'previous' ? -1 : 1) + matches.value.length) %
+      matches.value.length;
     currentIndex.value = nextIndex;
     const match = matches.value[nextIndex];
     if (match) {
@@ -420,11 +477,14 @@ export function useWebSessionConversationSearch({
   watch(
     [query, filters],
     () => {
+      locateVersion += 1;
+      clearActiveHighlight();
       currentIndex.value = 0;
       clearTimer();
       clearRemoteState();
       if (openState.value && normalizedQuery.value) {
         void nextTick().then(() => {
+          if (!openState.value || !normalizedQuery.value) return;
           const latestMatchIndex = matches.value.length - 1;
           const latestMatch = matches.value[latestMatchIndex];
           if (latestMatch) {
@@ -452,7 +512,11 @@ export function useWebSessionConversationSearch({
   });
 
   onMounted(() => window.addEventListener('keydown', handleShortcut));
+  // Streaming updates and raw/Markdown toggles may replace the active mark.
+  onUpdated(refreshActiveHighlight);
   onScopeDispose(() => {
+    locateVersion += 1;
+    clearActiveHighlight();
     window.removeEventListener('keydown', handleShortcut);
     clearTimer();
     invalidateRequest();
@@ -478,5 +542,7 @@ export function useWebSessionConversationSearch({
     selectPage,
     isBlockMatch,
     isBlockActive,
+    getBlockQuery,
+    handleInputKeydown,
   };
 }

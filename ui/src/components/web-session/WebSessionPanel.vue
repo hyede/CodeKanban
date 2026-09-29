@@ -580,7 +580,7 @@
                       clearable
                       :placeholder="t('webSession.conversationSearchPlaceholder')"
                       :aria-label="t('webSession.conversationSearchPlaceholder')"
-                      @keydown.esc="closeTimelineSearch"
+                      @keydown="handleTimelineSearchKeydown"
                     >
                       <template #prefix>
                         <n-icon size="15" aria-hidden="true"><SearchOutline /></n-icon>
@@ -1113,7 +1113,7 @@
                             class="timeline-raw-text plan-tool-content--raw"
                           ><code
                             v-html="
-                              renderHighlightedPlainText(item.tool.output, timelineSearchQuery)
+                              renderHighlightedPlainText(item.tool.output, getTimelineSearchQuery(item))
                             "
                           ></code></pre>
                           <WebSessionStreamingMarkdown
@@ -1623,7 +1623,7 @@
                       <pre
                         v-if="shouldShowMessageRawToggle(item) && isBlockRawMode(item, 'message')"
                         class="item-text item-text--raw timeline-raw-text"
-                      ><code v-html="renderHighlightedPlainText(item.text, timelineSearchQuery)"></code></pre>
+                      ><code v-html="renderHighlightedPlainText(item.text, getTimelineSearchQuery(item))"></code></pre>
                       <WebSessionStreamingMarkdown
                         v-else-if="
                           isStreamingMessageMarkdownBlock(item) && getDisplayBlockText(item)
@@ -3812,6 +3812,10 @@ import {
 import { resolveWebSessionSubAgentPopover } from '@/components/web-session/webSessionSubAgentPopover';
 import { resolveWebSessionTimelineSubAgent } from '@/components/web-session/webSessionTimelineRole';
 import { useWebSessionConversationSearch } from '@/components/web-session/useWebSessionConversationSearch';
+import {
+  countWebSessionConversationSearchHighlights,
+  countWebSessionConversationSearchOccurrences,
+} from '@/components/web-session/webSessionConversationSearch';
 import { useWebSessionLocalFileNavigation } from '@/components/web-session/useWebSessionLocalFileNavigation';
 import { createWebSessionToolPresentation } from '@/components/web-session/webSessionToolPresentation';
 import { createWebSessionStreamingMarkdownController } from '@/components/web-session/webSessionStreamingMarkdown';
@@ -5790,7 +5794,7 @@ function getMessageMarkdownRenderOptions(block: WebSessionBlock) {
   const options = isStreamingMessageMarkdownBlock(block)
     ? streamingTimelineMarkdownRenderOptions.value
     : timelineMarkdownRenderOptions.value;
-  const query = timelineSearchQuery.value.trim();
+  const query = getTimelineSearchQuery(block);
   return query ? { ...options, textHighlightQuery: query } : options;
 }
 
@@ -5805,7 +5809,7 @@ function getPlanToolMarkdownRenderOptions(block: WebSessionBlock) {
   const options = isStreamingPlanMarkdownBlock(block)
     ? streamingTimelineMarkdownRenderOptions.value
     : timelineMarkdownRenderOptions.value;
-  const query = timelineSearchQuery.value.trim();
+  const query = getTimelineSearchQuery(block);
   return query ? { ...options, textHighlightQuery: query } : options;
 }
 
@@ -6072,6 +6076,8 @@ const {
   selectPage: handleTimelineSearchPageChange,
   isBlockMatch: isTimelineSearchBlockMatch,
   isBlockActive: isTimelineSearchBlockActive,
+  getBlockQuery: getTimelineSearchQuery,
+  handleInputKeydown: handleTimelineSearchKeydown,
 } = useWebSessionConversationSearch({
   currentSession: currentRealSession,
   visibleBlocks,
@@ -6086,7 +6092,34 @@ const {
   },
   loadEarlierHistory: loadEarlierTimelineSearchHistory,
   scrollToBlock: scrollToTimelineBlock,
+  getBlockElement: key => timelineBlockElements.get(key),
+  countOccurrences: countTimelineSearchOccurrences,
 });
+
+function countTimelineSearchOccurrences(block: WebSessionBlock, query: string) {
+  let html: string;
+  if (block.kind === 'user' || block.kind === 'assistant') {
+    html =
+      shouldShowMessageRawToggle(block) && isBlockRawMode(block, 'message')
+        ? renderHighlightedPlainText(block.text, query)
+        : isStreamingMessageMarkdownBlock(block)
+          ? getMessageStreamingBlocks(block)
+              .map(part => part.html)
+              .join('')
+          : renderMarkdown(getMessageMarkdownText(block), getMessageMarkdownRenderOptions(block));
+  } else if (block.tool && isPlanTool(block.tool)) {
+    html = isBlockRawMode(block, 'plan')
+      ? renderHighlightedPlainText(block.tool.output ?? '', query)
+      : isStreamingPlanMarkdownBlock(block)
+        ? getPlanStreamingBlocks(block)
+            .map(part => part.html)
+            .join('')
+        : renderMarkdown(getPlanToolMarkdownText(block), getPlanToolMarkdownRenderOptions(block));
+  } else {
+    return countWebSessionConversationSearchOccurrences(block, query);
+  }
+  return countWebSessionConversationSearchHighlights(html);
+}
 const visibleRawTimelineBlockKeys = computed(() => {
   const keys: string[] = [];
   visibleBlocks.value.forEach(block => {
@@ -6885,22 +6918,38 @@ async function navigateTimelineViewportUserMessage(
   }
 }
 
-function scrollToTimelineBlock(targetKey: string) {
+function scrollToTimelineBlock(targetKey: string, highlight?: HTMLElement) {
   const container = timelineScrollRef.value;
   const element = timelineBlockElements.get(targetKey);
   if (!container || !element) {
     return;
   }
   const containerRect = container.getBoundingClientRect();
-  const elementRect = element.getBoundingClientRect();
-  const targetTop = container.scrollTop + (elementRect.top - containerRect.top) - 12;
+  const elementRect = (highlight ?? element).getBoundingClientRect();
+  const offset = highlight ? Math.max(64, (container.clientHeight - elementRect.height) / 2) : 12;
+  const targetTop = container.scrollTop + (elementRect.top - containerRect.top) - offset;
+  // Code blocks and tables can scroll horizontally inside the timeline.
+  for (
+    let parent = highlight?.parentElement;
+    parent && parent !== container;
+    parent = parent.parentElement
+  ) {
+    if (
+      parent.scrollWidth > parent.clientWidth &&
+      ['auto', 'scroll'].includes(getComputedStyle(parent).overflowX)
+    ) {
+      const parentRect = parent.getBoundingClientRect();
+      parent.scrollLeft +=
+        elementRect.left - parentRect.left - (parent.clientWidth - elementRect.width) / 2;
+    }
+  }
   invalidateTimelineScrollSync();
   autoFollowBottom.value = false;
   showJumpToBottom.value = true;
   lastTimelineScrollTop.value = container.scrollTop;
   container.scrollTo({
     top: Math.max(0, targetTop),
-    behavior: 'smooth',
+    behavior: highlight ? 'auto' : 'smooth',
   });
 }
 

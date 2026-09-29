@@ -1,5 +1,6 @@
 import type { SessionConversationSearchMatch } from '@/api/webSession';
 import type { WebSessionBlock } from '@/stores/webSession';
+import { renderMarkdown } from '@/utils/markdown';
 
 export type WebSessionConversationSearchFilters = {
   user: boolean;
@@ -18,6 +19,7 @@ export type WebSessionConversationSearchMatch = {
   kind: 'user' | 'assistant' | 'tool' | 'system' | string;
   toolId?: string;
   commandGroupId?: string;
+  occurrenceIndex?: number;
 };
 
 const OPEN_CONVERSATION_SEARCH_BLOCKING_LAYER_SELECTOR =
@@ -109,55 +111,92 @@ export function matchesWebSessionConversationSearch(
 export function findWebSessionConversationSearchMatches(
   blocks: WebSessionBlock[],
   query: unknown,
-  filters: WebSessionConversationSearchFilters
+  filters: WebSessionConversationSearchFilters,
+  countOccurrences = countWebSessionConversationSearchOccurrences
 ): WebSessionConversationSearchMatch[] {
   const normalizedQuery = normalizeWebSessionConversationSearchQuery(query);
   if (!normalizedQuery) {
     return [];
   }
   return blocks
-    .filter(block => matchesWebSessionConversationSearch(block, normalizedQuery, filters))
-    .map(block => ({
-      key: block.key,
-      id: block.id,
-      sourceThreadId: block.sourceThreadId ?? undefined,
-      sourceTurnId: block.sourceTurnId ?? undefined,
-      sourceItemId: block.sourceItemId ?? undefined,
-      orderIndex: block.orderIndex,
-      kind: block.kind,
-      toolId: block.tool?.id,
-      commandGroupId: block.tool?.commandGroup?.id,
-    }));
+    .filter(block => isWebSessionConversationSearchKindEnabled(block.kind, filters))
+    .flatMap(block =>
+      Array.from({ length: countOccurrences(block, normalizedQuery) }, (_, occurrenceIndex) => ({
+        key: block.key,
+        id: block.id,
+        sourceThreadId: block.sourceThreadId ?? undefined,
+        sourceTurnId: block.sourceTurnId ?? undefined,
+        sourceItemId: block.sourceItemId ?? undefined,
+        orderIndex: block.orderIndex,
+        kind: block.kind,
+        toolId: block.tool?.id,
+        commandGroupId: block.tool?.commandGroup?.id,
+        occurrenceIndex,
+      }))
+    );
+}
+
+export function countWebSessionConversationSearchHighlights(html: string) {
+  return html.split('<mark class="markdown-search-highlight">').length - 1;
+}
+
+export function countWebSessionConversationSearchOccurrences(
+  block: WebSessionBlock,
+  query: string
+) {
+  if (!query) return 0;
+  if (block.kind === 'user' || block.kind === 'assistant') {
+    return countWebSessionConversationSearchHighlights(
+      renderMarkdown(block.text, { textHighlightQuery: query })
+    );
+  }
+  // Tool metadata can live behind a disclosure; keep a card-level fallback.
+  return resolveWebSessionConversationSearchText(block).includes(query.toLowerCase()) ? 1 : 0;
 }
 
 export function mergeWebSessionConversationSearchMatches(
   localMatches: WebSessionConversationSearchMatch[],
-  remoteMatches: SessionConversationSearchMatch[]
+  remoteMatches: SessionConversationSearchMatch[],
+  query = ''
 ): WebSessionConversationSearchMatch[] {
-  const merged: WebSessionConversationSearchMatch[] = [];
-  for (const match of [...localMatches, ...remoteMatches]) {
-    const existingIndex = merged.findIndex(existing =>
-      areWebSessionConversationSearchMatchesEquivalent(existing, match)
-    );
-    if (existingIndex < 0) {
-      merged.push({ ...match });
+  const merged = [...localMatches];
+  for (const match of remoteMatches) {
+    // Loaded content owns all its occurrences. A remote card must never collapse
+    // those occurrences back into a single result or replace its visible key.
+    if (merged.some(existing => areWebSessionConversationSearchBlocksEquivalent(existing, match))) {
       continue;
     }
-    merged[existingIndex] = {
-      ...merged[existingIndex],
-      ...match,
-      key: merged[existingIndex].key,
-    };
+    const count =
+      query && typeof match.text === 'string'
+        ? countWebSessionConversationSearchHighlights(
+            renderMarkdown(match.text, { textHighlightQuery: query })
+          )
+        : 1;
+    for (let occurrenceIndex = 0; occurrenceIndex < count; occurrenceIndex += 1) {
+      merged.push({ ...match, occurrenceIndex });
+    }
   }
   return merged.sort((left, right) => {
     if (left.orderIndex !== right.orderIndex) {
       return left.orderIndex - right.orderIndex;
     }
-    return left.id.localeCompare(right.id);
+    return (
+      left.id.localeCompare(right.id) || (left.occurrenceIndex ?? 0) - (right.occurrenceIndex ?? 0)
+    );
   });
 }
 
 export function areWebSessionConversationSearchMatchesEquivalent(
+  left: WebSessionConversationSearchMatch,
+  right: WebSessionConversationSearchMatch
+) {
+  return (
+    (left.occurrenceIndex ?? 0) === (right.occurrenceIndex ?? 0) &&
+    areWebSessionConversationSearchBlocksEquivalent(left, right)
+  );
+}
+
+export function areWebSessionConversationSearchBlocksEquivalent(
   left: WebSessionConversationSearchMatch,
   right: WebSessionConversationSearchMatch
 ) {
@@ -198,6 +237,13 @@ export function matchesWebSessionConversationSearchTarget(
   block: WebSessionBlock,
   match: WebSessionConversationSearchMatch
 ) {
+  if (
+    block.sourceThreadId &&
+    match.sourceThreadId &&
+    block.sourceThreadId !== match.sourceThreadId
+  ) {
+    return false;
+  }
   if (match.id && block.id === match.id) {
     return true;
   }

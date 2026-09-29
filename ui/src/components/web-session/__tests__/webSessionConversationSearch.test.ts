@@ -152,6 +152,66 @@ describe('webSessionConversationSearch', () => {
     });
   });
 
+  it('counts and orders each occurrence within the same message', () => {
+    const matches = findWebSessionConversationSearchMatches(
+      [makeBlock('message', 'assistant', 'plan **PLAN** and plan again', 1)],
+      'plan',
+      dialogueFilters
+    );
+    expect(matches.map(match => match.occurrenceIndex)).toEqual([0, 1, 2]);
+    expect(resolveWebSessionConversationSearchMatchIndex(matches, matches[1], 0)).toBe(1);
+  });
+
+  it('counts visible link text without counting its hidden destination', () => {
+    const matches = findWebSessionConversationSearchMatches(
+      [makeBlock('message', 'assistant', '[plan](https://example.com/plan) and plan', 1)],
+      'plan',
+      dialogueFilters
+    );
+    expect(matches).toHaveLength(2);
+  });
+
+  it('merges remote history without collapsing repeated local occurrences', () => {
+    const local = findWebSessionConversationSearchMatches(
+      [makeBlock('local', 'assistant', 'plan plan plan', 2)],
+      'plan',
+      dialogueFilters
+    );
+    const merged = mergeWebSessionConversationSearchMatches(
+      local,
+      [
+        { id: 'older', orderIndex: 1, kind: 'user', text: 'plan plan' },
+        { id: 'local', orderIndex: 2, kind: 'assistant', text: 'plan plan plan' },
+      ],
+      'plan'
+    );
+    expect(merged).toHaveLength(5);
+    expect(merged.map(match => match.occurrenceIndex)).toEqual([0, 1, 0, 1, 2]);
+    expect(resolveWebSessionConversationSearchMatchIndex(merged, local[1], 0)).toBe(3);
+  });
+
+  it('does not merge equal item IDs from different threads', () => {
+    const local = findWebSessionConversationSearchMatches(
+      [makeBlock('same-id', 'assistant', 'plan plan', 2, { sourceThreadId: 'main' })],
+      'plan',
+      dialogueFilters
+    );
+    const remote = {
+      id: 'same-id',
+      orderIndex: 1,
+      kind: 'assistant',
+      sourceThreadId: 'child',
+      text: 'plan',
+    };
+    expect(mergeWebSessionConversationSearchMatches(local, [remote], 'plan')).toHaveLength(3);
+    expect(
+      matchesWebSessionConversationSearchTarget(
+        makeBlock('same-id', 'assistant', 'plan', 1, { sourceThreadId: 'main' }),
+        remote
+      )
+    ).toBe(false);
+  });
+
   it('searches system prompts only when system interactions are enabled', () => {
     const block = makeBlock('system-1', 'system', '', 1, {
       itemType: 'approval_request',

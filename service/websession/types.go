@@ -402,6 +402,7 @@ type SessionSearchChunkResult struct {
 
 type SessionConversationSearchMatch struct {
 	ID             string  `json:"id"`
+	Text           string  `json:"text,omitempty"`
 	SourceThreadID *string `json:"sourceThreadId,omitempty"`
 	SourceTurnID   *string `json:"sourceTurnId,omitempty"`
 	SourceItemID   *string `json:"sourceItemId,omitempty"`

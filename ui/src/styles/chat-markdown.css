@@ -5,14 +5,23 @@
   word-break: break-word;
 }
 
-.chat-markdown .markdown-search-highlight {
-  padding: 0 0.12em;
+.chat-markdown .markdown-search-highlight,
+.timeline-raw-text .markdown-search-highlight {
+  padding: 0;
   border-radius: 2px;
-  background: var(
-    --app-warning-soft,
-    color-mix(in srgb, var(--n-warning-color, #f0a020) 48%, transparent)
-  );
-  color: inherit;
+  background: #fde047;
+  color: #422006;
+  box-shadow: 0 0 0 1px #ca8a04;
+  box-decoration-break: clone;
+}
+
+.chat-markdown .markdown-search-highlight[data-search-active='true'],
+.timeline-raw-text .markdown-search-highlight[data-search-active='true'] {
+  background: #fb923c;
+  color: #431407;
+  outline: 2px solid #9a3412;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px rgb(251 146 60 / 25%);
 }
 
 .chat-markdown > :first-child {
