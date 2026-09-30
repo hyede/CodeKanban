@@ -1791,6 +1791,14 @@ func (m *Manager) syncDevinSessionMode(ctx context.Context, sessionID string) {
 }
 
 func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, message devinACPMessage) {
+	// The event loop holds the session snapshot from the start of the run.
+	// Honor permission changes made while a previous request was pending.
+	current, err := m.GetSession(context.Background(), session.ID)
+	if err != nil {
+		_ = client.respond(message.ID, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
+		return
+	}
+	session = current
 	var params map[string]any
 	_ = json.Unmarshal(message.Params, &params)
 	options, _ := params["options"].([]any)

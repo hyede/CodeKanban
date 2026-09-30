@@ -1805,15 +1805,31 @@
                       <n-button
                         size="small"
                         type="primary"
-                        :disabled="pendingApproval.stale || !pendingApproval.actionable"
+                        :disabled="
+                          approvalSubmitting || pendingApproval.stale || !pendingApproval.actionable
+                        "
                         @click="handleApproval('approve')"
                       >
                         {{ t('webSession.approvalApprove') }}
                       </n-button>
                       <n-button
+                        v-if="canApproveWithYolo"
+                        size="small"
+                        type="warning"
+                        secondary
+                        :loading="approvalSubmitting"
+                        :disabled="pendingApproval.stale || !pendingApproval.actionable"
+                        :title="t('webSession.approvalApproveYoloHint')"
+                        @click="handleApproval('approve_yolo')"
+                      >
+                        {{ t('webSession.approvalApproveYolo') }}
+                      </n-button>
+                      <n-button
                         size="small"
                         secondary
-                        :disabled="pendingApproval.stale || !pendingApproval.actionable"
+                        :disabled="
+                          approvalSubmitting || pendingApproval.stale || !pendingApproval.actionable
+                        "
                         @click="handleApproval('reject')"
                       >
                         {{ t('webSession.approvalReject') }}
@@ -6210,6 +6226,12 @@ const streamingMarkdownTargets = computed(() =>
 );
 const pendingApproval = computed(() =>
   currentRealSession.value ? webSessionStore.getPendingApproval(currentRealSession.value.id) : null
+);
+const approvalSubmitting = ref(false);
+const canApproveWithYolo = computed(
+  () =>
+    (currentRealSession.value?.agent === 'devin' || currentRealSession.value?.agent === 'claude') &&
+    currentRealSession.value.permissionLevel !== 'yolo'
 );
 // Devin's request_permission often carries only a toolCallId, so the stored
 // prompt is a generic fallback. When the tool call is on the timeline, prefer
@@ -16166,22 +16188,46 @@ async function handleUserInputSubmit() {
   }
 }
 
-async function handleApproval(action: 'approve' | 'reject') {
-  if (!currentRealSession.value || !pendingApproval.value) {
+async function handleApproval(action: 'approve' | 'reject' | 'approve_yolo') {
+  const session = currentRealSession.value;
+  const approval = pendingApproval.value;
+  if (!session || !approval || approvalSubmitting.value) {
     return;
   }
-  if (pendingApproval.value.stale) {
-    message.info(pendingApproval.value.recoveryMessage || t('webSession.recoveredActionExpired'));
+  if (approval.stale || !approval.actionable) {
+    message.info(approval.recoveryMessage || t('webSession.recoveredActionExpired'));
     return;
   }
+  if (action === 'approve_yolo' && session.agent !== 'devin' && session.agent !== 'claude') {
+    return;
+  }
+  const { itemId, requestedAt } = approval;
+  approvalSubmitting.value = true;
   try {
-    if (action === 'approve') {
-      await webSessionStore.approveSession(currentRealSession.value.id);
+    if (action === 'approve_yolo') {
+      await webSessionStore.updatePermissionLevel(session.id, 'yolo');
+      // A permission change can resolve or replace the request while in flight.
+      // Only approve the original request, even if the user switches tabs.
+      const currentApproval = webSessionStore.getPendingApproval(session.id);
+      if (
+        !currentApproval ||
+        currentApproval.stale ||
+        !currentApproval.actionable ||
+        currentApproval.itemId !== itemId ||
+        currentApproval.requestedAt !== requestedAt
+      ) {
+        return;
+      }
+    }
+    if (action !== 'reject') {
+      await webSessionStore.approveSession(session.id);
       return;
     }
-    await webSessionStore.rejectSession(currentRealSession.value.id);
+    await webSessionStore.rejectSession(session.id);
   } catch (error) {
     message.error(formatSessionInteractionError(error));
+  } finally {
+    approvalSubmitting.value = false;
   }
 }
 

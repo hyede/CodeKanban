@@ -937,6 +937,8 @@ export default {
       'Approval details are unavailable. Reload them, or stop the current run and try again.',
     approvalDetailsRefresh: 'Reload',
     approvalApprove: 'Approve',
+    approvalApproveYolo: 'Switch to fully automatic',
+    approvalApproveYoloHint: 'Approve this request and switch this session to fully automatic mode',
     approvalReject: 'Reject',
     historyApprovalApproved: 'Approved',
     historyApprovalRejected: 'Rejected',

@@ -50,6 +50,7 @@ func TestBuildExecCommandClaudeUsesStreamJSONInput(t *testing.T) {
 		"--input-format stream-json",
 		"--output-format stream-json",
 		"--permission-prompt-tool stdio",
+		"--allow-dangerously-skip-permissions",
 		"--autocompact auto",
 		"--replay-user-messages",
 		"--permission-mode plan",
@@ -61,6 +62,9 @@ func TestBuildExecCommandClaudeUsesStreamJSONInput(t *testing.T) {
 	}
 	if strings.Contains(joinedArgs, "inspect this repository") {
 		t.Fatalf("expected Claude prompt to be provided via stdin, got args %v", cmd.Args)
+	}
+	if strings.Contains(joinedArgs, "--dangerously-skip-permissions") {
+		t.Fatalf("enabling later bypass must not activate it at startup, got %v", cmd.Args)
 	}
 	stdinText := string(stdinBytes)
 	if strings.Contains(stdinText, "You are operating in planning mode.") {

@@ -902,6 +902,8 @@ export default {
     approvalDetailsUnavailable: '审批详情暂时不可用。你可以重新加载，或停止当前任务后重试。',
     approvalDetailsRefresh: '重新加载',
     approvalApprove: '批准',
+    approvalApproveYolo: '转为完全自动',
+    approvalApproveYoloHint: '批准当前请求，并将此会话转为完全自动',
     approvalReject: '拒绝',
     historyApprovalApproved: '已批准',
     historyApprovalRejected: '已拒绝',

@@ -6510,6 +6510,8 @@ func (m *Manager) buildExecCommand(ctx context.Context, session tables.WebSessio
 			"--output-format", "stream-json",
 			"--input-format", "stream-json",
 			"--permission-prompt-tool", "stdio",
+			// Enable a later user-approved transition without starting in bypass mode.
+			"--allow-dangerously-skip-permissions",
 			"--autocompact", "auto",
 			"--replay-user-messages",
 			"--verbose",
@@ -6702,6 +6704,12 @@ func (m *Manager) respondToApproval(sessionID, action string) error {
 			PermissionDecision: decision,
 		}); err != nil {
 			return err
+		}
+		if decision == "allow" && pending.Kind == pendingServerRequestPlanApproval {
+			if _, err := m.UpdateWorkflowMode(context.Background(), sessionID, WorkflowModeDefault); err != nil {
+				return err
+			}
+			record.WorkflowMode = string(WorkflowModeDefault)
 		}
 		now := time.Now()
 		_, _ = m.appendAndBroadcast(context.Background(), sessionID, record, Event{

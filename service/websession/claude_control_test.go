@@ -280,6 +280,9 @@ func TestClaudeControlRequestAnswersInPlace(t *testing.T) {
 	if !ok || pending.ControlRequestID != "control-1" {
 		t.Fatalf("expected live Claude control request, got %#v", pending)
 	}
+	if _, err := manager.UpdatePermissionLevel(context.Background(), session.ID, PermissionLevelYolo); err != nil {
+		t.Fatal(err)
+	}
 	if err := manager.respondToUserInput(session.ID, pending.ItemID, map[string][]string{
 		pending.Questions[0].ID: {"Red"},
 	}); err != nil {
@@ -294,6 +297,9 @@ func TestClaudeControlRequestAnswersInPlace(t *testing.T) {
 	result := decodeRawObject(response["response"])
 	if stringValue(result["behavior"]) != "allow" {
 		t.Fatalf("expected allow response: %#v", message)
+	}
+	if _, ok := result["updatedPermissions"]; ok {
+		t.Fatalf("answering a question must not change runtime permissions: %#v", result)
 	}
 	updatedInput := decodeRawObject(result["updatedInput"])
 	answers := decodeRawObject(updatedInput["answers"])
