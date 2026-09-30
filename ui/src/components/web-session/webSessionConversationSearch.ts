@@ -147,7 +147,7 @@ export function countWebSessionConversationSearchOccurrences(
   if (!query) return 0;
   if (block.kind === 'user' || block.kind === 'assistant') {
     return countWebSessionConversationSearchHighlights(
-      renderMarkdown(block.text, { textHighlightQuery: query })
+      renderMarkdown(block.text, { textHighlightQuery: query, repairMalformedOuterFence: true })
     );
   }
   // Tool metadata can live behind a disclosure; keep a card-level fallback.
@@ -169,7 +169,10 @@ export function mergeWebSessionConversationSearchMatches(
     const count =
       query && typeof match.text === 'string'
         ? countWebSessionConversationSearchHighlights(
-            renderMarkdown(match.text, { textHighlightQuery: query })
+            renderMarkdown(match.text, {
+              textHighlightQuery: query,
+              repairMalformedOuterFence: true,
+            })
           )
         : 1;
     for (let occurrenceIndex = 0; occurrenceIndex < count; occurrenceIndex += 1) {

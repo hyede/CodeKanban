@@ -22,6 +22,7 @@ import xml from 'highlight.js/lib/languages/xml';
 import yaml from 'highlight.js/lib/languages/yaml';
 import { Marked, type Tokens } from 'marked';
 import { stripMagicContextTags } from '@/utils/magicContextTags';
+import { getStreamingMarkdownSource, repairMalformedOuterFence } from '@/utils/markdownFences';
 import { createMarkdownMathExtension } from '@/utils/markdownMath';
 import { resolveCopyableAbsoluteHref } from '@/utils/messageLinkNavigation';
 
@@ -33,6 +34,8 @@ export interface RenderMarkdownOptions {
   enableLinkCopy?: boolean;
   linkCopyLabel?: string;
   textHighlightQuery?: string;
+  /** Opt in only for completed chat display, never raw text or file previews. */
+  repairMalformedOuterFence?: boolean;
 }
 
 const registeredLanguages = new Set<string>();
@@ -252,6 +255,9 @@ function renderCodeCopyButton(options: RenderMarkdownOptions = {}) {
 }
 
 function renderCodeBlock({ text, lang }: Tokens.Code, options: RenderMarkdownOptions = {}) {
+  if (text.length === 0) {
+    return '';
+  }
   const normalizedLanguage = normalizeLanguage(lang);
   const languageLabel = pickLanguageName(lang);
   const shouldHighlight = !options.disableCodeHighlight && Boolean(normalizedLanguage);
@@ -363,6 +369,7 @@ function markdownOptionsVariantKey(options: RenderMarkdownOptions = {}) {
     enableLinkCopy: !!options.enableLinkCopy,
     linkCopyLabel: options.linkCopyLabel || '',
     textHighlightQuery: options.textHighlightQuery || '',
+    repairMalformedOuterFence: !!options.repairMalformedOuterFence,
   });
 }
 
@@ -379,7 +386,10 @@ export function renderMarkdown(value: string, options: RenderMarkdownOptions = {
 
   // Magic Context markers only ever addressed the model; strip them before the
   // text reaches the reader.
-  const source = stripMagicContextTags(value);
+  const rawSource = stripMagicContextTags(value);
+  const source = options.repairMalformedOuterFence
+    ? repairMalformedOuterFence(rawSource)
+    : rawSource;
   let html: string;
   try {
     const rendered = getMarkdownRenderer(options).parse(source) as string;
@@ -459,7 +469,9 @@ export function renderStreamingMarkdownBlocks(
   }
 
   const variant = markdownOptionsVariantKey(options);
-  const source = stripMagicContextTags(value);
+  // Repair requires a completed message. Streaming only gates the last possible
+  // marker line and otherwise retains the standard parser semantics.
+  const source = getStreamingMarkdownSource(stripMagicContextTags(value));
   const tokens = (getMarkdownRenderer(options).lexer(source) as MarkdownToken[]).filter(
     token => token.type !== 'space'
   );

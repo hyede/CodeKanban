@@ -9,6 +9,34 @@ import {
 } from '@/utils/markdown';
 
 describe('renderMarkdown', () => {
+  it.each(['```text\n```\n', '```\n', '~~~\n~~~\n'])(
+    'omits truly empty code cards and their copy buttons: %j',
+    source => {
+      const html = renderMarkdown(source, { enableCodeBlockCopy: true });
+      expect(html).not.toContain('<pre');
+      expect(html).not.toContain('data-message-code-copy');
+    }
+  );
+
+  it.each([' ', '\t', '\n\n'])('preserves whitespace-only code content: %j', content => {
+    expect(renderMarkdown('```text\n' + content + '\n```\n')).toContain('<pre');
+  });
+
+  it('separates repaired chat rendering from standard rendering and raw copy text', () => {
+    const body = ['Intro', '```text', 'Read source', '```', 'After workflow'];
+    const source = ['```text', ...body, '```'].join('\n');
+    const standard = renderMarkdown(source);
+    const repaired = renderMarkdown(source, { repairMalformedOuterFence: true });
+
+    expect(repaired).toBe(renderMarkdown(['````text', ...body, '````'].join('\n')));
+    expect(repaired).toContain('Read source\n```\nAfter workflow');
+    expect(repaired).not.toContain('<p>After workflow');
+    expect(standard).toContain('<p>After workflow');
+    expect(renderMarkdown(source)).toBe(standard);
+    expect(renderMarkdown(source, { repairMalformedOuterFence: false })).toBe(standard);
+    expect(renderHighlightedPlainText(source)).toBe(source);
+  });
+
   it('highlights fenced code blocks by default', () => {
     const html = renderMarkdown('```go\nfmt.Println("hi")\n```');
 
@@ -184,6 +212,33 @@ describe('renderHighlightedPlainText markers', () => {
 describe('renderStreamingMarkdownBlocks', () => {
   beforeEach(() => {
     resetStreamingMarkdownBlocks();
+  });
+
+  it('waits for a closing fence line without leaking partial markers into code', () => {
+    const prefix = '# Title\n\n```text\nline one\n';
+    const first = renderStreamingMarkdownBlocks('fence', prefix);
+    for (const tail of ['`', '``', '```', '````']) {
+      const next = renderStreamingMarkdownBlocks('fence', prefix + tail);
+      expect(next[0]).toBe(first[0]);
+      expect(next[1]).toBe(first[1]);
+      expect(next[1].html).not.toContain('`');
+    }
+    const completed = prefix + '````\n\nAfter workflow';
+    expect(
+      renderStreamingMarkdownBlocks('fence', completed)
+        .map(block => block.html)
+        .join('')
+    ).toBe(renderMarkdown(completed));
+  });
+
+  it('defers outer-fence repair until the final non-streaming render', () => {
+    const source = '```text\nIntro\n```text\nRead source\n```\nAfter\n```\n';
+    const options = { repairMalformedOuterFence: true };
+    const streamed = renderStreamingMarkdownBlocks('unrepaired', source, options)
+      .map(block => block.html)
+      .join('');
+    expect(streamed).toBe(renderMarkdown(source));
+    expect(renderMarkdown(source, options)).not.toBe(streamed);
   });
 
   it('splits a body into its top-level blocks', () => {

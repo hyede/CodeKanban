@@ -4140,6 +4140,7 @@ const { locale, t } = useLocale();
 const { copyText } = useAppClipboard();
 const { isMobile } = useResponsive();
 const timelineMarkdownRenderOptions = computed(() => ({
+  repairMalformedOuterFence: true,
   enableCodeBlockCopy: true,
   codeBlockCopyLabel: 'copy',
   enableLinkCopy: true,
