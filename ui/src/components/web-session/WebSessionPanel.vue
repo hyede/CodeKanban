@@ -1787,10 +1787,10 @@
                       >
                     </div>
                     <div class="approval-prompt">
-                      {{ pendingApproval.prompt || t('webSession.approvalPromptFallback') }}
+                      {{ pendingApprovalPrompt || t('webSession.approvalPromptFallback') }}
                     </div>
-                    <pre v-if="pendingApproval.command" class="approval-command">{{
-                      pendingApproval.command
+                    <pre v-if="pendingApprovalCommand" class="approval-command">{{
+                      pendingApprovalCommand
                     }}</pre>
                     <div
                       v-if="pendingApproval.stale || !pendingApproval.actionable"
@@ -5951,6 +5951,17 @@ function isPlanChoiceRequestBlock(block: WebSessionBlock) {
   );
 }
 
+// The runtime strip already renders the actionable approval card; hiding the
+// matching history card while the request is still pending avoids showing the
+// same prompt twice. Once resolved the card stays in history as the record.
+function isPendingApprovalRequestBlock(block: WebSessionBlock) {
+  const pending = pendingApproval.value;
+  if (!pending?.itemId || block.detail?.type !== 'approval_request') {
+    return false;
+  }
+  return (block.sourceItemId?.trim() || block.id) === pending.itemId;
+}
+
 const knownSubAgents = computed<WebSessionSubAgent[]>(() =>
   currentRealSession.value ? webSessionStore.getSubAgents(currentRealSession.value.id) : []
 );
@@ -6049,6 +6060,9 @@ const filteredTimelineBlocks = computed(() =>
       return false;
     }
     if (isPlanChoiceRequestBlock(block)) {
+      return false;
+    }
+    if (isPendingApprovalRequestBlock(block)) {
       return false;
     }
     if (!shouldRenderToolBlockInTimeline(block)) {
@@ -6197,6 +6211,41 @@ const streamingMarkdownTargets = computed(() =>
 const pendingApproval = computed(() =>
   currentRealSession.value ? webSessionStore.getPendingApproval(currentRealSession.value.id) : null
 );
+// Devin's request_permission often carries only a toolCallId, so the stored
+// prompt is a generic fallback. When the tool call is on the timeline, prefer
+// its real title/command — this also repairs approvals persisted before the
+// backend started filling those fields.
+function isGenericDevinApprovalPrompt(prompt: string) {
+  return /^Devin is waiting for (permission to continue|approval to use [^.]+)\.$/.test(prompt);
+}
+const pendingApprovalTool = computed(() => {
+  const itemId = pendingApproval.value?.itemId?.trim() ?? '';
+  if (!itemId) {
+    return null;
+  }
+  for (let index = blocks.value.length - 1; index >= 0; index -= 1) {
+    const tool = blocks.value[index].tool;
+    if (tool && tool.id === itemId) {
+      return tool;
+    }
+  }
+  return null;
+});
+const pendingApprovalPrompt = computed(() => {
+  const prompt = pendingApproval.value?.prompt?.trim() ?? '';
+  if (prompt && !isGenericDevinApprovalPrompt(prompt)) {
+    return prompt;
+  }
+  return pendingApprovalTool.value?.name?.trim() || prompt;
+});
+const pendingApprovalCommand = computed(() => {
+  const command = pendingApproval.value?.command?.trim() ?? '';
+  if (command) {
+    return command;
+  }
+  const input = asRecord(pendingApprovalTool.value?.input);
+  return String(input?.command ?? input?.cmd ?? '').trim();
+});
 const approvalRecoveryKey = ref('');
 const approvalRecoveryStatus = ref<'idle' | 'loading' | 'unavailable'>('idle');
 let approvalRecoveryRequestId = 0;
@@ -7044,7 +7093,11 @@ async function forkTimelineUserMessage(block: WebSessionBlock) {
   }
   devinForkPendingItemId.value = block.id;
   try {
-    const target = await webSessionStore.forkSessionMessage(session.projectId, session.id, block.id);
+    const target = await webSessionStore.forkSessionMessage(
+      session.projectId,
+      session.id,
+      block.id
+    );
     const branch = target.session;
     if (!branch) {
       throw new Error(t('common.error'));
@@ -8641,8 +8694,8 @@ const liveStateDetail = computed(() => {
   if (isOptimisticExecuteFeedbackActive.value) {
     return '';
   }
-  if (pendingApproval.value?.prompt) {
-    return pendingApproval.value.prompt;
+  if (pendingApprovalPrompt.value) {
+    return pendingApprovalPrompt.value;
   }
   if (
     displayLiveState.value.phase === 'waiting_approval' ||
@@ -11883,9 +11936,7 @@ function scrollDevinModelMenuToRecent() {
     pending.scrollIntoView({ block: 'nearest' });
     return;
   }
-  const target = menu.querySelector<HTMLElement>(
-    '.n-base-select-option[data-devin-recent="true"]'
-  );
+  const target = menu.querySelector<HTMLElement>('.n-base-select-option[data-devin-recent="true"]');
   if (target) {
     target.scrollIntoView({ block: 'nearest' });
     return;
@@ -12204,9 +12255,8 @@ const modelOptions = computed(() => {
     if (dynamicOptions.length > 0) {
       const groups = filteredDevinModelOptionGroups.value;
       const recentValues = new Set(
-        groups
-          .find(group => group.key === 'devin-recent')
-          ?.children.map(option => option.value) ?? []
+        groups.find(group => group.key === 'devin-recent')?.children.map(option => option.value) ??
+          []
       );
       const specialOptions = devinSpecialModelOptions.value
         .filter(option =>

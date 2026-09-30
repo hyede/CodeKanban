@@ -3854,6 +3854,10 @@ func TestNormalizeCodexReasoningEffortUsesModelCapabilities(t *testing.T) {
 		want   ReasoningEffort
 	}{
 		{name: "Astra Ultra", model: "gpt-6-astra", effort: ReasoningEffortUltra, want: ReasoningEffortUltra},
+		{name: "GPT-6 Sol Ultra", model: "gpt-6-sol", effort: ReasoningEffortUltra, want: ReasoningEffortUltra},
+		{name: "GPT-6 Sol None", model: "gpt-6-sol", effort: ReasoningEffortNone, want: ReasoningEffortDefault},
+		{name: "GPT-6 Luna Max", model: "gpt-6-luna", effort: ReasoningEffortMax, want: ReasoningEffortMax},
+		{name: "GPT-6 Luna Ultra", model: "gpt-6-luna", effort: ReasoningEffortUltra, want: ReasoningEffortDefault},
 		{name: "Sol Ultra", model: "gpt-5.6-sol", effort: ReasoningEffortUltra, want: ReasoningEffortUltra},
 		{name: "Terra Max", model: "gpt-5.6-terra", effort: ReasoningEffortMax, want: ReasoningEffortMax},
 		{name: "Luna Ultra", model: "gpt-5.6-luna", effort: ReasoningEffortUltra, want: ReasoningEffortDefault},
@@ -3864,6 +3868,25 @@ func TestNormalizeCodexReasoningEffortUsesModelCapabilities(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := normalizeCodexReasoningEffort(tt.model, tt.effort); got != tt.want {
 				t.Fatalf("normalizeCodexReasoningEffort(%q, %q) = %q, want %q", tt.model, tt.effort, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUsesCodexIncompleteTurnGuard(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{model: "gpt-6-astra", want: true},
+		{model: "gpt-6-sol", want: true},
+		{model: "gpt-6-luna", want: true},
+		{model: "gpt-5.5", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.model, func(t *testing.T) {
+			if got := usesCodexIncompleteTurnGuard(test.model); got != test.want {
+				t.Fatalf("usesCodexIncompleteTurnGuard(%q) = %t, want %t", test.model, got, test.want)
 			}
 		})
 	}

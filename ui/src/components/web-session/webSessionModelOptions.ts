@@ -14,6 +14,7 @@ import {
   EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_MODEL,
   EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_PERMISSION_LEVEL,
   EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT,
+  GENERIC_CODEX_REASONING_EFFORTS,
 } from '@/constants/webSessionDefaults';
 
 export type WebSessionAgentOption = WebSessionAgent;
@@ -760,6 +761,8 @@ export const CODEX_PRIMARY_MODEL_OPTIONS: WebSessionModelOption[] = [
   { label: '5.6L', value: 'gpt-5.6-luna', menuLabel: 'GPT-5.6 Luna' },
   { label: '5.6T', value: 'gpt-5.6-terra', menuLabel: 'GPT-5.6 Terra' },
   { label: '5.6S', value: 'gpt-5.6-sol', menuLabel: 'GPT-5.6 Sol' },
+  { label: '6L', value: 'gpt-6-luna', menuLabel: 'GPT-6 Luna' },
+  { label: '6S', value: 'gpt-6-sol', menuLabel: 'GPT-6 Sol' },
   { label: '6A', value: 'gpt-6-astra', menuLabel: 'GPT-6 Astra' },
 ];
 
@@ -778,6 +781,8 @@ export const CODEX_MODEL_OPTIONS: WebSessionModelOption[] = [
 
 const CODEX_REASONING_EFFORT_FALLBACKS: Record<string, WebSessionReasoningEffort[]> = {
   'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -798,7 +803,9 @@ export function resolveCodexReasoningEfforts(
     ];
   }
   const fallback = CODEX_REASONING_EFFORT_FALLBACKS[normalizedModel];
-  return fallback ? [...fallback] : null;
+  return fallback
+    ? [...fallback]
+    : GENERIC_CODEX_REASONING_EFFORTS.filter(effort => effort !== 'default');
 }
 
 export const BUILTIN_DEFAULT_MODELS: Record<WebSessionAgentOption, string> = {

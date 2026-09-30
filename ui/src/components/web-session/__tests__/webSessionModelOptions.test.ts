@@ -330,6 +330,8 @@ describe('webSessionModelOptions', () => {
       'gpt-5.6-luna',
       'gpt-5.6-terra',
       'gpt-5.6-sol',
+      'gpt-6-luna',
+      'gpt-6-sol',
       'gpt-6-astra',
     ]);
     expect(CODEX_PRIMARY_MODEL_OPTIONS.map(option => option.label)).toEqual([
@@ -337,6 +339,8 @@ describe('webSessionModelOptions', () => {
       '5.6L',
       '5.6T',
       '5.6S',
+      '6L',
+      '6S',
       '6A',
     ]);
     expect(CODEX_PRIMARY_MODEL_OPTIONS.map(option => option.menuLabel)).toEqual([
@@ -344,6 +348,8 @@ describe('webSessionModelOptions', () => {
       'GPT-5.6 Luna',
       'GPT-5.6 Terra',
       'GPT-5.6 Sol',
+      'GPT-6 Luna',
+      'GPT-6 Sol',
       'GPT-6 Astra',
     ]);
   });
@@ -672,6 +678,22 @@ describe('webSessionModelOptions', () => {
       'max',
       'ultra',
     ]);
+    expect(resolveCodexReasoningEfforts('gpt-6-sol')).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+      'ultra',
+    ]);
+    expect(resolveCodexReasoningEfforts('gpt-6-luna')).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]);
+    expect(resolveCodexReasoningEfforts('gpt-6-luna')).not.toContain('ultra');
     expect(resolveCodexReasoningEfforts('gpt-5.6-terra')).toEqual([
       'low',
       'medium',
@@ -689,6 +711,19 @@ describe('webSessionModelOptions', () => {
     ]);
     expect(resolveCodexReasoningEfforts('gpt-5.6-luna')).not.toContain('none');
     expect(resolveCodexReasoningEfforts('gpt-5.6-luna')).not.toContain('ultra');
+  });
+
+  it('offers max and ultra for custom Codex models without catalog metadata', () => {
+    expect(resolveCodexReasoningEfforts('custom-codex-model')).toEqual([
+      'none',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+      'ultra',
+    ]);
+    expect(resolveCodexReasoningEfforts('')).toBeNull();
   });
 });
 

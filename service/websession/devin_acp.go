@@ -656,7 +656,7 @@ func (m *Manager) dispatchDevinACPMessage(client *devinACPClient, session tables
 	}
 	if message.Method == "session/request_permission" {
 		if mode == devinACPDispatchLive || mode == devinACPDispatchReplay {
-			m.handleDevinPermissionRequest(client, session, run, message)
+			m.handleDevinPermissionRequest(client, session, run, proj, message)
 		} else if message.ID != nil {
 			_ = client.respond(message.ID, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
 		}
@@ -808,6 +808,25 @@ func (p *devinRunProjection) takeDevinCompactionToolID() string {
 	id := p.compactionToolID
 	p.compactionToolID = ""
 	return id
+}
+
+// devinToolSnapshot returns a copy of the tracked tool call, or nil when the
+// projection has not seen it. session/request_permission payloads often carry
+// only a toolCallId, so the approval card borrows the title/input captured
+// from the earlier tool_call update.
+func (p *devinRunProjection) devinToolSnapshot(toolCallID string) *devinToolState {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	tool := p.tools[strings.TrimSpace(toolCallID)]
+	if tool == nil {
+		return nil
+	}
+	clone := *tool
+	clone.meta = cloneMap(tool.meta)
+	return &clone
 }
 
 // messageState returns the streaming state for a sub-agent context.
@@ -1771,7 +1790,7 @@ func (m *Manager) syncDevinSessionMode(ctx context.Context, sessionID string) {
 	m.applyDevinSessionMode(ctx, client, record, nativeSessionID, modes)
 }
 
-func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session tables.WebSessionTable, run *activeRun, message devinACPMessage) {
+func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, message devinACPMessage) {
 	var params map[string]any
 	_ = json.Unmarshal(message.Params, &params)
 	options, _ := params["options"].([]any)
@@ -1784,19 +1803,46 @@ func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session t
 	autoApprove := !planExit && (effectivePermissionLevel(session) == PermissionLevelYolo ||
 		(effectivePermissionLevel(session) == PermissionLevelElevated && !client.modeAppliedSnapshot()))
 	if !autoApprove {
+		itemID := strings.TrimSpace(stringValue(decodeRawObject(params["toolCall"])["toolCallId"]))
+		wantKind := pendingServerRequestCommandApproval
+		if planExit {
+			wantKind = pendingServerRequestPlanApproval
+		}
+		// session/load replays and re-attach re-requests resend the same
+		// request_permission; keep the single pending request but retarget the
+		// response at the latest JSON-RPC id instead of stacking duplicate
+		// approval cards in the timeline.
+		if existing, ok := run.pendingServerRequest(); ok && existing.Kind == wantKind && itemID != "" && existing.ItemID == itemID {
+			existing.RawID = append(json.RawMessage(nil), message.ID...)
+			existing.Permissions = params
+			// The retried request may now resolve tool details that were
+			// missing when the pending request was first recorded.
+			tracked := proj.devinToolSnapshot(itemID)
+			if wantKind != pendingServerRequestPlanApproval &&
+				(existing.Prompt == "" || existing.Prompt == devinPermissionFallbackPrompt) {
+				if prompt := devinPermissionPrompt(params, tracked); prompt != "" {
+					existing.Prompt = prompt
+				}
+			}
+			if existing.Command == "" {
+				existing.Command = devinPermissionCommand(params, tracked)
+			}
+			run.setPendingServerRequest(existing)
+			return
+		}
+		tracked := proj.devinToolSnapshot(itemID)
 		now := time.Now()
 		request := &pendingServerRequest{
 			RawID:       append(json.RawMessage(nil), message.ID...),
-			Kind:        pendingServerRequestCommandApproval,
-			ItemID:      strings.TrimSpace(stringValue(decodeRawObject(params["toolCall"])["toolCallId"])),
-			Prompt:      devinPermissionPrompt(params),
-			Command:     devinPermissionCommand(params),
+			Kind:        wantKind,
+			ItemID:      itemID,
+			Prompt:      devinPermissionPrompt(params, tracked),
+			Command:     devinPermissionCommand(params, tracked),
 			RequestedAt: &now,
 			Permissions: params,
 		}
 		assistantState := AssistantStateWaitingApproval
 		if planExit {
-			request.Kind = pendingServerRequestPlanApproval
 			request.Prompt = "Exit plan mode"
 			run.markCompletedPlanTool()
 			assistantState = AssistantStateWaitingPlanApproval
@@ -1849,19 +1895,39 @@ func devinPermissionIsPlanExit(params map[string]any) bool {
 	return devinToolCallIsPlanExit(decodeRawObject(params["toolCall"]))
 }
 
-func devinPermissionPrompt(params map[string]any) string {
+const devinPermissionFallbackPrompt = "Devin is waiting for permission to continue."
+
+func devinPermissionPrompt(params map[string]any, tracked *devinToolState) string {
 	if reason := strings.TrimSpace(stringValue(params["reason"])); reason != "" {
 		return reason
 	}
 	if title := strings.TrimSpace(stringValue(decodeRawObject(params["toolCall"])["title"])); title != "" {
 		return title
 	}
-	return "Devin is waiting for permission to continue."
+	if tracked != nil {
+		if name := strings.TrimSpace(tracked.name); name != "" {
+			return name
+		}
+	}
+	if kind := strings.TrimSpace(stringValue(decodeRawObject(params["toolCall"])["kind"])); kind != "" {
+		return fmt.Sprintf("Devin is waiting for approval to use %s.", kind)
+	}
+	return devinPermissionFallbackPrompt
 }
 
-func devinPermissionCommand(params map[string]any) string {
-	rawInput := decodeRawObject(decodeRawObject(params["toolCall"])["rawInput"])
-	return strings.TrimSpace(firstNonEmpty(stringValue(rawInput["command"]), stringValue(rawInput["cmd"])))
+func devinPermissionCommand(params map[string]any, tracked *devinToolState) string {
+	if command := devinToolInputCommand(decodeRawObject(params["toolCall"])["rawInput"]); command != "" {
+		return command
+	}
+	if tracked != nil {
+		return devinToolInputCommand(tracked.input)
+	}
+	return ""
+}
+
+func devinToolInputCommand(rawInput any) string {
+	input := decodeRawObject(rawInput)
+	return strings.TrimSpace(firstNonEmpty(stringValue(input["command"]), stringValue(input["cmd"])))
 }
 
 func devinPermissionResponsePayload(action string, request *pendingServerRequest, session tables.WebSessionTable) any {

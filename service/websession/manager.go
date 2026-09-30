@@ -7898,7 +7898,7 @@ func normalizeCodexReasoningEffort(modelName string, effort ReasoningEffort) Rea
 	normalized := normalizeReasoningEffort(effort)
 	modelName = strings.ToLower(strings.TrimSpace(modelName))
 	switch modelName {
-	case "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra":
+	case "gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra":
 		switch normalized {
 		case ReasoningEffortDefault,
 			ReasoningEffortLow,
@@ -7909,7 +7909,7 @@ func normalizeCodexReasoningEffort(modelName string, effort ReasoningEffort) Rea
 			ReasoningEffortUltra:
 			return normalized
 		}
-	case "gpt-5.6-luna":
+	case "gpt-6-luna", "gpt-5.6-luna":
 		switch normalized {
 		case ReasoningEffortDefault,
 			ReasoningEffortLow,
