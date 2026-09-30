@@ -283,6 +283,7 @@ export interface DeveloperConfig {
   webSessionPiDefaultReasoningEffort: WebSessionAgentDefaultReasoningEffort;
   webSessionDevinDefaultModel: string;
   webSessionDevinDefaultReasoningEffort: WebSessionAgentDefaultReasoningEffort;
+  webSessionDevinDefaultPermissionLevel: WebSessionAgentDefaultPermissionLevel;
   webSessionAutoRetryDefaults: WebSessionAutoRetryDefaultsConfig;
   webSessionActiveCallTimeout: WebSessionActiveCallTimeoutConfig;
 }
@@ -383,6 +384,8 @@ export type WebSessionCodexDefaultReasoningEffort = WebSessionReasoningEffort | 
 export type WebSessionAgentDefaultReasoningEffort = WebSessionCodexDefaultReasoningEffort;
 
 export type WebSessionCodexDefaultPermissionLevel = 'default' | 'standard' | 'elevated' | 'yolo';
+
+export type WebSessionAgentDefaultPermissionLevel = WebSessionCodexDefaultPermissionLevel;
 
 export type WebSessionClaudeDefaultRuntime = 'default' | 'claude' | 'ccr';
 

@@ -451,7 +451,7 @@ func TestManagerCreateSessionUsesConfiguredCodexDefaultsAndExplicitOverrides(t *
 		DefaultAgentReasoningEffort: func(Agent) ReasoningEffort {
 			return configuredEffort
 		},
-		DefaultCodexPermissionLevel: func() string {
+		DefaultAgentPermissionLevel: func(Agent) string {
 			return configuredPermission
 		},
 	}, zap.NewNop())
@@ -586,7 +586,7 @@ func TestManagerCreateSessionResolvesCodexDefaultSentinels(t *testing.T) {
 		DefaultAgentReasoningEffort: func(Agent) ReasoningEffort {
 			return configuredEffort
 		},
-		DefaultCodexPermissionLevel: func() string {
+		DefaultAgentPermissionLevel: func(Agent) string {
 			return configuredPermission
 		},
 	}, zap.NewNop())
@@ -621,6 +621,61 @@ func TestManagerCreateSessionResolvesCodexDefaultSentinels(t *testing.T) {
 		modelDefaults.ReasoningEffort != ReasoningEffortDefault ||
 		modelDefaults.PermissionLevel != PermissionLevelDefault {
 		t.Fatalf("expected model-default reasoning and standard permission, got %#v", modelDefaults)
+	}
+}
+
+func TestManagerCreateSessionUsesConfiguredDevinPermissionDefault(t *testing.T) {
+	cleanup := initTestDB(t)
+	defer cleanup()
+
+	project := seedProject(t)
+	configuredPermission := utils.WebSessionCodexStandardPermission
+	manager, err := NewManager(Config{
+		DataDir: t.TempDir(),
+		DefaultAgentPermissionLevel: func(agent Agent) string {
+			if agent == AgentDevin {
+				return configuredPermission
+			}
+			return utils.WebSessionCodexDefaultSetting
+		},
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	devinSession, err := manager.CreateSession(context.Background(), CreateParams{
+		ProjectID: project.ID,
+		Agent:     AgentDevin,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession returned error: %v", err)
+	}
+	if devinSession.PermissionLevel != PermissionLevelDefault {
+		t.Fatalf("expected devin session to use configured standard permission, got %q", devinSession.PermissionLevel)
+	}
+
+	configuredPermission = string(PermissionLevelYolo)
+	yoloSession, err := manager.CreateSession(context.Background(), CreateParams{
+		ProjectID: project.ID,
+		Agent:     AgentDevin,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession after config update returned error: %v", err)
+	}
+	if yoloSession.PermissionLevel != PermissionLevelYolo {
+		t.Fatalf("expected devin session to use configured yolo permission, got %q", yoloSession.PermissionLevel)
+	}
+
+	explicit, err := manager.CreateSession(context.Background(), CreateParams{
+		ProjectID:       project.ID,
+		Agent:           AgentDevin,
+		PermissionLevel: PermissionLevelElevated,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession with explicit permission returned error: %v", err)
+	}
+	if explicit.PermissionLevel != PermissionLevelElevated {
+		t.Fatalf("expected explicit permission to win, got %q", explicit.PermissionLevel)
 	}
 }
 

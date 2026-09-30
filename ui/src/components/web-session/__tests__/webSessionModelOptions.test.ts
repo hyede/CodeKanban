@@ -423,7 +423,10 @@ describe('webSessionModelOptions', () => {
     expect(defaultReasoningEffortForAgent('devin', 'low')).toBe('low');
     expect(defaultReasoningEffortForAgent('devin', 'model_default')).toBe('default');
     expect(defaultPermissionLevelForAgent('pi', 'standard')).toBe('elevated');
-    expect(defaultPermissionLevelForAgent('devin', 'standard')).toBe('elevated');
+    expect(defaultPermissionLevelForAgent('devin')).toBe('elevated');
+    expect(defaultPermissionLevelForAgent('devin', 'standard')).toBe('default');
+    expect(defaultPermissionLevelForAgent('devin', 'elevated')).toBe('elevated');
+    expect(defaultPermissionLevelForAgent('devin', 'yolo')).toBe('yolo');
   });
 
   it('uses model-specific reasoning efforts from the Codex catalog', () => {

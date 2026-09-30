@@ -123,7 +123,7 @@ type Config struct {
 	CodexClientVersion          func() string
 	DefaultCodexContextWindow   func() int64
 	DefaultAgentReasoningEffort func(agent Agent) ReasoningEffort
-	DefaultCodexPermissionLevel func() string
+	DefaultAgentPermissionLevel func(agent Agent) string
 	DefaultCodexSyncMode        func() SyncMode
 	AutoRetryDefaultsConfig     func() utils.WebSessionAutoRetryDefaultsConfig
 	ActiveCallTimeoutConfig     func() utils.WebSessionActiveCallTimeoutConfig
@@ -7763,12 +7763,16 @@ func (m *Manager) resolveSessionPermissionLevel(
 	agent Agent,
 	provided PermissionLevel,
 ) PermissionLevel {
-	if strings.TrimSpace(string(provided)) != "" || normalizeAgent(agent) != AgentCodex {
+	if strings.TrimSpace(string(provided)) != "" {
+		return normalizePermissionLevel(provided)
+	}
+	normalizedAgent := normalizeAgent(agent)
+	if normalizedAgent != AgentCodex && normalizedAgent != AgentDevin {
 		return normalizePermissionLevel(provided)
 	}
 	configured := utils.WebSessionCodexDefaultSetting
-	if m != nil && m.cfg.DefaultCodexPermissionLevel != nil {
-		if value := strings.TrimSpace(m.cfg.DefaultCodexPermissionLevel()); value != "" {
+	if m != nil && m.cfg.DefaultAgentPermissionLevel != nil {
+		if value := strings.TrimSpace(m.cfg.DefaultAgentPermissionLevel(normalizedAgent)); value != "" {
 			configured = strings.ToLower(value)
 		}
 	}

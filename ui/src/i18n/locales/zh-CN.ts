@@ -1569,6 +1569,8 @@ export default {
       '用于之后新建的 Devin 会话。可选择列表中的模型，也可直接输入自定义模型名称。',
     webSessionDevinDefaultReasoningEffortTip:
       '用于之后新建的 Devin 会话；可选强度会根据当前默认模型的能力进行限制。',
+    webSessionAgentDefaultPermissionLevel: '默认权限档位',
+    webSessionDevinDefaultPermissionLevelTip: '用于之后新建的 Devin 会话。',
     webSessionActiveCallTimeout: '活跃调用超时自动恢复',
     webSessionActiveCallTimeoutTip:
       '仅作用于后端 Codex 会话。当受监控的活跃调用持续超过阈值时，CodeKanban 会自动打断当前 run，并补发一条继续 prompt。',

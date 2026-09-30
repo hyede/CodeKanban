@@ -1,7 +1,7 @@
 import type {
   WebSessionAgent,
+  WebSessionAgentDefaultPermissionLevel,
   WebSessionCCRModelInfo,
-  WebSessionCodexDefaultPermissionLevel,
   WebSessionCodexDefaultReasoningEffort,
   WebSessionDevinModelInfo,
   WebSessionPiModelInfo,
@@ -842,15 +842,15 @@ export function defaultReasoningEffortForAgent(
 
 export function defaultPermissionLevelForAgent(
   agent: WebSessionAgentOption,
-  configuredCodexPermission: WebSessionCodexDefaultPermissionLevel = DEFAULT_WEB_SESSION_CODEX_PERMISSION_LEVEL
+  configuredPermission: WebSessionAgentDefaultPermissionLevel = DEFAULT_WEB_SESSION_CODEX_PERMISSION_LEVEL
 ): 'default' | 'elevated' | 'yolo' {
-  if (agent !== 'codex') {
+  if (agent !== 'codex' && agent !== 'devin') {
     return 'elevated';
   }
-  if (configuredCodexPermission === 'standard') {
+  if (configuredPermission === 'standard') {
     return 'default';
   }
-  return configuredCodexPermission === 'default'
+  return configuredPermission === 'default'
     ? EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_PERMISSION_LEVEL
-    : configuredCodexPermission;
+    : configuredPermission;
 }

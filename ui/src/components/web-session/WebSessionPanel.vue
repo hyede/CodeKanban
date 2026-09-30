@@ -11724,11 +11724,14 @@ function defaultReasoningEffortForAgent(agent: WebSessionAgent): WebSessionReaso
   return resolveDefaultReasoningEffortForAgent(agent, configuredDefaultReasoningEffortFor(agent));
 }
 
+function configuredDefaultPermissionLevelFor(agent: WebSessionAgent) {
+  return agent === 'devin'
+    ? developerConfig.value.webSessionDevinDefaultPermissionLevel
+    : developerConfig.value.webSessionCodexDefaultPermissionLevel;
+}
+
 function defaultPermissionLevelForAgent(agent: WebSessionAgent): 'default' | 'elevated' | 'yolo' {
-  return resolveDefaultPermissionLevelForAgent(
-    agent,
-    developerConfig.value.webSessionCodexDefaultPermissionLevel
-  );
+  return resolveDefaultPermissionLevelForAgent(agent, configuredDefaultPermissionLevelFor(agent));
 }
 
 function reasoningEffortLabel(effort: WebSessionReasoningEffort) {

@@ -1647,6 +1647,8 @@ export default {
       'Used for newly created Devin sessions. Choose a listed model or enter a custom model name.',
     webSessionDevinDefaultReasoningEffortTip:
       'Used for newly created Devin sessions. Available efforts follow the selected model capabilities.',
+    webSessionAgentDefaultPermissionLevel: 'Default Permission Level',
+    webSessionDevinDefaultPermissionLevelTip: 'Used for newly created Devin sessions.',
     webSessionActiveCallTimeout: 'Timed-out active call recovery',
     webSessionActiveCallTimeoutTip:
       'Backend-only Codex safeguard. When a monitored active call keeps running past the threshold, CodeKanban interrupts the run and sends a follow-up prompt automatically.',
