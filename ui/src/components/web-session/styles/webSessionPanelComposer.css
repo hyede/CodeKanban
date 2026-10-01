@@ -537,9 +537,12 @@
   color: var(--n-warning-color);
 }
 
+:global(.web-session-model-select-menu.is-pi-model-catalog .n-base-select-menu__header) {
+  padding: 4px 6px;
+}
+
 :global(.pi-model-search-header) {
-  padding: 2px 4px;
-  border-bottom: 1px solid var(--n-action-divider-color);
+  padding: 0;
 }
 
 :global(.pi-model-search-header .n-input),
