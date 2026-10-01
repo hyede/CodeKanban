@@ -1200,6 +1200,7 @@
                     :label="reasoningDisclosureLabel(item)"
                     :summary="reasoningDisclosurePreview(item)"
                     :streaming="isReasoningStreaming(item)"
+                    :plain="isPiReasoningBlock(item)"
                     :time="formatTime(item.timestamp)"
                     :time-title="formatDateTime(item.timestamp)"
                     :expanded="isReasoningDisclosureExpanded(item.tool)"
@@ -13263,7 +13264,7 @@ function isReasoningDisclosureExpanded(tool: NonNullable<WebSessionBlock['tool']
   if (claimed !== undefined) {
     return claimed;
   }
-  return currentSession.value?.agent === 'pi' && tool.status === 'running';
+  return false;
 }
 
 function toggleReasoningDisclosure(tool: NonNullable<WebSessionBlock['tool']>) {

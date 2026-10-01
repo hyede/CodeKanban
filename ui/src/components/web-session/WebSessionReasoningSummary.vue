@@ -10,12 +10,42 @@ const props = defineProps<{
   /** Latest thought line, so a collapsed header reads like a live ticker. */
   summary?: string;
   streaming?: boolean;
+  plain?: boolean;
 }>();
 
 defineEmits<{ toggle: [] }>();
 
 const bodyRef = ref<HTMLElement | null>(null);
 const contentRef = ref<HTMLElement | null>(null);
+const previewRef = ref<HTMLElement | null>(null);
+let previewObserver: ResizeObserver | null = null;
+
+function syncPreviewScroll() {
+  const preview = previewRef.value;
+  if (preview) {
+    preview.scrollLeft = props.plain && props.streaming ? preview.scrollWidth : 0;
+  }
+}
+
+watch(
+  () => [props.summary, props.streaming, props.plain] as const,
+  () => nextTick(syncPreviewScroll),
+  { immediate: true, flush: 'post' }
+);
+
+watch(
+  previewRef,
+  preview => {
+    previewObserver?.disconnect();
+    previewObserver = null;
+    if (preview && typeof ResizeObserver !== 'undefined') {
+      previewObserver = new ResizeObserver(syncPreviewScroll);
+      previewObserver.observe(preview);
+    }
+    syncPreviewScroll();
+  },
+  { flush: 'post' }
+);
 
 /**
  * The body grows with its content up to the height cap, then keeps streaming
@@ -99,23 +129,26 @@ watch(
   }
 );
 
-onBeforeUnmount(stopContentObservation);
+onBeforeUnmount(() => {
+  stopContentObservation();
+  previewObserver?.disconnect();
+});
 </script>
 
 <template>
-  <div v-if="text.trim()" class="reasoning-summary">
+  <div v-if="text.trim()" class="reasoning-summary" :class="{ 'is-plain': plain }">
     <button
       type="button"
       class="reasoning-summary-toggle"
       :aria-expanded="Boolean(expanded)"
       @click="$emit('toggle')"
     >
-      <span aria-hidden="true">{{ expanded ? '▾' : '▸' }}</span>
+      <span v-if="!plain" aria-hidden="true">{{ expanded ? '▾' : '▸' }}</span>
       <span class="reasoning-summary-label" :class="{ 'is-streaming': streaming }">
-        <span v-if="streaming" class="reasoning-summary-dot" aria-hidden="true"></span>
         {{ label }}
+        <span v-if="streaming" class="reasoning-summary-dot" aria-hidden="true"></span>
       </span>
-      <span v-if="summary" class="reasoning-summary-preview">{{ summary }}</span>
+      <span v-if="summary" ref="previewRef" class="reasoning-summary-preview">{{ summary }}</span>
       <span class="reasoning-summary-time" :title="timeTitle">{{ time }}</span>
     </button>
     <div
@@ -150,6 +183,43 @@ onBeforeUnmount(stopContentObservation);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+}
+
+.reasoning-summary.is-plain {
+  width: 100%;
+  overflow: hidden;
+}
+
+.is-plain .reasoning-summary-toggle {
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+}
+
+.is-plain .reasoning-summary-time {
+  order: 1;
+}
+
+.is-plain .reasoning-summary-preview {
+  order: 2;
+  flex-basis: 0;
+}
+
+.is-plain .reasoning-summary-label,
+.is-plain .reasoning-summary-time {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 40%;
+  flex-shrink: 1;
+}
+
+.is-plain:has(.is-streaming) .reasoning-summary-preview {
+  text-overflow: clip;
+}
+
+.is-plain .reasoning-summary-body {
+  margin-left: 0;
 }
 
 .reasoning-summary-label {
