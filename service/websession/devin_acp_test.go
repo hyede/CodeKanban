@@ -980,6 +980,40 @@ func TestDevinACPPromptUsageFallback(t *testing.T) {
 	}
 }
 
+func TestDevinQuotaStatsNotification(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	run := &activeRun{runID: "devin-quota-stats"}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	// turn_stats carries per-request acuCost/creditCost at the top level.
+	manager.handleDevinQuotaStatsNotification(sess, run, proj, json.RawMessage(
+		`{"sessionId":"native-1","turnClientMessageId":"msg-1","turnRequestId":"req-1","acuCost":0.5,"creditCost":0.25}`))
+	// agent_stopped repeats the same turn's stats under stats{} — deduped by
+	// requestId so the quota must not double count.
+	manager.handleDevinQuotaStatsNotification(sess, run, proj, json.RawMessage(
+		`{"sessionId":"native-1","cause":"complete","stats":{"requestId":"req-1","acuCost":0.5,"creditCost":0.25}}`))
+	// A later turn's stats accumulate on top.
+	manager.handleDevinQuotaStatsNotification(sess, run, proj, json.RawMessage(
+		`{"sessionId":"native-1","turnRequestId":"req-2","acuCost":0.75}`))
+	// Notifications without quota fields are ignored entirely.
+	manager.handleDevinQuotaStatsNotification(sess, run, proj, json.RawMessage(
+		`{"sessionId":"native-1","turnRequestId":"req-3","inputTokens":10}`))
+
+	record, err := manager.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if record.TotalAcuCost != 1.25 || record.TotalCreditCost != 0.25 {
+		t.Fatalf("unexpected quota totals: acu=%v credit=%v", record.TotalAcuCost, record.TotalCreditCost)
+	}
+	summary := manager.mapSessionSummary(record)
+	if summary.Usage.AcuCost != 1.25 || summary.Usage.CreditCost != 0.25 {
+		t.Fatalf("summary quota totals = acu %v credit %v",
+			summary.Usage.AcuCost, summary.Usage.CreditCost)
+	}
+}
+
 func TestDevinCompactionNotification(t *testing.T) {
 	manager, session := newDevinSubAgentTestManager(t)
 	run := &activeRun{runID: "devin-compact"}

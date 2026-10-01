@@ -676,6 +676,12 @@ func (m *Manager) dispatchDevinACPMessage(client *devinACPClient, session tables
 		}
 		return
 	}
+	if isDevinQuotaStatsNotification(message.Method) {
+		if mode == devinACPDispatchLive {
+			m.handleDevinQuotaStatsNotification(session, run, proj, message.Params)
+		}
+		return
+	}
 	if message.ID != nil && strings.TrimSpace(message.Method) != "" {
 		_ = client.respondError(message.ID, -32601, "unsupported method: "+message.Method)
 	}
@@ -750,6 +756,12 @@ type devinRunProjection struct {
 	// plain update plus a second copy tagged with subagent_context for the
 	// same request, and only the first must be counted.
 	usageSignatures map[string]bool
+	// turnStatRequestIDs dedupes per-request quota reports carried by
+	// cognition.ai/turn_stats and cognition.ai/agent_stopped — the same turn's
+	// stats appear in both notifications. Kept separate from usageSignatures
+	// because sawDevinUsageUpdate treats an empty map as "no usage_update
+	// arrived" and falls back to the prompt response's usage block.
+	turnStatRequestIDs map[string]bool
 	// compactionToolID is the open context-compaction tool event, if any.
 	compactionToolID string
 }
@@ -764,10 +776,27 @@ type devinToolState struct {
 
 func newDevinRunProjection() *devinRunProjection {
 	return &devinRunProjection{
-		messages:        make(map[string]*devinMessageState),
-		tools:           make(map[string]*devinToolState),
-		usageSignatures: make(map[string]bool),
+		messages:           make(map[string]*devinMessageState),
+		tools:              make(map[string]*devinToolState),
+		usageSignatures:    make(map[string]bool),
+		turnStatRequestIDs: make(map[string]bool),
 	}
+}
+
+// recordDevinTurnStatRequest reports whether requestID's quota stats were
+// already folded in during this run; the first occurrence is recorded and
+// returns false. An empty requestID is never deduped.
+func (p *devinRunProjection) recordDevinTurnStatRequest(requestID string) bool {
+	if requestID == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.turnStatRequestIDs[requestID] {
+		return true
+	}
+	p.turnStatRequestIDs[requestID] = true
+	return false
 }
 
 // recordDevinUsageSignature reports whether signature was already observed in
@@ -1663,6 +1692,68 @@ func (m *Manager) applyDevinPromptUsageFallback(session tables.WebSessionTable, 
 // method; on the wire the agent prefixes private notifications with "_".
 func isDevinCompactionNotification(method string) bool {
 	return method == "_cognition.ai/compaction" || method == "cognition.ai/compaction"
+}
+
+// isDevinQuotaStatsNotification matches the private notifications that carry
+// per-turn quota stats: cognition.ai/turn_stats fires once per request and
+// cognition.ai/agent_stopped repeats the last turn's stats under params.stats.
+func isDevinQuotaStatsNotification(method string) bool {
+	switch method {
+	case "_cognition.ai/turn_stats", "cognition.ai/turn_stats",
+		"_cognition.ai/agent_stopped", "cognition.ai/agent_stopped":
+		return true
+	}
+	return false
+}
+
+// handleDevinQuotaStatsNotification folds acuCost/creditCost from turn_stats
+// and agent_stopped into the session totals. usage_update only reports token
+// counts, so per-request quota costs ride on these notifications instead —
+// acuCost/creditCost are per-request deltas here, while usage_update's
+// totalAcuCost/totalCreditCost remain cumulative and overwrite the sums.
+// agent_stopped repeats the last turn's stats under params.stats, so reports
+// dedupe by turnRequestId/requestId.
+func (m *Manager) handleDevinQuotaStatsNotification(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, raw json.RawMessage) {
+	params := decodeRawObject(raw)
+	stats := params
+	if nested := decodeRawObject(params["stats"]); len(nested) > 0 {
+		stats = nested
+	}
+	acu, hasAcu := devinUsageQuota(stats, "acuCost", "cognition.ai/acuCost")
+	credit, hasCredit := devinUsageQuota(stats, "creditCost", "cognition.ai/creditCost")
+	if (!hasAcu || acu <= 0) && (!hasCredit || credit <= 0) {
+		return
+	}
+	requestID := stringValue(params["turnRequestId"])
+	if requestID == "" {
+		requestID = stringValue(stats["requestId"])
+	}
+	if requestID == "" {
+		requestID = stringValue(params["requestId"])
+	}
+	if proj.recordDevinTurnStatRequest(requestID) {
+		return
+	}
+	updates := map[string]any{"updated_at": time.Now()}
+	if hasAcu && acu > 0 {
+		updates["total_acu_cost"] = gorm.Expr("total_acu_cost + ?", acu)
+	}
+	if hasCredit && credit > 0 {
+		updates["total_credit_cost"] = gorm.Expr("total_credit_cost + ?", credit)
+	}
+	_ = m.updateRuntimeState(context.Background(), session.ID, updates)
+	eventPayload := map[string]any{}
+	if hasAcu && acu > 0 {
+		eventPayload["acu"] = acu
+	}
+	if hasCredit && credit > 0 {
+		eventPayload["crd"] = credit
+	}
+	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
+		ID: utils.NewID(), Type: "usage", RunID: run.runID, Timestamp: time.Now(),
+		Payload: eventPayload,
+	})
+	m.broadcastSessionSummary(context.Background(), session.ID)
 }
 
 // handleDevinCompactionNotification projects cognition.ai/compaction

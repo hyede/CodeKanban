@@ -80,69 +80,79 @@ type wireFrame struct {
 }
 
 type wireSess struct {
-	ID                                string         `json:"id"`
-	Revision                          string         `json:"rev,omitempty"`
-	ProjectID                         string         `json:"pid"`
-	WorktreeID                        *string        `json:"wid,omitempty"`
-	OrderIndex                        float64        `json:"oi"`
-	Agent                             string         `json:"ag"`
-	ClaudeRuntime                     string         `json:"cr,omitempty"`
-	Backend                           string         `json:"be"`
-	Model                             string         `json:"md"`
-	ReasoningEffort                   string         `json:"re"`
-	WorkflowMode                      string         `json:"wm"`
-	PermissionLevel                   string         `json:"pl"`
-	ActiveCallTimeoutEnabled          bool           `json:"acte"`
-	ContextWindowSetting              int64          `json:"cwset"`
-	AppliedContextWindowSetting       *int64         `json:"acwset"`
-	CodexModelMetadataFallback        bool           `json:"cmmf"`
-	AutoRetryEnabled                  bool           `json:"ae"`
-	AutoRetryPolicyMode               string         `json:"arpm"`
-	AutoRetryScope                    string         `json:"ars"`
-	AutoRetryPreset                   string         `json:"arp"`
-	AutoRetryMaxAttempts              int            `json:"aram"`
-	AutoRetryDispatchPendingOnFailure bool           `json:"ardpf"`
-	Title                             string         `json:"ttl"`
-	Cwd                               string         `json:"cwd"`
-	NativeSessionID                   *string        `json:"nsid,omitempty"`
-	NativeLeafID                      *string        `json:"nlid,omitempty"`
-	SourceRevision                    *string        `json:"srev,omitempty"`
-	CyberPolicyFlagged                bool           `json:"cpf,omitempty"`
-	HasScheduledPlanExecution         bool           `json:"spe,omitempty"`
-	Status                            string         `json:"st"`
-	AssistantState                    string         `json:"ast,omitempty"`
-	Unread                            bool           `json:"unr"`
-	AttentionRevision                 string         `json:"ar,omitempty"`
-	HistoryEpoch                      string         `json:"he,omitempty"`
-	EventCursor                       string         `json:"ec,omitempty"`
-	ArchivedAt                        *int64         `json:"aa,omitempty"`
-	ActivityAt                        int64          `json:"act"`
-	StatusUpdatedAt                   *int64         `json:"sta,omitempty"`
-	CreatedAt                         int64          `json:"ca"`
-	LastUpdated                       int64          `json:"lu"`
-	LastMessageAt                     *int64         `json:"lma,omitempty"`
-	AssistantStateUpdatedAt           *int64         `json:"asu,omitempty"`
-	SourceKind                        string         `json:"sk"`
-	SyncState                         string         `json:"ss"`
-	LastSyncMode                      string         `json:"lsm,omitempty"`
-	SourceCreatedAt                   *int64         `json:"sca,omitempty"`
-	SourceUpdatedAt                   *int64         `json:"sua,omitempty"`
-	LastSyncedAt                      *int64         `json:"lsa,omitempty"`
-	ThreadPath                        *string        `json:"tp,omitempty"`
-	ThreadPreview                     *string        `json:"tpv,omitempty"`
-	TurnCount                         int            `json:"tc"`
-	ItemCount                         int            `json:"ic"`
-	SyncError                         *string        `json:"se,omitempty"`
-	Usage                             wireUsage      `json:"usa"`
-	LatestTurnUsage                   *wireCtxEst    `json:"ltu,omitempty"`
-	ContextEstimate                   wireCtxEst     `json:"cea"`
-	ContextEstimateMode               string         `json:"cem"`
-	LastContextCompactionAt           *int64         `json:"lcca,omitempty"`
-	Cost                              float64        `json:"cost"`
-	ContextWindowTokens               *int64         `json:"cwt,omitempty"`
-	ContextWindowSource               string         `json:"cws"`
-	Goal                              *wireGoal      `json:"goal,omitempty"`
-	WorkTiming                        wireWorkTiming `json:"wt"`
+	ID                                string          `json:"id"`
+	Revision                          string          `json:"rev,omitempty"`
+	ProjectID                         string          `json:"pid"`
+	WorktreeID                        *string         `json:"wid,omitempty"`
+	OrderIndex                        float64         `json:"oi"`
+	Agent                             string          `json:"ag"`
+	ClaudeRuntime                     string          `json:"cr,omitempty"`
+	Backend                           string          `json:"be"`
+	Model                             string          `json:"md"`
+	ReasoningEffort                   string          `json:"re"`
+	WorkflowMode                      string          `json:"wm"`
+	PermissionLevel                   string          `json:"pl"`
+	ActiveCallTimeoutEnabled          bool            `json:"acte"`
+	ContextWindowSetting              int64           `json:"cwset"`
+	AppliedContextWindowSetting       *int64          `json:"acwset"`
+	CodexModelMetadataFallback        bool            `json:"cmmf"`
+	AutoRetryEnabled                  bool            `json:"ae"`
+	AutoRetryPolicyMode               string          `json:"arpm"`
+	AutoRetryScope                    string          `json:"ars"`
+	AutoRetryPreset                   string          `json:"arp"`
+	AutoRetryMaxAttempts              int             `json:"aram"`
+	AutoRetryDispatchPendingOnFailure bool            `json:"ardpf"`
+	Title                             string          `json:"ttl"`
+	Cwd                               string          `json:"cwd"`
+	NativeSessionID                   *string         `json:"nsid,omitempty"`
+	NativeLeafID                      *string         `json:"nlid,omitempty"`
+	SourceRevision                    *string         `json:"srev,omitempty"`
+	CyberPolicyFlagged                bool            `json:"cpf,omitempty"`
+	HasScheduledPlanExecution         bool            `json:"spe,omitempty"`
+	Status                            string          `json:"st"`
+	AssistantState                    string          `json:"ast,omitempty"`
+	Unread                            bool            `json:"unr"`
+	AttentionRevision                 string          `json:"ar,omitempty"`
+	HistoryEpoch                      string          `json:"he,omitempty"`
+	EventCursor                       string          `json:"ec,omitempty"`
+	ArchivedAt                        *int64          `json:"aa,omitempty"`
+	ActivityAt                        int64           `json:"act"`
+	StatusUpdatedAt                   *int64          `json:"sta,omitempty"`
+	CreatedAt                         int64           `json:"ca"`
+	LastUpdated                       int64           `json:"lu"`
+	LastMessageAt                     *int64          `json:"lma,omitempty"`
+	AssistantStateUpdatedAt           *int64          `json:"asu,omitempty"`
+	SourceKind                        string          `json:"sk"`
+	SyncState                         string          `json:"ss"`
+	LastSyncMode                      string          `json:"lsm,omitempty"`
+	SourceCreatedAt                   *int64          `json:"sca,omitempty"`
+	SourceUpdatedAt                   *int64          `json:"sua,omitempty"`
+	LastSyncedAt                      *int64          `json:"lsa,omitempty"`
+	ThreadPath                        *string         `json:"tp,omitempty"`
+	ThreadPreview                     *string         `json:"tpv,omitempty"`
+	TurnCount                         int             `json:"tc"`
+	ItemCount                         int             `json:"ic"`
+	SyncError                         *string         `json:"se,omitempty"`
+	Usage                             wireUsage       `json:"usa"`
+	LatestTurnUsage                   *wireCtxEst     `json:"ltu,omitempty"`
+	ContextEstimate                   wireCtxEst      `json:"cea"`
+	ContextEstimateMode               string          `json:"cem"`
+	LastContextCompactionAt           *int64          `json:"lcca,omitempty"`
+	Cost                              float64         `json:"cost"`
+	ContextWindowTokens               *int64          `json:"cwt,omitempty"`
+	ContextWindowSource               string          `json:"cws"`
+	Goal                              *wireGoal       `json:"goal,omitempty"`
+	WorkTiming                        wireWorkTiming  `json:"wt"`
+	DevinQuota                        *wireDevinQuota `json:"dq,omitempty"`
+}
+
+type wireDevinQuota struct {
+	PlanName           string `json:"pn,omitempty"`
+	DailyRemainingPct  int64  `json:"dy,omitempty"`
+	WeeklyRemainingPct int64  `json:"wk,omitempty"`
+	DailyResetAtUnix   int64  `json:"dr,omitempty"`
+	WeeklyResetAtUnix  int64  `json:"wr,omitempty"`
+	FetchedAtUnix      int64  `json:"fa,omitempty"`
 }
 
 type wireWorkTiming struct {
@@ -612,6 +622,7 @@ func mapWireSession(session SessionSummary) *wireSess {
 		ContextWindowSource:     string(session.ContextWindowSource),
 		Goal:                    mapWireGoal(session.Goal),
 		WorkTiming:              mapWireWorkTiming(session.WorkTiming),
+		DevinQuota:              mapWireDevinQuota(session.DevinQuota),
 	}
 	if session.LatestTurnUsage.InputTokens > 0 ||
 		session.LatestTurnUsage.CachedInputTokens > 0 ||
@@ -672,6 +683,20 @@ func mapWireGoal(goal *SessionGoal) *wireGoal {
 		TimeUsedSeconds: goal.TimeUsedSeconds,
 		CreatedAt:       goal.CreatedAt.UnixMilli(),
 		UpdatedAt:       goal.UpdatedAt.UnixMilli(),
+	}
+}
+
+func mapWireDevinQuota(quota *DevinQuotaStatus) *wireDevinQuota {
+	if quota == nil {
+		return nil
+	}
+	return &wireDevinQuota{
+		PlanName:           quota.PlanName,
+		DailyRemainingPct:  quota.DailyRemainingPct,
+		WeeklyRemainingPct: quota.WeeklyRemainingPct,
+		DailyResetAtUnix:   quota.DailyResetAtUnix,
+		WeeklyResetAtUnix:  quota.WeeklyResetAtUnix,
+		FetchedAtUnix:      quota.FetchedAtUnix,
 	}
 }
 

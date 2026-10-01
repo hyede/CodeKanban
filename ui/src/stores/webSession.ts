@@ -110,6 +110,14 @@ type WireSession = {
     acu?: number;
     crd?: number;
   };
+  dq?: {
+    pn?: string;
+    dy?: number;
+    wk?: number;
+    dr?: number;
+    wr?: number;
+    fa?: number;
+  };
   cea?: {
     in?: number;
     cin?: number;
@@ -3318,6 +3326,16 @@ export const useWebSessionStore = defineStore('web-session', () => {
         acuCost: session.usa?.acu ?? 0,
         creditCost: session.usa?.crd ?? 0,
       },
+      devinQuota: session.dq
+        ? {
+            planName: session.dq.pn ?? '',
+            dailyRemainingPercent: session.dq.dy ?? 0,
+            weeklyRemainingPercent: session.dq.wk ?? 0,
+            dailyResetAtUnix: session.dq.dr ?? 0,
+            weeklyResetAtUnix: session.dq.wr ?? 0,
+            fetchedAtUnix: session.dq.fa ?? 0,
+          }
+        : null,
       latestTurnUsage: session.ltu
         ? {
             inputTokens: session.ltu.in ?? 0,

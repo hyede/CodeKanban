@@ -185,6 +185,8 @@ type Manager struct {
 	historyCleanupMu            sync.Mutex
 	workTimingBackfillMu        sync.Mutex
 	workTimingLocks             [64]sync.Mutex
+	devinQuotaMu                sync.Mutex
+	devinQuotaCache             *devinQuotaCacheEntry
 }
 
 type clientKind string

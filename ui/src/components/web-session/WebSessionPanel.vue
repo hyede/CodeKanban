@@ -168,6 +168,18 @@
               </span>
               <span class="context-usage-total-value">{{ devinQuota.credit }} credits</span>
             </div>
+            <div v-if="devinQuota.daily !== null" class="context-usage-stat">
+              <span class="context-usage-stat__label">
+                {{ t('webSession.contextUsageDevinDailyQuota') }}
+              </span>
+              <span class="context-usage-total-value">{{ devinQuota.daily }}%</span>
+            </div>
+            <div v-if="devinQuota.weekly !== null" class="context-usage-stat">
+              <span class="context-usage-stat__label">
+                {{ t('webSession.contextUsageDevinWeeklyQuota') }}
+              </span>
+              <span class="context-usage-total-value">{{ devinQuota.weekly }}%</span>
+            </div>
           </template>
         </div>
 
@@ -6017,12 +6029,18 @@ const devinQuota = computed(() => {
   }
   const acu = Math.max(0, Number(session.usage.acuCost || 0));
   const credit = Math.max(0, Number(session.usage.creditCost || 0));
-  if (acu <= 0 && credit <= 0) {
+  const account = session.devinQuota ?? null;
+  if (acu <= 0 && credit <= 0 && !account) {
     return null;
   }
   return {
-    acu: acu > 0 ? formatDevinQuotaAmount(acu) : '',
-    credit: credit > 0 ? formatDevinQuotaAmount(credit) : '',
+    acu: acu > 0 ? formatDevinQuotaAmount(acu) : null,
+    credit: credit > 0 ? formatDevinQuotaAmount(credit) : null,
+    planName: account?.planName ?? '',
+    daily: account ? Math.max(0, Math.min(100, Number(account.dailyRemainingPercent || 0))) : null,
+    weekly: account
+      ? Math.max(0, Math.min(100, Number(account.weeklyRemainingPercent || 0)))
+      : null,
   };
 });
 
