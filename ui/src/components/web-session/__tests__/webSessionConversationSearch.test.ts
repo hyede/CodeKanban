@@ -44,6 +44,37 @@ describe('webSessionConversationSearch', () => {
     document.body.replaceChildren();
   });
 
+  it('locates merged approvals from either the request or response search result', () => {
+    const block = makeBlock('response', 'system', 'Approval granted', 3, {
+      sourceThreadId: 'thread',
+      approvalRequest: { id: 'request', key: 'request-key', timestamp: 1 },
+    });
+    expect(
+      matchesWebSessionConversationSearchTarget(block, {
+        id: 'request',
+        orderIndex: 1,
+        kind: 'system',
+        sourceThreadId: 'thread',
+      })
+    ).toBe(true);
+    expect(
+      matchesWebSessionConversationSearchTarget(block, {
+        id: 'response',
+        orderIndex: 3,
+        kind: 'system',
+        sourceThreadId: 'thread',
+      })
+    ).toBe(true);
+    expect(
+      matchesWebSessionConversationSearchTarget(block, {
+        id: 'request',
+        orderIndex: 1,
+        kind: 'system',
+        sourceThreadId: 'other-thread',
+      })
+    ).toBe(false);
+  });
+
   it('handles Ctrl+F and Cmd+F in the regular conversation interface', () => {
     const input = document.createElement('input');
     document.body.append(input);

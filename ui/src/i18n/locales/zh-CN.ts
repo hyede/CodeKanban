@@ -908,6 +908,7 @@ export default {
     approvalReject: '拒绝',
     historyApprovalApproved: '已批准',
     historyApprovalRejected: '已拒绝',
+    historyApprovalCanceled: '已取消',
     userInputTitle: '需要补充信息',
     userInputPromptFallback: 'Agent 需要你补充一些信息后才能继续。',
     userInputSubmit: '提交答案',

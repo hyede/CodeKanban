@@ -7,6 +7,7 @@ import { mount } from '@vue/test-utils';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import zhCN from '@/i18n/locales/zh-CN';
+import WebSessionApprovalHistory from '../WebSessionApprovalHistory.vue';
 
 const panelSource = readFileSync(resolve(__dirname, '../WebSessionPanel.vue'), 'utf8');
 const setupSource = panelSource.split('<script setup lang="ts">')[1]!.split('</script>')[0]!;
@@ -95,6 +96,80 @@ function mountActions(harness: ReturnType<typeof createHarness>) {
     }
   );
 }
+
+const historyProps = {
+  label: '已批准',
+  state: 'approve' as const,
+  prompt: 'Calling browser_run_code_unsafe from playwright',
+  command: 'await page.goto("about:blank")',
+  time: '05:20:20 → 05:23:29',
+  timeTitle: '2026-10-02 05:20:20 → 2026-10-02 05:23:29',
+};
+
+function mountHistory(extra: Partial<typeof historyProps> = {}) {
+  return mount(WebSessionApprovalHistory, { props: { ...historyProps, ...extra } });
+}
+
+describe('WebSessionApprovalHistory', () => {
+  it('defaults to a compact summary with one status, prompt and time range', () => {
+    const wrapper = mountHistory();
+    expect(wrapper.get('button').attributes('aria-expanded')).toBe('false');
+    expect(wrapper.findAll('.approval-history-label')).toHaveLength(1);
+    expect(wrapper.findAll('.approval-history-time')).toHaveLength(1);
+    expect(wrapper.get('.approval-history-summary').text()).toBe(historyProps.prompt);
+    expect(wrapper.get('.approval-history-time').attributes('title')).toBe(historyProps.timeTitle);
+    expect(wrapper.text()).not.toContain('需要审批');
+    expect(wrapper.find('.approval-history-body').exists()).toBe(false);
+    expect(wrapper.find('pre').exists()).toBe(false);
+  });
+
+  it('expands complete details and collapses them again', async () => {
+    const wrapper = mountHistory({ prompt: 'First line\n  second line' });
+    expect(wrapper.get('.approval-history-summary').text()).toBe('First line second line');
+    await wrapper.get('button').trigger('click');
+    expect(wrapper.get('button').attributes('aria-expanded')).toBe('true');
+    expect(wrapper.get('.approval-history-prompt').text()).toBe('First line\n  second line');
+    expect(wrapper.get('pre').text()).toBe(historyProps.command);
+    await wrapper.get('button').trigger('click');
+    expect(wrapper.find('.approval-history-body').exists()).toBe(false);
+  });
+
+  it('falls back to the command when the prompt is absent', () => {
+    const wrapper = mountHistory({ prompt: '' });
+    expect(wrapper.get('.approval-history-summary').text()).toBe(historyProps.command);
+    expect(wrapper.get('.approval-history-summary').attributes('title')).toBe(historyProps.command);
+  });
+
+  it.each(['request', 'approve', 'reject', 'cancel'] as const)('preserves the %s state', state => {
+    const wrapper = mount(WebSessionApprovalHistory, { props: { ...historyProps, state } });
+    expect(wrapper.get('.approval-history').classes()).toContain(`state-${state}`);
+  });
+
+  it('preserves expanded state when refreshed and escapes prompt and command text', async () => {
+    const wrapper = mountHistory();
+    await wrapper.get('button').trigger('click');
+    await wrapper.setProps({
+      prompt: '<img src=x onerror=alert(1)>',
+      command: '<script>alert(1)</script>',
+    });
+    expect(wrapper.get('button').attributes('aria-expanded')).toBe('true');
+    expect(wrapper.find('img').exists()).toBe(false);
+    expect(wrapper.find('script').exists()).toBe(false);
+    expect(wrapper.get('pre').text()).toBe('<script>alert(1)</script>');
+  });
+
+  it('highlights the compact label for conversation search matches', () => {
+    const wrapper = mount(WebSessionApprovalHistory, {
+      props: { ...historyProps, searchMatch: true, searchActive: true },
+    });
+    expect(wrapper.get('.approval-history-label').classes()).toContain(
+      'timeline-search-role-highlight'
+    );
+    expect(wrapper.get('.approval-history-label').classes()).toContain(
+      'timeline-search-role-highlight-active'
+    );
+  });
+});
 
 describe('Approval mode transition visibility', () => {
   it.each([

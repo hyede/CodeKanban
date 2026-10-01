@@ -112,8 +112,72 @@ export function projectWebSessionVisibleTimelineBlocks(
   blocks: WebSessionBlock[],
   agent?: string
 ): WebSessionBlock[] {
-  return projectWebSessionCompactTimelineBlocks(blocks, agent).filter(
-    block => !isTransportRetryNoteBlock(block) && !isEmptyAssistantBlock(block)
+  return projectWebSessionApprovalHistoryBlocks(
+    projectWebSessionCompactTimelineBlocks(blocks, agent)
+  ).filter(block => !isTransportRetryNoteBlock(block) && !isEmptyAssistantBlock(block));
+}
+
+function projectWebSessionApprovalHistoryBlocks(blocks: WebSessionBlock[]): WebSessionBlock[] {
+  const projected: Array<WebSessionBlock | null> = [];
+  const pending: number[] = [];
+  for (const block of blocks) {
+    if (block.kind === 'user') {
+      pending.length = 0;
+    }
+    if (block.kind === 'system' && block.detail?.type === 'approval_request') {
+      pending.push(projected.length);
+    }
+    let merged = block;
+    if (block.kind === 'system' && block.detail?.type === 'approval_response') {
+      for (let index = pending.length - 1; index >= 0; index -= 1) {
+        const requestIndex = pending[index]!;
+        const request = projected[requestIndex]!;
+        if (!matchesApprovalRequest(request, block)) {
+          continue;
+        }
+        merged = {
+          ...block,
+          detail: {
+            ...block.detail,
+            prompt: block.detail.prompt?.trim() || request.detail?.prompt || request.text,
+            command: block.detail.command?.trim() || request.detail?.command,
+            approvalKind: block.detail.approvalKind || request.detail?.approvalKind,
+          },
+          approvalRequest: { id: request.id, key: request.key, timestamp: request.timestamp },
+        };
+        projected[requestIndex] = null;
+        pending.splice(index, 1);
+        break;
+      }
+    }
+    projected.push(merged);
+  }
+  return projected.filter((block): block is WebSessionBlock => block !== null);
+}
+
+function matchesApprovalRequest(request: WebSessionBlock, response: WebSessionBlock): boolean {
+  if (
+    getSourceThreadId(request) !== getSourceThreadId(response) ||
+    (request.sourceTurnId &&
+      response.sourceTurnId &&
+      request.sourceTurnId !== response.sourceTurnId) ||
+    (request.runId && response.runId && request.runId !== response.runId) ||
+    response.timestamp < request.timestamp
+  ) {
+    return false;
+  }
+  const responseId = String(response.sourceItemId || response.payload?.iid || '').trim();
+  if (responseId) {
+    const requestId = String(request.sourceItemId || request.payload?.iid || request.id).trim();
+    return requestId === responseId;
+  }
+  const prompt = response.detail?.prompt?.trim();
+  const command = response.detail?.command?.trim();
+  const requestCommand = request.detail?.command?.trim();
+  return Boolean(
+    prompt &&
+      prompt === (request.detail?.prompt?.trim() || request.text.trim()) &&
+      (!command || !requestCommand || command === requestCommand)
   );
 }
 

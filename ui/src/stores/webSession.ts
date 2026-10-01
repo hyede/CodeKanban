@@ -421,6 +421,7 @@ export interface WebSessionBlock {
   level?: 'info' | 'warn' | 'error';
   done?: boolean;
   detail?: WebSessionHistoryDetail;
+  approvalRequest?: { id: string; key: string; timestamp: number };
   payload?: Record<string, unknown>;
   deliveryState?: WebSessionMessageDeliveryState;
   freshContext?: boolean;

@@ -176,6 +176,33 @@ function buildMessageBlock(id: string, orderIndex: number): WebSessionBlock {
   };
 }
 
+function buildApprovalBlock(
+  id: string,
+  type: 'approval_request' | 'approval_response',
+  orderIndex: number,
+  extra: Partial<WebSessionBlock> = {}
+): WebSessionBlock {
+  return {
+    key: id,
+    id,
+    orderIndex,
+    kind: 'system',
+    itemType: type,
+    text:
+      type === 'approval_request'
+        ? 'Calling browser_run_code_unsafe from playwright'
+        : 'Approval granted',
+    timestamp: Date.UTC(2026, 9, 2, 5, 20, 20) + orderIndex * 1000,
+    attachments: [],
+    detail: {
+      type,
+      prompt: 'Calling browser_run_code_unsafe from playwright',
+      ...(type === 'approval_response' ? { action: 'approve' } : {}),
+    },
+    ...extra,
+  };
+}
+
 function readGroupItems(block: WebSessionBlock): Array<Record<string, unknown>> {
   const raw = block.payload?.groupItems;
   return Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : [];
@@ -321,6 +348,160 @@ describe('compact tool detail loading', () => {
     await expect(loadWebSessionCompactToolDetail(projected!, load)).rejects.toThrow(
       'failed to load tool group'
     );
+  });
+});
+
+describe('approval history projection', () => {
+  it.each(['approve', 'reject', 'cancel'])(
+    'merges a request and its %s response without changing stored blocks',
+    action => {
+      const request = buildApprovalBlock('request', 'approval_request', 1, {
+        sourceItemId: 'tool-1',
+        detail: {
+          type: 'approval_request',
+          prompt: 'Run tool',
+          command: 'browser command',
+          approvalKind: 'mcp',
+        },
+      });
+      const response = buildApprovalBlock('response', 'approval_response', 3, {
+        payload: { iid: 'tool-1' },
+        detail: { type: 'approval_response', action },
+      });
+      const message = buildMessageBlock('between', 2);
+      const original = structuredClone([request, message, response]);
+
+      const visible = projectWebSessionVisibleTimelineBlocks([request, message, response], 'devin');
+
+      expect(visible).toHaveLength(2);
+      expect(visible[0]).toBe(message);
+      expect(visible[1]).toMatchObject({
+        id: response.id,
+        key: response.key,
+        orderIndex: response.orderIndex,
+        timestamp: response.timestamp,
+        detail: {
+          type: 'approval_response',
+          prompt: 'Run tool',
+          command: 'browser command',
+          approvalKind: 'mcp',
+          action,
+        },
+        approvalRequest: { id: request.id, key: request.key, timestamp: request.timestamp },
+      });
+      expect([request, message, response]).toEqual(original);
+    }
+  );
+
+  it('matches legacy responses without IDs by prompt and inherits the request command', () => {
+    const request = buildApprovalBlock('request', 'approval_request', 1);
+    request.detail!.command = 'browser command';
+    const response = buildApprovalBlock('response', 'approval_response', 2);
+
+    const visible = projectWebSessionVisibleTimelineBlocks([request, response]);
+
+    expect(visible).toHaveLength(1);
+    expect(visible[0]!.detail!.command).toBe('browser command');
+  });
+
+  it('keeps repeated approvals for the same tool as separate interactions', () => {
+    const first = buildApprovalBlock('request-1', 'approval_request', 1);
+    const second = buildApprovalBlock('request-2', 'approval_request', 3);
+    const visible = projectWebSessionVisibleTimelineBlocks([
+      first,
+      buildApprovalBlock('response-1', 'approval_response', 2),
+      second,
+      buildApprovalBlock('response-2', 'approval_response', 4),
+    ]);
+
+    expect(visible.map(block => block.id)).toEqual(['response-1', 'response-2']);
+    expect(visible.map(block => block.approvalRequest?.id)).toEqual(['request-1', 'request-2']);
+  });
+
+  it('uses request IDs rather than identical prompts to match concurrent approvals', () => {
+    const visible = projectWebSessionVisibleTimelineBlocks([
+      buildApprovalBlock('request-1', 'approval_request', 1, { sourceItemId: 'tool-1' }),
+      buildApprovalBlock('request-2', 'approval_request', 2, { sourceItemId: 'tool-2' }),
+      buildApprovalBlock('response-1', 'approval_response', 3, { payload: { iid: 'tool-1' } }),
+    ]);
+
+    expect(visible.map(block => block.id)).toEqual(['request-2', 'response-1']);
+    expect(visible[1]!.approvalRequest?.id).toBe('request-1');
+  });
+
+  it.each([
+    { sourceThreadId: 'other-thread' },
+    { sourceTurnId: 'other-turn' },
+    { runId: 'other-run' },
+    { payload: { iid: 'other-tool' } },
+    { timestamp: 1 },
+    {
+      detail: {
+        type: 'approval_response' as const,
+        prompt: 'Different operation',
+        action: 'approve',
+      },
+    },
+    {
+      detail: {
+        type: 'approval_response' as const,
+        prompt: 'Run tool',
+        command: 'different command',
+        action: 'approve',
+      },
+    },
+  ])('does not merge unrelated approvals: %j', extra => {
+    const request = buildApprovalBlock('request', 'approval_request', 1, {
+      sourceThreadId: 'thread',
+      sourceTurnId: 'turn',
+      runId: 'run',
+      sourceItemId: 'tool',
+      detail: { type: 'approval_request', prompt: 'Run tool', command: 'command' },
+    });
+    const response = buildApprovalBlock('response', 'approval_response', 2, {
+      sourceThreadId: 'thread',
+      sourceTurnId: 'turn',
+      runId: 'run',
+      detail: {
+        type: 'approval_response',
+        prompt: 'Run tool',
+        command: 'command',
+        action: 'approve',
+      },
+      ...extra,
+    });
+
+    expect(projectWebSessionVisibleTimelineBlocks([request, response])).toEqual([
+      request,
+      response,
+    ]);
+  });
+
+  it('keeps unmatched requests and responses and never matches across a user message', () => {
+    const request = buildApprovalBlock('request', 'approval_request', 1);
+    const user = { ...buildMessageBlock('user', 2), kind: 'user' as const };
+    const response = buildApprovalBlock('response', 'approval_response', 3);
+
+    expect(projectWebSessionVisibleTimelineBlocks([request])).toEqual([request]);
+    expect(projectWebSessionVisibleTimelineBlocks([response])).toEqual([response]);
+    expect(projectWebSessionVisibleTimelineBlocks([request, user, response])).toEqual([
+      request,
+      user,
+      response,
+    ]);
+  });
+
+  it('preserves approval boundaries between compact tool groups', () => {
+    const visible = projectWebSessionVisibleTimelineBlocks([
+      buildCommandBlock('before', { orderIndex: 1 }),
+      buildApprovalBlock('request', 'approval_request', 2),
+      buildCommandBlock('during', { orderIndex: 3 }),
+      buildApprovalBlock('response', 'approval_response', 4),
+      buildCommandBlock('after', { orderIndex: 5 }),
+    ]);
+
+    expect(visible.map(block => block.id)).toEqual(['before', 'during', 'response', 'after']);
+    expect(visible.every(block => !block.tool?.commandGroup)).toBe(true);
   });
 });
 

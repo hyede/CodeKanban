@@ -190,6 +190,32 @@ describe('conversation search occurrence navigation', () => {
     expect(wrapper.findAll('mark')).toHaveLength(0);
   });
 
+  it('deduplicates remote request and response matches onto one merged approval row', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.mocked(webSessionApi.searchConversation).mockResolvedValue({
+      items: [
+        { id: 'request', kind: 'system', orderIndex: 1, text: 'Approve plan' },
+        { id: 'response', kind: 'system', orderIndex: 2, text: 'Approve plan' },
+      ],
+      done: true,
+      total: 2,
+    });
+    const { search, scroll } = harness([
+      {
+        ...block('response', 'Approval granted', 2),
+        kind: 'system',
+        detail: { type: 'approval_response', prompt: 'Approve plan', action: 'approve' },
+        approvalRequest: { id: 'request', key: 'request', timestamp: 1 },
+      },
+    ]);
+    search.filters.value.system = true;
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushPromises();
+    expect(search.matches.value).toHaveLength(1);
+    expect(search.matches.value[0]!.id).toBe('response');
+    expect(scroll).toHaveBeenLastCalledWith('response', undefined);
+  });
+
   it('keeps a remote metadata match on its compacted tool card', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     vi.mocked(webSessionApi.searchConversation).mockResolvedValue({

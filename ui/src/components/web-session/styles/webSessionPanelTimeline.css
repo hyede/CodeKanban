@@ -238,14 +238,16 @@
   min-width: 148px;
 }
 
-.timeline-search-role-highlight {
+.timeline-search-role-highlight,
+:deep(.approval-history-label.timeline-search-role-highlight) {
   border-radius: 4px;
   background: color-mix(in srgb, var(--n-warning-color, #f0a020) 28%, transparent) !important;
   color: color-mix(in srgb, var(--n-warning-color, #f0a020) 78%, var(--n-text-color-1)) !important;
   font-weight: 700;
 }
 
-.timeline-search-role-highlight-active {
+.timeline-search-role-highlight-active,
+:deep(.approval-history-label.timeline-search-role-highlight-active) {
   background: color-mix(in srgb, var(--n-primary-color) 22%, transparent) !important;
   color: var(--n-primary-color) !important;
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--n-primary-color) 38%, transparent);
@@ -344,6 +346,10 @@
   flex-direction: column;
   gap: 8px;
   margin-bottom: 20px;
+}
+
+.timeline-item.is-compact-activity {
+  margin-bottom: 8px;
 }
 
 .timeline-item.kind-user {

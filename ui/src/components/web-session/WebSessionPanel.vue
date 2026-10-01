@@ -942,7 +942,13 @@
                   :key="item.key"
                   :ref="element => setTimelineBlockRef(element, item)"
                   class="timeline-item"
-                  :class="`kind-${item.kind}`"
+                  :class="[
+                    `kind-${item.kind}`,
+                    {
+                      'is-compact-activity':
+                        isApprovalHistoryBlock(item) || isReasoningDisclosureBlock(item),
+                    },
+                  ]"
                   :data-timeline-key="item.key"
                   :data-timeline-order-index="item.orderIndex"
                 >
@@ -1440,6 +1446,18 @@
                       </div>
                     </div>
                   </div>
+
+                  <WebSessionApprovalHistory
+                    v-else-if="isApprovalHistoryBlock(item)"
+                    :label="historyInteractionTitle(item)"
+                    :state="historyApprovalState(item)"
+                    :prompt="historyInteractionPrompt(item)"
+                    :command="historyInteractionCommand(item)"
+                    :time="historyApprovalTime(item)"
+                    :time-title="historyApprovalTimeTitle(item)"
+                    :search-match="isTimelineSearchBlockMatch(item)"
+                    :search-active="isTimelineSearchBlockActive(item)"
+                  />
 
                   <div
                     v-else-if="item.kind === 'system' && item.detail"
@@ -3744,6 +3762,7 @@ import WebSessionMessageEditDialog from '@/components/web-session/WebSessionMess
 import WebSessionMobileSessionDrawer from '@/components/web-session/WebSessionMobileSessionDrawer.vue';
 import WebSessionScheduledSendDialog from '@/components/web-session/WebSessionScheduledSendDialog.vue';
 import WebSessionReasoningSummary from '@/components/web-session/WebSessionReasoningSummary.vue';
+import WebSessionApprovalHistory from '@/components/web-session/WebSessionApprovalHistory.vue';
 import WebSessionStreamingMarkdown from '@/components/web-session/WebSessionStreamingMarkdown.vue';
 import WebSessionSidebar from '@/components/web-session/WebSessionSidebar.vue';
 import { useWebSessionSidebarResize } from '@/components/web-session/useWebSessionSidebarResize';
@@ -13035,7 +13054,10 @@ function handleActivityDisplayClick(block: WebSessionBlock) {
 }
 
 function shouldHideTimelineMeta(item: WebSessionBlock) {
-  if (isReasoningDisclosureBlock(item)) {
+  if (
+    isReasoningDisclosureBlock(item) ||
+    (isApprovalHistoryBlock(item) && !timelineSubAgent(item))
+  ) {
     return true;
   }
   if (!Number.isFinite(item.timestamp) || item.timestamp <= 0) {
@@ -13334,14 +13356,47 @@ function timelineRoleLabel(item: WebSessionBlock) {
   return t('common.info');
 }
 
+function isApprovalHistoryBlock(item: WebSessionBlock) {
+  return (
+    item.kind === 'system' &&
+    (item.detail?.type === 'approval_request' || item.detail?.type === 'approval_response')
+  );
+}
+
+function historyApprovalState(item: WebSessionBlock): 'request' | 'approve' | 'reject' | 'cancel' {
+  if (item.detail?.type === 'approval_request') {
+    return 'request';
+  }
+  const action = item.detail?.action;
+  return action === 'reject' || action === 'cancel' ? action : 'approve';
+}
+
+function historyApprovalTime(item: WebSessionBlock) {
+  const requestedAt = item.approvalRequest?.timestamp;
+  const resolvedTime = formatTime(item.timestamp);
+  return requestedAt && requestedAt !== item.timestamp
+    ? `${formatTime(requestedAt)} → ${resolvedTime}`
+    : resolvedTime;
+}
+
+function historyApprovalTimeTitle(item: WebSessionBlock) {
+  const requestedAt = item.approvalRequest?.timestamp;
+  const resolvedTime = formatDateTime(item.timestamp);
+  return requestedAt && requestedAt !== item.timestamp
+    ? `${formatDateTime(requestedAt)} → ${resolvedTime}`
+    : resolvedTime;
+}
+
 function historyInteractionTitle(item: WebSessionBlock) {
   switch (item.detail?.type) {
     case 'approval_request':
       return t('webSession.approvalTitle');
     case 'approval_response':
-      return item.detail.action === 'reject'
-        ? t('webSession.historyApprovalRejected')
-        : t('webSession.historyApprovalApproved');
+      return item.detail.action === 'cancel'
+        ? t('webSession.historyApprovalCanceled')
+        : item.detail.action === 'reject'
+          ? t('webSession.historyApprovalRejected')
+          : t('webSession.historyApprovalApproved');
     case 'user_input_request':
       return t('webSession.userInputTitle');
     case 'user_input_response':

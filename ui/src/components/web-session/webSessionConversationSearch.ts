@@ -247,7 +247,7 @@ export function matchesWebSessionConversationSearchTarget(
   ) {
     return false;
   }
-  if (match.id && block.id === match.id) {
+  if (match.id && (block.id === match.id || block.approvalRequest?.id === match.id)) {
     return true;
   }
   if (match.toolId && block.tool?.id === match.toolId) {

@@ -943,6 +943,7 @@ export default {
     approvalReject: 'Reject',
     historyApprovalApproved: 'Approved',
     historyApprovalRejected: 'Rejected',
+    historyApprovalCanceled: 'Canceled',
     userInputTitle: 'More Input Required',
     userInputPromptFallback: 'The agent needs more information before it can continue.',
     userInputSubmit: 'Submit Answers',
