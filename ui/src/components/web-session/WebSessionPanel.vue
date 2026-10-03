@@ -2215,6 +2215,8 @@
                   <n-select
                     :show="showModelSelector"
                     v-model:value="selectedModel"
+                    placement="top-start"
+                    @scroll="clearModelOptionPopovers"
                     @update:show="handleModelSelectorShowChange"
                     @mouseenter="handleComposerSelectorPointerEnter('model')"
                     @mouseleave="handleComposerSelectorPointerLeave('model')"
@@ -2226,18 +2228,13 @@
                     size="small"
                     :options="modelOptions"
                   >
-                    <template
-                      v-if="
-                        (selectedAgent === 'pi' && showAllPiModels) ||
-                        (selectedAgent === 'devin' && showAllDevinModels)
-                      "
-                      #header
-                    >
+                    <template v-if="selectedAgent === 'pi' || selectedAgent === 'devin'" #header>
                       <div class="pi-model-search-header">
                         <n-input
                           v-if="selectedAgent === 'pi'"
                           ref="piModelSearchInputRef"
                           v-model:value="piModelSearchQuery"
+                          @update:value="clearModelOptionPopovers"
                           clearable
                           :bordered="false"
                           size="small"
@@ -2257,6 +2254,7 @@
                           v-else
                           ref="devinModelSearchInputRef"
                           v-model:value="devinModelSearchQuery"
+                          @update:value="clearModelOptionPopovers"
                           clearable
                           :bordered="false"
                           size="small"
@@ -11378,12 +11376,9 @@ const agentOptions: Array<{ label: string; value: WebSessionAgent }> = [
   { label: 'Devin', value: 'devin' },
 ];
 const showAdditionalCodexModels = ref(false);
-const showAllPiModels = ref(false);
-const showAllDevinModels = ref(false);
 const showModelSelector = ref(false);
 const showReasoningSelector = ref(false);
 const keepAdditionalCodexModelsForNextOpen = ref(false);
-const keepAllPiModelsForNextOpen = ref(false);
 const piModelSearchQuery = ref('');
 const devinModelSearchQuery = ref('');
 const piModelSearchInputRef = ref<InstanceType<typeof NInput> | null>(null);
@@ -11414,9 +11409,7 @@ const MODEL_SELECT_CHAR_WIDTH = 7;
 const modelMenuHovered = ref(false);
 const modelOptionPopoverValues = ref<Set<string>>(new Set());
 const modelSelectMenuProps = computed(() => {
-  const piCatalogOpen =
-    (selectedAgent.value === 'pi' && showAllPiModels.value) ||
-    (selectedAgent.value === 'devin' && showAllDevinModels.value);
+  const piCatalogOpen = selectedAgent.value === 'pi' || selectedAgent.value === 'devin';
   return {
     class: piCatalogOpen
       ? 'web-session-model-select-menu is-pi-model-catalog'
@@ -11424,8 +11417,6 @@ const modelSelectMenuProps = computed(() => {
     style: piCatalogOpen
       ? { width: 'min(280px, calc(100vw - 64px))', maxWidth: 'calc(100vw - 64px)' }
       : { minWidth: '132px', maxWidth: '180px' },
-    placement: 'top-start',
-    flip: false,
     onMouseenter: () => {
       modelMenuHovered.value = true;
       handleComposerSelectorPointerEnter('model');
@@ -11437,10 +11428,16 @@ const modelSelectMenuProps = computed(() => {
   };
 });
 
+function clearModelOptionPopovers() {
+  modelOptionPopoverValues.value = new Set();
+}
+
 function handleModelOptionPopoverShow(value: string, show: boolean) {
   const next = new Set(modelOptionPopoverValues.value);
-  if (show) {
+  if (show && showModelSelector.value) {
+    next.clear();
     next.add(value);
+    clearComposerSelectorHoverCloseTimer('model');
   } else {
     next.delete(value);
   }
@@ -11621,7 +11618,7 @@ function renderModelOption(info: {
     'div',
     {
       ...info.node.props,
-      ...(removable ? { 'data-devin-recent': 'true' } : {}),
+      ...(removable ? { 'data-model-recent': 'true' } : {}),
     },
     [
       h('div', { class: 'n-base-select-option__content' }, [
@@ -11645,11 +11642,11 @@ function renderModelOption(info: {
               type: 'button',
               class: 'model-option-remove',
               'aria-label': t('webSession.removeRecentModel'),
-              'data-devin-recent': 'true',
+              'data-model-recent': 'true',
               onClick: (event: MouseEvent) => {
                 event.stopPropagation();
                 event.preventDefault();
-                removeRecentDevinModel(String(info.option.value ?? ''));
+                removeRecentModel(String(info.option.value ?? ''));
               },
               onMousedown: (event: MouseEvent) => {
                 event.stopPropagation();
@@ -11701,11 +11698,17 @@ function renderModelOption(info: {
   return h(
     NPopover,
     {
+      key: String(info.option.value ?? ''),
+      show:
+        showModelSelector.value &&
+        modelOptionPopoverValues.value.has(String(info.option.value ?? '')),
       trigger: 'hover',
       placement: 'right-start',
       showArrow: false,
-      delay: 200,
-      duration: 300,
+      animated: false,
+      style: { maxWidth: 'calc(100vw - 24px)' },
+      delay: 0,
+      duration: 100,
       keepAliveOnHover: true,
       'onUpdate:show': (show: boolean) =>
         handleModelOptionPopoverShow(String(info.option.value ?? ''), show),
@@ -11917,9 +11920,7 @@ function withCurrentReasoningEffortOption(
 
 function piModelMenuInteractionState() {
   return {
-    catalogOpen:
-      (selectedAgent.value === 'pi' && showAllPiModels.value) ||
-      (selectedAgent.value === 'devin' && showAllDevinModels.value),
+    catalogOpen: selectedAgent.value === 'pi' || selectedAgent.value === 'devin',
     searchFocused: piModelSearchFocused.value || devinModelSearchFocused.value,
     searchComposing: piModelSearchComposing.value,
   };
@@ -11941,7 +11942,7 @@ function handleDevinModelSearchBlur() {
 }
 
 function refocusPiModelSearch() {
-  if (selectedAgent.value === 'pi' && showAllPiModels.value) {
+  if (selectedAgent.value === 'pi' && showModelSelector.value) {
     nextTick(() => piModelSearchInputRef.value?.focus());
   }
 }
@@ -11976,15 +11977,18 @@ function handlePiModelSearchEscape(event: KeyboardEvent) {
   handleModelSelectorShowChange(false);
 }
 
-function removeRecentDevinModel(model: string) {
+function removeRecentModel(model: string) {
   const value = model.trim();
   if (!value) {
     return;
   }
-  devinFrequentModelValues.value = devinFrequentModelValues.value.filter(item => item !== value);
+  const recentModels =
+    selectedAgent.value === 'pi' ? piFrequentModelValues : devinFrequentModelValues;
+  recentModels.value = recentModels.value.filter(item => item !== value);
+  clearModelOptionPopovers();
 }
 
-function scrollDevinModelMenuToRecent() {
+function scrollModelMenuToRecent() {
   const menu = document.querySelector<HTMLElement>(
     '.web-session-model-select-menu.is-pi-model-catalog'
   );
@@ -11996,7 +12000,7 @@ function scrollDevinModelMenuToRecent() {
     pending.scrollIntoView({ block: 'nearest' });
     return;
   }
-  const target = menu.querySelector<HTMLElement>('.n-base-select-option[data-devin-recent="true"]');
+  const target = menu.querySelector<HTMLElement>('.n-base-select-option[data-model-recent="true"]');
   if (target) {
     target.scrollIntoView({ block: 'nearest' });
     return;
@@ -12008,36 +12012,28 @@ function scrollDevinModelMenuToRecent() {
 }
 
 function handleModelSelectorShowChange(show: boolean) {
-  if (!show && shouldSuppressPiModelMenuClose('show-change', piModelMenuInteractionState())) {
+  if (
+    show === showModelSelector.value ||
+    (!show && shouldSuppressPiModelMenuClose('show-change', piModelMenuInteractionState()))
+  ) {
     return;
   }
   if (show && selectedAgent.value === 'codex' && !keepAdditionalCodexModelsForNextOpen.value) {
     showAdditionalCodexModels.value = false;
   }
-  if (show && selectedAgent.value === 'pi' && !keepAllPiModelsForNextOpen.value) {
-    showAllPiModels.value = false;
-    piModelSearchQuery.value = '';
-    resetPiModelSearchInteraction();
-  }
-  if (show && selectedAgent.value === 'devin') {
-    showAllDevinModels.value = true;
-    devinModelSearchQuery.value = '';
-    nextTick(() => window.setTimeout(scrollDevinModelMenuToRecent, 40));
-  }
+  resetPiModelSearchInteraction();
+  piModelSearchQuery.value = '';
+  devinModelSearchQuery.value = '';
+  clearModelOptionPopovers();
+  showModelSelector.value = show;
   if (show) {
     keepAdditionalCodexModelsForNextOpen.value = false;
-    keepAllPiModelsForNextOpen.value = false;
-    if (selectedAgent.value === 'pi' && showAllPiModels.value) {
-      refocusPiModelSearch();
+    if (selectedAgent.value === 'pi' || selectedAgent.value === 'devin') {
+      nextTick(() => window.setTimeout(scrollModelMenuToRecent, 40));
     }
+    refocusPiModelSearch();
   } else {
-    resetPiModelSearchInteraction();
-    devinModelSearchQuery.value = '';
-  }
-  showModelSelector.value = show;
-  if (!show) {
     modelMenuHovered.value = false;
-    modelOptionPopoverValues.value = new Set();
   }
 }
 
@@ -12106,13 +12102,14 @@ const claudeRuntimeOptions = computed(() =>
 );
 
 const piModelOptionGroups = computed(() =>
-  resolvePiModelOptionGroups(runtimeConfig.value?.piModels ?? [])
+  resolvePiModelOptionGroups(
+    runtimeConfig.value?.piModels ?? [],
+    piFrequentModelValues.value,
+    t('webSession.recentlyUsedModels')
+  )
 );
 const filteredPiModelOptionGroups = computed(() =>
   filterPiModelOptionGroups(piModelOptionGroups.value, piModelSearchQuery.value)
-);
-const piDefaultPrimaryModelOptions = computed(() =>
-  resolvePiPrimaryModelOptions(runtimeConfig.value?.piModels ?? [])
 );
 const piPrimaryModelOptions = computed(() =>
   resolvePiPrimaryModelOptions(runtimeConfig.value?.piModels ?? [], piFrequentModelValues.value)
@@ -12270,15 +12267,16 @@ function builtinModelValuesForAgent(agent: WebSessionAgent) {
   return resolvePiModelOptions(runtimeConfig.value?.piModels ?? []).map(option => option.value);
 }
 
-function recordUsedDevinModel(session?: Pick<WebSessionSummary, 'agent' | 'model'> | null) {
-  if (session?.agent !== 'devin') {
+function recordUsedModel(session?: Pick<WebSessionSummary, 'agent' | 'model'> | null) {
+  if (session?.agent !== 'devin' && session?.agent !== 'pi') {
     return;
   }
   const model = String(session.model || '').trim();
   if (!model) {
     return;
   }
-  devinFrequentModelValues.value = rememberPiFrequentModel(devinFrequentModelValues.value, model);
+  const recentModels = session.agent === 'pi' ? piFrequentModelValues : devinFrequentModelValues;
+  recentModels.value = rememberPiFrequentModel(recentModels.value, model);
 }
 
 function rememberCustomModelForAgent(agent: WebSessionCustomModelAgent, model: string) {
@@ -12347,12 +12345,6 @@ const modelOptions = computed(() => {
     ];
   }
   if (selectedAgent.value === 'pi') {
-    if (!showAllPiModels.value) {
-      return [
-        ...withCurrentModelOption(piPrimaryModelOptions.value, activeModel),
-        { label: t('webSession.allModels'), value: MORE_MODELS_VALUE },
-      ];
-    }
     return piModelSearchQuery.value.trim()
       ? filteredPiModelOptionGroups.value
       : withCurrentPiModelOption(filteredPiModelOptionGroups.value, activeModel);
@@ -12465,14 +12457,8 @@ const selectedModel = computed({
   set: value => {
     const next = normalizeDevinModelOptionValue(String(value));
     if (next === MORE_MODELS_VALUE) {
-      if (selectedAgent.value === 'pi') {
-        showAllPiModels.value = true;
-        keepAllPiModelsForNextOpen.value = true;
-        piModelSearchQuery.value = '';
-      } else {
-        showAdditionalCodexModels.value = true;
-        keepAdditionalCodexModelsForNextOpen.value = true;
-      }
+      showAdditionalCodexModels.value = true;
+      keepAdditionalCodexModelsForNextOpen.value = true;
       nextTick(() => {
         handleModelSelectorShowChange(true);
       });
@@ -12482,10 +12468,8 @@ const selectedModel = computed({
       openCustomModelDialog();
       return;
     }
-    if (
-      selectedAgent.value === 'pi' &&
-      !piDefaultPrimaryModelOptions.value.some(option => option.value === next)
-    ) {
+    clearModelOptionPopovers();
+    if (selectedAgent.value === 'pi') {
       piFrequentModelValues.value = rememberPiFrequentModel(piFrequentModelValues.value, next);
     }
     const currentEffort = currentSession.value?.reasoningEffort ?? draftReasoningEffort.value;
@@ -14883,7 +14867,7 @@ async function handleRetryTimelineUserMessage(item: WebSessionBlock) {
       attachments: item.attachments,
       freshContext: item.freshContext,
     });
-    recordUsedDevinModel(prepared.session);
+    recordUsedModel(prepared.session);
     recordSubmittedPrompt(item.text, prepared.session.projectId || props.projectId);
     if (prepared.navigateProjectId && isCurrentVisibleSession(prepared.session.id)) {
       projectStore.addRecentProject(prepared.navigateProjectId);
@@ -14914,7 +14898,7 @@ async function continueErroredSession(session: WebSessionSummary) {
     shouldActivate: () => isCurrentVisibleSession(sourceSessionId),
   });
   await webSessionStore.sendMessage(prepared.session.id, 'continue', []);
-  recordUsedDevinModel(prepared.session);
+  recordUsedModel(prepared.session);
   if (prepared.navigateProjectId && isCurrentVisibleSession(prepared.session.id)) {
     projectStore.addRecentProject(prepared.navigateProjectId);
     await router.push(buildProjectRouteLocation(prepared.navigateProjectId, prepared.session.id));
@@ -15065,7 +15049,7 @@ async function handleSubmit() {
       beginAwaitingRuntime(session.id, submitKind, submitStartedAt);
     }
     submissionSucceeded = true;
-    recordUsedDevinModel(session);
+    recordUsedModel(session);
     recordSubmittedPrompt(draftText, session.projectId || submitProjectId);
     const isCurrentSubmissionSession = isCurrentVisibleSession(session.id);
     if (prepared.navigateProjectId && isCurrentSubmissionSession) {
@@ -15159,7 +15143,7 @@ async function handleConfirmScheduledSend() {
         dependsOnId: scheduledDependsOnId.value || undefined,
       }
     );
-    recordUsedDevinModel(session);
+    recordUsedModel(session);
     recordSubmittedPrompt(draftText, session.projectId || submitProjectId);
     clearComposerDraftAfterSubmit(draftSessionId, submitProjectId);
     const isCurrentSubmissionSession = isCurrentVisibleSession(session.id);
@@ -15325,7 +15309,7 @@ async function handlePreinput(mode: 'redirect' | 'queue') {
       { attachments }
     );
     submissionSucceeded = true;
-    recordUsedDevinModel(session);
+    recordUsedModel(session);
     recordSubmittedPrompt(draftText, session.projectId || submitProjectId);
     if (isCurrentVisibleSession(session.id)) {
       isMobileComposerSettingsExpanded.value = false;
@@ -16157,7 +16141,7 @@ async function handlePlanCardImplement() {
         []
       );
       if (sendResult.accepted) {
-        recordUsedDevinModel(targetSession);
+        recordUsedModel(targetSession);
       }
       if (sendResult.accepted && !sendResult.runtimeObserved) {
         beginAwaitingRuntime(targetSession.id, 'execute_plan', submitStartedAt);
@@ -16199,7 +16183,7 @@ async function handlePlanCardImplementFreshContext() {
       freshContext: true,
     });
     if (sendResult.accepted) {
-      recordUsedDevinModel(sourceSession);
+      recordUsedModel(sourceSession);
     }
     if (sendResult.accepted && !sendResult.runtimeObserved) {
       beginAwaitingRuntime(sourceSession.id, 'execute_plan', submitStartedAt);

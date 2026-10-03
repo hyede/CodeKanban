@@ -260,28 +260,50 @@ export function resolveCustomModelOptions(
 }
 
 export function resolvePiModelOptionGroups(
-  models: WebSessionPiModelInfo[]
+  models: WebSessionPiModelInfo[],
+  recentModelValues: string[] = [],
+  recentLabel = 'Recently Used'
 ): WebSessionModelOptionGroup[] {
-  const groups = new Map<string, WebSessionModelOption[]>();
+  const optionsByValue = new Map(
+    resolvePiModelOptions(models).map(option => [option.value, option] as const)
+  );
+  const recentValues = [...new Set(recentModelValues.map(value => String(value || '').trim()))]
+    .filter(value => optionsByValue.has(value))
+    .slice(0, PI_FREQUENT_MODEL_LIMIT);
+  const recent = new Set(recentValues);
+  const providers = new Map<string, WebSessionModelOption[]>();
   for (const model of models) {
     const provider = model.provider.trim();
-    if (!provider || !model.id.trim()) {
+    if (!provider || !model.id.trim() || recent.has(piModelValue(model))) {
       continue;
     }
-    const options = groups.get(provider) ?? [];
-    options.push({
-      label: model.name || model.id,
-      value: `${provider}/${model.id}`,
-      menuLabel: model.name || model.id,
-    });
-    groups.set(provider, options);
+    const options = providers.get(provider) ?? [];
+    options.push(piModelOption(model));
+    providers.set(provider, options);
   }
-  return [...groups.entries()].map(([provider, children]) => ({
-    type: 'group',
-    key: `pi-provider-${provider}`,
-    label: provider,
-    children,
-  }));
+  const groups: WebSessionModelOptionGroup[] = recentValues.length
+    ? [
+        {
+          type: 'group',
+          key: 'pi-recent',
+          label: recentLabel,
+          children: recentValues.map(value => ({
+            ...optionsByValue.get(value)!,
+            accentLabel: value.slice(0, value.indexOf('/')),
+            removable: true,
+          })),
+        },
+      ]
+    : [];
+  return [
+    ...groups,
+    ...[...providers.entries()].map(([provider, children]) => ({
+      type: 'group' as const,
+      key: `pi-provider-${provider}`,
+      label: provider,
+      children,
+    })),
+  ];
 }
 
 export function filterPiModelOptionGroups(

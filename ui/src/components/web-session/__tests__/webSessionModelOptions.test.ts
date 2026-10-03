@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -36,7 +38,29 @@ import {
   shouldSuppressPiModelMenuClose,
 } from '@/components/web-session/webSessionModelOptions';
 
+const panelSource = readFileSync(new URL('../WebSessionPanel.vue', import.meta.url), 'utf8');
+
 describe('webSessionModelOptions', () => {
+  it('opens the Pi search catalog directly and keeps searches when entering the menu', () => {
+    expect(panelSource).toContain(
+      "<template v-if=\"selectedAgent === 'pi' || selectedAgent === 'devin'\" #header>"
+    );
+    expect(panelSource).not.toContain('showAllPiModels');
+    expect(panelSource).toContain('show === showModelSelector.value ||');
+  });
+
+  it('controls model detail popovers and dismisses them through the select scroll event', () => {
+    expect(panelSource).toContain('@scroll="clearModelOptionPopovers"');
+    expect(panelSource).toMatch(
+      /show:\s*showModelSelector\.value &&\s*modelOptionPopoverValues\.value\.has/
+    );
+    expect(panelSource).toMatch(
+      /function clearModelOptionPopovers\(\) \{\s*modelOptionPopoverValues\.value = new Set\(\);/
+    );
+    expect(panelSource).toContain('animated: false');
+    expect(panelSource.match(/@update:value="clearModelOptionPopovers"/g)).toHaveLength(2);
+  });
+
   it('uses the Devin catalog for model, reasoning, and pricing metadata', () => {
     const models = [
       {
@@ -630,6 +654,66 @@ describe('webSessionModelOptions', () => {
     expect(filterPiModelOptionGroups(groups, 'sonnet')).toEqual([groups[0]]);
     expect(filterPiModelOptionGroups(groups, 'gpt-4.1')).toEqual([groups[1]]);
     expect(filterPiModelOptionGroups(groups, 'missing')).toEqual([]);
+  });
+
+  it('shows Pi recent models before provider categories without duplicate values', () => {
+    const catalog = [
+      { provider: 'openai', id: 'gpt-5.4', name: 'GPT-5.4', reasoning: true },
+      { provider: 'openai', id: 'gpt-5.5', name: 'GPT-5.5', reasoning: true },
+      { provider: 'anthropic', id: 'sonnet', name: 'Sonnet', reasoning: true },
+    ];
+    const groups = resolvePiModelOptionGroups(
+      catalog,
+      [' anthropic/sonnet ', 'openai/gpt-5.4', 'anthropic/sonnet', 'missing/model'],
+      '最近使用'
+    );
+
+    expect(groups.map(group => group.label)).toEqual(['最近使用', 'openai']);
+    expect(groups[0]?.children).toEqual([
+      {
+        label: 'Sonnet',
+        value: 'anthropic/sonnet',
+        menuLabel: 'Sonnet',
+        accentLabel: 'anthropic',
+        removable: true,
+      },
+      {
+        label: 'GPT-5.4',
+        value: 'openai/gpt-5.4',
+        menuLabel: 'GPT-5.4',
+        accentLabel: 'openai',
+        removable: true,
+      },
+    ]);
+    const values = groups.flatMap(group => group.children.map(option => option.value));
+    expect(new Set(values).size).toBe(catalog.length);
+    expect(filterPiModelOptionGroups(groups, 'anthropic')[0]?.children[0]?.value).toBe(
+      'anthropic/sonnet'
+    );
+    expect(filterPiModelOptionGroups(groups, 'gpt-5.5')[0]?.children[0]?.value).toBe(
+      'openai/gpt-5.5'
+    );
+    expect(resolvePiModelOptionGroups(catalog, ['missing/model'])).toEqual(
+      resolvePiModelOptionGroups(catalog)
+    );
+  });
+
+  it('bounds Pi recent entries and normalizes catalog values', () => {
+    const catalog = Array.from({ length: 8 }, (_, index) => ({
+      provider: ' provider ',
+      id: ` model-${index} `,
+      name: `Model ${index}`,
+      reasoning: false,
+    }));
+    const groups = resolvePiModelOptionGroups(
+      catalog,
+      catalog.map((_, index) => `provider/model-${index}`)
+    );
+    expect(groups[0]?.children).toHaveLength(6);
+    expect(groups[1]?.children.map(option => option.value)).toEqual([
+      'provider/model-6',
+      'provider/model-7',
+    ]);
   });
 
   it('keeps Pi user-selected primary models unique and bounded', () => {
