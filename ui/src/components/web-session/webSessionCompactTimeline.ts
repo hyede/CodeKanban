@@ -1,4 +1,6 @@
+import { getMcpToolDisplayName } from './webSessionToolPresentation';
 import type { WebSessionBlock } from '@/stores/webSession';
+import type { WebSessionCommandExecutionGroupDetail } from '@/api/webSession';
 import { normalizeWebSessionActivityToolKind } from '@/constants/webSessionActivityDisplayMode';
 
 interface CompactTimelineGroupItem {
@@ -110,8 +112,72 @@ export function projectWebSessionVisibleTimelineBlocks(
   blocks: WebSessionBlock[],
   agent?: string
 ): WebSessionBlock[] {
-  return projectWebSessionCompactTimelineBlocks(blocks, agent).filter(
-    block => !isTransportRetryNoteBlock(block) && !isEmptyAssistantBlock(block)
+  return projectWebSessionApprovalHistoryBlocks(
+    projectWebSessionCompactTimelineBlocks(blocks, agent)
+  ).filter(block => !isTransportRetryNoteBlock(block) && !isEmptyAssistantBlock(block));
+}
+
+function projectWebSessionApprovalHistoryBlocks(blocks: WebSessionBlock[]): WebSessionBlock[] {
+  const projected: Array<WebSessionBlock | null> = [];
+  const pending: number[] = [];
+  for (const block of blocks) {
+    if (block.kind === 'user') {
+      pending.length = 0;
+    }
+    if (block.kind === 'system' && block.detail?.type === 'approval_request') {
+      pending.push(projected.length);
+    }
+    let merged = block;
+    if (block.kind === 'system' && block.detail?.type === 'approval_response') {
+      for (let index = pending.length - 1; index >= 0; index -= 1) {
+        const requestIndex = pending[index]!;
+        const request = projected[requestIndex]!;
+        if (!matchesApprovalRequest(request, block)) {
+          continue;
+        }
+        merged = {
+          ...block,
+          detail: {
+            ...block.detail,
+            prompt: block.detail.prompt?.trim() || request.detail?.prompt || request.text,
+            command: block.detail.command?.trim() || request.detail?.command,
+            approvalKind: block.detail.approvalKind || request.detail?.approvalKind,
+          },
+          approvalRequest: { id: request.id, key: request.key, timestamp: request.timestamp },
+        };
+        projected[requestIndex] = null;
+        pending.splice(index, 1);
+        break;
+      }
+    }
+    projected.push(merged);
+  }
+  return projected.filter((block): block is WebSessionBlock => block !== null);
+}
+
+function matchesApprovalRequest(request: WebSessionBlock, response: WebSessionBlock): boolean {
+  if (
+    getSourceThreadId(request) !== getSourceThreadId(response) ||
+    (request.sourceTurnId &&
+      response.sourceTurnId &&
+      request.sourceTurnId !== response.sourceTurnId) ||
+    (request.runId && response.runId && request.runId !== response.runId) ||
+    response.timestamp < request.timestamp
+  ) {
+    return false;
+  }
+  const responseId = String(response.sourceItemId || response.payload?.iid || '').trim();
+  if (responseId) {
+    const requestId = String(request.sourceItemId || request.payload?.iid || request.id).trim();
+    return requestId === responseId;
+  }
+  const prompt = response.detail?.prompt?.trim();
+  const command = response.detail?.command?.trim();
+  const requestCommand = request.detail?.command?.trim();
+  return Boolean(
+    prompt &&
+      prompt === (request.detail?.prompt?.trim() || request.text.trim()) &&
+      (!command || !requestCommand || command === requestCommand)
   );
 }
 
@@ -156,6 +222,56 @@ function isInteractiveDynamicToolBlock(block: WebSessionBlock): boolean {
 
 function getCommandGroupId(block: WebSessionBlock): string {
   return String(block.tool?.commandGroup?.id || '').trim();
+}
+
+function getCommandGroupSourceIds(block: WebSessionBlock): string[] {
+  const sourceIds = block.payload?.commandGroupSourceIds;
+  if (Array.isArray(sourceIds)) {
+    const ids = sourceIds.map(stringValue).filter(Boolean);
+    if (ids.length > 0) {
+      return ids;
+    }
+  }
+  const id = getCommandGroupId(block) || stringValue(block.tool?.id);
+  return id ? [id] : [];
+}
+
+export async function loadWebSessionCompactToolDetail(
+  block: WebSessionBlock,
+  loadGroupDetail: (groupId: string) => Promise<WebSessionCommandExecutionGroupDetail>
+): Promise<WebSessionCommandExecutionGroupDetail> {
+  // A projected row can merge several persisted groups, or synthesize a group
+  // from individual tools. Only the original source IDs are addressable by API.
+  const sourceIds = [...new Set(getCommandGroupSourceIds(block))];
+  const details = await Promise.all(sourceIds.map(id => loadGroupDetail(id)));
+  const latest = details[details.length - 1];
+  if (!latest) {
+    throw new Error('tool group is required');
+  }
+  if (details.length === 1) {
+    return latest;
+  }
+
+  const items = new Map<string, WebSessionCommandExecutionGroupDetail['items'][number]>();
+  for (const detail of details) {
+    for (const item of detail.items) {
+      items.set(item.toolId, item);
+    }
+  }
+  const mergedItems = [...items.values()];
+  return {
+    ...latest,
+    groupId: getCommandGroupId(block) || latest.groupId,
+    count: mergedItems.length,
+    firstSeq: Math.min(...details.map(detail => detail.firstSeq)),
+    lastSeq: Math.max(...details.map(detail => detail.lastSeq)),
+    status: mergedItems.some(item => item.status === 'running')
+      ? 'running'
+      : mergedItems.some(item => item.status === 'error')
+        ? 'error'
+        : 'done',
+    items: mergedItems,
+  };
 }
 
 function findGroupId(group: WebSessionBlock[]): string {
@@ -230,6 +346,7 @@ function buildGroupedCompactToolBlock(group: WebSessionBlock[], groupId: string)
   projected.payload = {
     ...projected.payload,
     groupItems: mergedGroupItems,
+    commandGroupSourceIds: [...new Set(group.flatMap(getCommandGroupSourceIds))],
   };
   projected.tool = {
     ...projected.tool,
@@ -373,8 +490,8 @@ function resolveCompactToolSummary(block: WebSessionBlock): string {
   }
   if (kind === 'mcp_tool_call') {
     return firstNonEmpty(
-      stringValue(input?.tool_name),
-      stringValue(input?.name),
+      getMcpToolDisplayName(input),
+      stringValue(input?.server),
       stringValue(meta?.subtitle),
       stringValue(block.tool.output)
     );

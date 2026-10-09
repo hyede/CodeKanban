@@ -22,6 +22,8 @@ import xml from 'highlight.js/lib/languages/xml';
 import yaml from 'highlight.js/lib/languages/yaml';
 import { Marked, type Tokens } from 'marked';
 import { stripMagicContextTags } from '@/utils/magicContextTags';
+import { getStreamingMarkdownSource, repairMalformedOuterFence } from '@/utils/markdownFences';
+import { createMarkdownMathExtension } from '@/utils/markdownMath';
 import { resolveCopyableAbsoluteHref } from '@/utils/messageLinkNavigation';
 
 type HljsLanguageModule = Parameters<typeof hljs.registerLanguage>[1];
@@ -32,6 +34,8 @@ export interface RenderMarkdownOptions {
   enableLinkCopy?: boolean;
   linkCopyLabel?: string;
   textHighlightQuery?: string;
+  /** Opt in only for completed chat display, never raw text or file previews. */
+  repairMalformedOuterFence?: boolean;
 }
 
 const registeredLanguages = new Set<string>();
@@ -129,10 +133,26 @@ function highlightRenderedText(value: string, query: string) {
   let result = '';
   let cursor = 0;
   let tagMatch: RegExpExecArray | null;
+  let mathTag = '';
+  let mathDepth = 0;
 
   while ((tagMatch = tagPattern.exec(value))) {
-    result += highlightRenderedTextSegment(value.slice(cursor, tagMatch.index), matcher);
-    result += tagMatch[0];
+    const segment = value.slice(cursor, tagMatch.index);
+    result += mathDepth ? segment : highlightRenderedTextSegment(segment, matcher);
+    const tag = tagMatch[0];
+    // Search marks would corrupt KaTeX's layout and MathML accessibility tree.
+    if (!mathDepth && /\bdata-markdown-math="true"/.test(tag)) {
+      mathTag = /^<(div|span)\b/.exec(tag)?.[1] ?? '';
+    }
+    if (mathTag) {
+      if (tag.startsWith('</' + mathTag + '>')) {
+        mathDepth -= 1;
+        if (!mathDepth) mathTag = '';
+      } else if (tag.startsWith('<' + mathTag + '>') || tag.startsWith('<' + mathTag + ' ')) {
+        mathDepth += 1;
+      }
+    }
+    result += tag;
     cursor = tagPattern.lastIndex;
   }
 
@@ -235,6 +255,9 @@ function renderCodeCopyButton(options: RenderMarkdownOptions = {}) {
 }
 
 function renderCodeBlock({ text, lang }: Tokens.Code, options: RenderMarkdownOptions = {}) {
+  if (text.length === 0) {
+    return '';
+  }
   const normalizedLanguage = normalizeLanguage(lang);
   const languageLabel = pickLanguageName(lang);
   const shouldHighlight = !options.disableCodeHighlight && Boolean(normalizedLanguage);
@@ -292,6 +315,7 @@ function createMarkdownRenderer(options: RenderMarkdownOptions = {}) {
     breaks: true,
     gfm: true,
   });
+  renderer.use(createMarkdownMathExtension());
 
   renderer.use({
     renderer: {
@@ -345,6 +369,7 @@ function markdownOptionsVariantKey(options: RenderMarkdownOptions = {}) {
     enableLinkCopy: !!options.enableLinkCopy,
     linkCopyLabel: options.linkCopyLabel || '',
     textHighlightQuery: options.textHighlightQuery || '',
+    repairMalformedOuterFence: !!options.repairMalformedOuterFence,
   });
 }
 
@@ -361,7 +386,10 @@ export function renderMarkdown(value: string, options: RenderMarkdownOptions = {
 
   // Magic Context markers only ever addressed the model; strip them before the
   // text reaches the reader.
-  const source = stripMagicContextTags(value);
+  const rawSource = stripMagicContextTags(value);
+  const source = options.repairMalformedOuterFence
+    ? repairMalformedOuterFence(rawSource)
+    : rawSource;
   let html: string;
   try {
     const rendered = getMarkdownRenderer(options).parse(source) as string;
@@ -441,7 +469,9 @@ export function renderStreamingMarkdownBlocks(
   }
 
   const variant = markdownOptionsVariantKey(options);
-  const source = stripMagicContextTags(value);
+  // Repair requires a completed message. Streaming only gates the last possible
+  // marker line and otherwise retains the standard parser semantics.
+  const source = getStreamingMarkdownSource(stripMagicContextTags(value));
   const tokens = (getMarkdownRenderer(options).lexer(source) as MarkdownToken[]).filter(
     token => token.type !== 'space'
   );

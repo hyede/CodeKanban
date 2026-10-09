@@ -412,17 +412,21 @@ func mcpToolCallSummary(input any) string {
 	record := decodeRawObject(input)
 	toolName := strings.TrimSpace(firstNonEmpty(
 		stringValue(record["tool_name"]),
+		stringValue(record["tool"]),
 		stringValue(record["name"]),
 	))
+	server := strings.TrimSpace(stringValue(record["server"]))
+	if server != "" && toolName != "" && !strings.HasPrefix(toolName, server+".") {
+		toolName = server + "." + toolName
+	}
 	target := strings.TrimSpace(firstNonEmpty(
 		extractMcpArgumentHint(record["arguments"]),
-		stringValue(record["server"]),
 		stringValue(record["path"]),
 	))
 	if toolName != "" && target != "" && toolName != target {
 		return toolName + " · " + target
 	}
-	return firstNonEmpty(toolName, target)
+	return firstNonEmpty(toolName, target, server)
 }
 
 func extractMcpArgumentHint(value any) string {

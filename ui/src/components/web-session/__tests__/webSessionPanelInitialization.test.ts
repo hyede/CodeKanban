@@ -56,6 +56,7 @@ describe('WebSessionPanel initialization with cached tools', () => {
         isInteractiveDynamicTool: () => false,
         isReasoningBlock: () => false,
         isPlanChoiceRequestBlock: () => false,
+        isPendingApprovalRequestBlock: () => false,
         shouldShowToolPendingPlaceholder: () => false,
         projectWebSessionVisibleTimelineBlocks: (blocks: unknown) => blocks,
         captureVisibleBlocks: (blocks: unknown) => {

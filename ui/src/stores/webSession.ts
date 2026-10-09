@@ -107,6 +107,16 @@ type WireSession = {
     in?: number;
     cin?: number;
     out?: number;
+    acu?: number;
+    crd?: number;
+  };
+  dq?: {
+    pn?: string;
+    dy?: number;
+    wk?: number;
+    dr?: number;
+    wr?: number;
+    fa?: number;
   };
   cea?: {
     in?: number;
@@ -411,6 +421,7 @@ export interface WebSessionBlock {
   level?: 'info' | 'warn' | 'error';
   done?: boolean;
   detail?: WebSessionHistoryDetail;
+  approvalRequest?: { id: string; key: string; timestamp: number };
   payload?: Record<string, unknown>;
   deliveryState?: WebSessionMessageDeliveryState;
   freshContext?: boolean;
@@ -3313,7 +3324,19 @@ export const useWebSessionStore = defineStore('web-session', () => {
         cachedInputTokens: session.usa?.cin ?? 0,
         outputTokens: session.usa?.out ?? 0,
         cost: session.cost ?? 0,
+        acuCost: session.usa?.acu ?? 0,
+        creditCost: session.usa?.crd ?? 0,
       },
+      devinQuota: session.dq
+        ? {
+            planName: session.dq.pn ?? '',
+            dailyRemainingPercent: session.dq.dy ?? 0,
+            weeklyRemainingPercent: session.dq.wk ?? 0,
+            dailyResetAtUnix: session.dq.dr ?? 0,
+            weeklyResetAtUnix: session.dq.wr ?? 0,
+            fetchedAtUnix: session.dq.fa ?? 0,
+          }
+        : null,
       latestTurnUsage: session.ltu
         ? {
             inputTokens: session.ltu.in ?? 0,
@@ -5040,10 +5063,18 @@ export const useWebSessionStore = defineStore('web-session', () => {
     session: WebSessionSummary | null,
     accumulator: RuntimeAccumulator
   ): RuntimeProjection {
-    const approval =
+    let approval =
       session?.assistantState === 'waiting_approval'
         ? (snapshotApprovalsBySession.value[session.id] ?? accumulator.pendingApproval)
         : accumulator.pendingApproval;
+    if (approval?.kind === 'plan_approval' && session?.agent === 'devin') {
+      // Devin plan exits are answered through the plan card / send pipeline
+      // (resolveDevinPlanApprovalForSend), so the generic approval card would
+      // only stack a second set of actions on the same decision. Claude keeps
+      // the card: its run stays alive while the control request is pending,
+      // and approving it is the only way to unblock the agent.
+      approval = null;
+    }
     const userInput = accumulator.pendingUserInput;
     const assistantState = getSessionAssistantStateValue(session);
     const assistantStateUpdatedAt = getAssistantStateUpdatedAt(session);

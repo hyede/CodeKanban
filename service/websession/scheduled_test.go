@@ -1123,6 +1123,90 @@ func TestScheduledIdleConditionsBlockWaitingNonPlanSessions(t *testing.T) {
 	}
 }
 
+func TestScheduledIdleConditionsDistinguishPlanApproval(t *testing.T) {
+	cleanup := initTestDB(t)
+	defer cleanup()
+
+	project := seedProject(t)
+	initScheduledTestGitRepository(t, project.Path)
+	manager, err := NewManager(Config{DataDir: t.TempDir()}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+	target, err := manager.CreateSession(context.Background(), CreateParams{
+		ProjectID: project.ID, Agent: AgentCodex, WorkflowMode: WorkflowModePlan,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession target returned error: %v", err)
+	}
+	other, err := manager.CreateSession(context.Background(), CreateParams{
+		ProjectID: project.ID, Agent: AgentCodex, WorkflowMode: WorkflowModePlan,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession other returned error: %v", err)
+	}
+	targetRecord, err := manager.GetSession(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("GetSession target returned error: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		mode      WorkflowMode
+		status    Status
+		state     AssistantState
+		activeRun bool
+		retrying  bool
+		blocked   bool
+	}{
+		{name: "plan mode approval", mode: WorkflowModePlan, status: StatusRunning, state: AssistantStateWaitingPlanApproval},
+		{name: "plan approval after switching to default", mode: WorkflowModeDefault, status: StatusRunning, state: AssistantStateWaitingPlanApproval},
+		{name: "legacy plan approval", mode: WorkflowModeDefault, status: StatusWaitingApproval, state: AssistantStateNone},
+		{name: "tool approval", mode: WorkflowModeDefault, status: StatusRunning, state: AssistantStateWaitingApproval, blocked: true},
+		{name: "user input", mode: WorkflowModeDefault, status: StatusDone, state: AssistantStateWaitingInput, blocked: true},
+		{name: "active run with plan approval", mode: WorkflowModeDefault, status: StatusRunning, state: AssistantStateWaitingPlanApproval, activeRun: true, blocked: true},
+		{name: "retry with plan approval", mode: WorkflowModeDefault, status: StatusRunning, state: AssistantStateWaitingPlanApproval, retrying: true, blocked: true},
+		{name: "aborting with plan approval", mode: WorkflowModeDefault, status: StatusAborting, state: AssistantStateWaitingPlanApproval, blocked: true},
+		{name: "running without assistant state", mode: WorkflowModeDefault, status: StatusRunning, state: AssistantStateNone, blocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var retryAt *time.Time
+			if tc.retrying {
+				value := time.Now().Add(time.Minute)
+				retryAt = &value
+			}
+			if err := model.GetDB().Model(&tables.WebSessionTable{}).
+				Where("id = ?", other.ID).
+				Updates(map[string]any{
+					"status": string(tc.status), "assistant_state": string(tc.state),
+					"auto_retry_next_at": retryAt,
+				}).Error; err != nil {
+				t.Fatalf("update other session state: %v", err)
+			}
+			if _, err := manager.UpdateWorkflowMode(context.Background(), other.ID, tc.mode); err != nil {
+				t.Fatalf("UpdateWorkflowMode returned error: %v", err)
+			}
+			if tc.activeRun {
+				manager.mu.Lock()
+				manager.runs[other.ID] = &activeRun{sessionID: other.ID}
+				manager.mu.Unlock()
+				t.Cleanup(func() {
+					manager.mu.Lock()
+					delete(manager.runs, other.ID)
+					manager.mu.Unlock()
+				})
+			}
+			reasons, conditionError, err := manager.evaluateScheduledIdleConditions(context.Background(), targetRecord)
+			if err != nil || conditionError != "" {
+				t.Fatalf("evaluateScheduledIdleConditions returned error: %v, %q", err, conditionError)
+			}
+			if blocked := scheduledBlockingReasonsContain(reasons, ScheduledInputBlockedNonPlanSessionActive); blocked != tc.blocked {
+				t.Fatalf("expected blocked=%v, got reasons=%#v", tc.blocked, reasons)
+			}
+		})
+	}
+}
+
 func TestScheduledIdleConditionsWaitWhenGitIsUnavailable(t *testing.T) {
 	cleanup := initTestDB(t)
 	defer cleanup()

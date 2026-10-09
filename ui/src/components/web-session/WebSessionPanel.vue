@@ -125,7 +125,7 @@
         </div>
 
         <div
-          v-if="contextUsageIndicator.available || contextUsageIndicator.hasUsage"
+          v-if="contextUsageIndicator.available || contextUsageIndicator.hasUsage || devinQuota"
           class="context-usage-total-stats"
         >
           <div class="context-usage-stat">
@@ -155,6 +155,32 @@
               tokens
             </span>
           </div>
+          <template v-if="devinQuota">
+            <div v-if="devinQuota.acu" class="context-usage-stat">
+              <span class="context-usage-stat__label">
+                {{ t('webSession.contextUsageDevinAcu') }}
+              </span>
+              <span class="context-usage-total-value">{{ devinQuota.acu }} ACU</span>
+            </div>
+            <div v-if="devinQuota.credit" class="context-usage-stat">
+              <span class="context-usage-stat__label">
+                {{ t('webSession.contextUsageDevinCredits') }}
+              </span>
+              <span class="context-usage-total-value">{{ devinQuota.credit }} credits</span>
+            </div>
+            <div v-if="devinQuota.daily !== null" class="context-usage-stat">
+              <span class="context-usage-stat__label">
+                {{ t('webSession.contextUsageDevinDailyQuota') }}
+              </span>
+              <span class="context-usage-total-value">{{ devinQuota.daily }}%</span>
+            </div>
+            <div v-if="devinQuota.weekly !== null" class="context-usage-stat">
+              <span class="context-usage-stat__label">
+                {{ t('webSession.contextUsageDevinWeeklyQuota') }}
+              </span>
+              <span class="context-usage-total-value">{{ devinQuota.weekly }}%</span>
+            </div>
+          </template>
         </div>
 
         <div class="context-usage-divider"></div>
@@ -566,7 +592,7 @@
                       clearable
                       :placeholder="t('webSession.conversationSearchPlaceholder')"
                       :aria-label="t('webSession.conversationSearchPlaceholder')"
-                      @keydown.esc="closeTimelineSearch"
+                      @keydown="handleTimelineSearchKeydown"
                     >
                       <template #prefix>
                         <n-icon size="15" aria-hidden="true"><SearchOutline /></n-icon>
@@ -916,7 +942,13 @@
                   :key="item.key"
                   :ref="element => setTimelineBlockRef(element, item)"
                   class="timeline-item"
-                  :class="`kind-${item.kind}`"
+                  :class="[
+                    `kind-${item.kind}`,
+                    {
+                      'is-compact-activity':
+                        isApprovalHistoryBlock(item) || isReasoningDisclosureBlock(item),
+                    },
+                  ]"
                   :data-timeline-key="item.key"
                   :data-timeline-order-index="item.orderIndex"
                 >
@@ -1099,7 +1131,7 @@
                             class="timeline-raw-text plan-tool-content--raw"
                           ><code
                             v-html="
-                              renderHighlightedPlainText(item.tool.output, timelineSearchQuery)
+                              renderHighlightedPlainText(item.tool.output, getTimelineSearchQuery(item))
                             "
                           ></code></pre>
                           <WebSessionStreamingMarkdown
@@ -1174,6 +1206,7 @@
                     :label="reasoningDisclosureLabel(item)"
                     :summary="reasoningDisclosurePreview(item)"
                     :streaming="isReasoningStreaming(item)"
+                    :plain="isPiReasoningBlock(item)"
                     :time="formatTime(item.timestamp)"
                     :time-title="formatDateTime(item.timestamp)"
                     :expanded="isReasoningDisclosureExpanded(item.tool)"
@@ -1414,6 +1447,18 @@
                     </div>
                   </div>
 
+                  <WebSessionApprovalHistory
+                    v-else-if="isApprovalHistoryBlock(item)"
+                    :label="historyInteractionTitle(item)"
+                    :state="historyApprovalState(item)"
+                    :prompt="historyInteractionPrompt(item)"
+                    :command="historyInteractionCommand(item)"
+                    :time="historyApprovalTime(item)"
+                    :time-title="historyApprovalTimeTitle(item)"
+                    :search-match="isTimelineSearchBlockMatch(item)"
+                    :search-active="isTimelineSearchBlockActive(item)"
+                  />
+
                   <div
                     v-else-if="item.kind === 'system' && item.detail"
                     class="timeline-history-card-shell"
@@ -1609,7 +1654,7 @@
                       <pre
                         v-if="shouldShowMessageRawToggle(item) && isBlockRawMode(item, 'message')"
                         class="item-text item-text--raw timeline-raw-text"
-                      ><code v-html="renderHighlightedPlainText(item.text, timelineSearchQuery)"></code></pre>
+                      ><code v-html="renderHighlightedPlainText(item.text, getTimelineSearchQuery(item))"></code></pre>
                       <WebSessionStreamingMarkdown
                         v-else-if="
                           isStreamingMessageMarkdownBlock(item) && getDisplayBlockText(item)
@@ -1773,10 +1818,10 @@
                       >
                     </div>
                     <div class="approval-prompt">
-                      {{ pendingApproval.prompt || t('webSession.approvalPromptFallback') }}
+                      {{ pendingApprovalPrompt || t('webSession.approvalPromptFallback') }}
                     </div>
-                    <pre v-if="pendingApproval.command" class="approval-command">{{
-                      pendingApproval.command
+                    <pre v-if="pendingApprovalCommand" class="approval-command">{{
+                      pendingApprovalCommand
                     }}</pre>
                     <div
                       v-if="pendingApproval.stale || !pendingApproval.actionable"
@@ -1791,15 +1836,31 @@
                       <n-button
                         size="small"
                         type="primary"
-                        :disabled="pendingApproval.stale || !pendingApproval.actionable"
+                        :disabled="
+                          approvalSubmitting || pendingApproval.stale || !pendingApproval.actionable
+                        "
                         @click="handleApproval('approve')"
                       >
                         {{ t('webSession.approvalApprove') }}
                       </n-button>
                       <n-button
+                        v-if="canApproveWithYolo"
+                        size="small"
+                        type="warning"
+                        secondary
+                        :loading="approvalSubmitting"
+                        :disabled="pendingApproval.stale || !pendingApproval.actionable"
+                        :title="t('webSession.approvalApproveYoloHint')"
+                        @click="handleApproval('approve_yolo')"
+                      >
+                        {{ t('webSession.approvalApproveYolo') }}
+                      </n-button>
+                      <n-button
                         size="small"
                         secondary
-                        :disabled="pendingApproval.stale || !pendingApproval.actionable"
+                        :disabled="
+                          approvalSubmitting || pendingApproval.stale || !pendingApproval.actionable
+                        "
                         @click="handleApproval('reject')"
                       >
                         {{ t('webSession.approvalReject') }}
@@ -2154,6 +2215,8 @@
                   <n-select
                     :show="showModelSelector"
                     v-model:value="selectedModel"
+                    placement="top-start"
+                    @scroll="clearModelOptionPopovers"
                     @update:show="handleModelSelectorShowChange"
                     @mouseenter="handleComposerSelectorPointerEnter('model')"
                     @mouseleave="handleComposerSelectorPointerLeave('model')"
@@ -2165,18 +2228,13 @@
                     size="small"
                     :options="modelOptions"
                   >
-                    <template
-                      v-if="
-                        (selectedAgent === 'pi' && showAllPiModels) ||
-                        (selectedAgent === 'devin' && showAllDevinModels)
-                      "
-                      #header
-                    >
+                    <template v-if="selectedAgent === 'pi' || selectedAgent === 'devin'" #header>
                       <div class="pi-model-search-header">
                         <n-input
                           v-if="selectedAgent === 'pi'"
                           ref="piModelSearchInputRef"
                           v-model:value="piModelSearchQuery"
+                          @update:value="clearModelOptionPopovers"
                           clearable
                           :bordered="false"
                           size="small"
@@ -2196,6 +2254,7 @@
                           v-else
                           ref="devinModelSearchInputRef"
                           v-model:value="devinModelSearchQuery"
+                          @update:value="clearModelOptionPopovers"
                           clearable
                           :bordered="false"
                           size="small"
@@ -3701,6 +3760,7 @@ import WebSessionMessageEditDialog from '@/components/web-session/WebSessionMess
 import WebSessionMobileSessionDrawer from '@/components/web-session/WebSessionMobileSessionDrawer.vue';
 import WebSessionScheduledSendDialog from '@/components/web-session/WebSessionScheduledSendDialog.vue';
 import WebSessionReasoningSummary from '@/components/web-session/WebSessionReasoningSummary.vue';
+import WebSessionApprovalHistory from '@/components/web-session/WebSessionApprovalHistory.vue';
 import WebSessionStreamingMarkdown from '@/components/web-session/WebSessionStreamingMarkdown.vue';
 import WebSessionSidebar from '@/components/web-session/WebSessionSidebar.vue';
 import { useWebSessionSidebarResize } from '@/components/web-session/useWebSessionSidebarResize';
@@ -3789,7 +3849,10 @@ import {
   type TimelineRawSurface,
 } from '@/components/web-session/webSessionRawToggle';
 import { resolveWebSessionAttachmentPreviewMode } from '@/components/web-session/webSessionAttachmentPreview';
-import { projectWebSessionVisibleTimelineBlocks } from '@/components/web-session/webSessionCompactTimeline';
+import {
+  loadWebSessionCompactToolDetail,
+  projectWebSessionVisibleTimelineBlocks,
+} from '@/components/web-session/webSessionCompactTimeline';
 import {
   findLatestSubAgentActivityBlock,
   isTransportRetryActivityText,
@@ -3798,6 +3861,10 @@ import {
 import { resolveWebSessionSubAgentPopover } from '@/components/web-session/webSessionSubAgentPopover';
 import { resolveWebSessionTimelineSubAgent } from '@/components/web-session/webSessionTimelineRole';
 import { useWebSessionConversationSearch } from '@/components/web-session/useWebSessionConversationSearch';
+import {
+  countWebSessionConversationSearchHighlights,
+  countWebSessionConversationSearchOccurrences,
+} from '@/components/web-session/webSessionConversationSearch';
 import { useWebSessionLocalFileNavigation } from '@/components/web-session/useWebSessionLocalFileNavigation';
 import { createWebSessionToolPresentation } from '@/components/web-session/webSessionToolPresentation';
 import { createWebSessionStreamingMarkdownController } from '@/components/web-session/webSessionStreamingMarkdown';
@@ -4119,6 +4186,7 @@ const { locale, t } = useLocale();
 const { copyText } = useAppClipboard();
 const { isMobile } = useResponsive();
 const timelineMarkdownRenderOptions = computed(() => ({
+  repairMalformedOuterFence: true,
   enableCodeBlockCopy: true,
   codeBlockCopyLabel: 'copy',
   enableLinkCopy: true,
@@ -5510,6 +5578,7 @@ function handleWebSessionDocumentVisibilityChange() {
     beginWebSessionCatchUp('document-hidden');
     return;
   }
+  liveStateClockMs.value = Date.now();
   refreshTabHeaderLayout();
   void loadCodexRuntimeConfig();
   scheduleWebSessionCatchUp('document-visible');
@@ -5519,6 +5588,7 @@ function handleWebSessionWindowFocus() {
   if (!props.isActive || !isDocumentVisible()) {
     return;
   }
+  liveStateClockMs.value = Date.now();
   refreshTabHeaderLayout();
   void loadComposerDeveloperConfig(true);
   void loadCodexRuntimeConfig();
@@ -5529,6 +5599,7 @@ function handleWebSessionWindowPageShow() {
   if (!props.isActive || !isDocumentVisible()) {
     return;
   }
+  liveStateClockMs.value = Date.now();
   refreshTabHeaderLayout();
   void loadComposerDeveloperConfig(true);
   void loadCodexRuntimeConfig();
@@ -5773,7 +5844,7 @@ function getMessageMarkdownRenderOptions(block: WebSessionBlock) {
   const options = isStreamingMessageMarkdownBlock(block)
     ? streamingTimelineMarkdownRenderOptions.value
     : timelineMarkdownRenderOptions.value;
-  const query = timelineSearchQuery.value.trim();
+  const query = getTimelineSearchQuery(block);
   return query ? { ...options, textHighlightQuery: query } : options;
 }
 
@@ -5788,7 +5859,7 @@ function getPlanToolMarkdownRenderOptions(block: WebSessionBlock) {
   const options = isStreamingPlanMarkdownBlock(block)
     ? streamingTimelineMarkdownRenderOptions.value
     : timelineMarkdownRenderOptions.value;
-  const query = timelineSearchQuery.value.trim();
+  const query = getTimelineSearchQuery(block);
   return query ? { ...options, textHighlightQuery: query } : options;
 }
 
@@ -5926,6 +5997,17 @@ function isPlanChoiceRequestBlock(block: WebSessionBlock) {
   );
 }
 
+// The runtime strip already renders the actionable approval card; hiding the
+// matching history card while the request is still pending avoids showing the
+// same prompt twice. Once resolved the card stays in history as the record.
+function isPendingApprovalRequestBlock(block: WebSessionBlock) {
+  const pending = pendingApproval.value;
+  if (!pending?.itemId || block.detail?.type !== 'approval_request') {
+    return false;
+  }
+  return (block.sourceItemId?.trim() || block.id) === pending.itemId;
+}
+
 const knownSubAgents = computed<WebSessionSubAgent[]>(() =>
   currentRealSession.value ? webSessionStore.getSubAgents(currentRealSession.value.id) : []
 );
@@ -5951,6 +6033,32 @@ const sessionUsageWithSubAgents = computed(() => {
   return {
     ...usage,
     totalTokens: usage.inputTokens + usage.outputTokens,
+  };
+});
+
+function formatDevinQuotaAmount(value: number) {
+  return new Intl.NumberFormat(locale.value, { maximumFractionDigits: 3 }).format(value);
+}
+
+const devinQuota = computed(() => {
+  const session = currentSession.value;
+  if (!session || session.agent !== 'devin') {
+    return null;
+  }
+  const acu = Math.max(0, Number(session.usage.acuCost || 0));
+  const credit = Math.max(0, Number(session.usage.creditCost || 0));
+  const account = session.devinQuota ?? null;
+  if (acu <= 0 && credit <= 0 && !account) {
+    return null;
+  }
+  return {
+    acu: acu > 0 ? formatDevinQuotaAmount(acu) : null,
+    credit: credit > 0 ? formatDevinQuotaAmount(credit) : null,
+    planName: account?.planName ?? '',
+    daily: account ? Math.max(0, Math.min(100, Number(account.dailyRemainingPercent || 0))) : null,
+    weekly: account
+      ? Math.max(0, Math.min(100, Number(account.weeklyRemainingPercent || 0)))
+      : null,
   };
 });
 
@@ -6006,6 +6114,9 @@ const filteredTimelineBlocks = computed(() =>
     if (isPlanChoiceRequestBlock(block)) {
       return false;
     }
+    if (isPendingApprovalRequestBlock(block)) {
+      return false;
+    }
     if (!shouldRenderToolBlockInTimeline(block)) {
       return false;
     }
@@ -6035,6 +6146,8 @@ const {
   selectPage: handleTimelineSearchPageChange,
   isBlockMatch: isTimelineSearchBlockMatch,
   isBlockActive: isTimelineSearchBlockActive,
+  getBlockQuery: getTimelineSearchQuery,
+  handleInputKeydown: handleTimelineSearchKeydown,
 } = useWebSessionConversationSearch({
   currentSession: currentRealSession,
   visibleBlocks,
@@ -6049,7 +6162,34 @@ const {
   },
   loadEarlierHistory: loadEarlierTimelineSearchHistory,
   scrollToBlock: scrollToTimelineBlock,
+  getBlockElement: key => timelineBlockElements.get(key),
+  countOccurrences: countTimelineSearchOccurrences,
 });
+
+function countTimelineSearchOccurrences(block: WebSessionBlock, query: string) {
+  let html: string;
+  if (block.kind === 'user' || block.kind === 'assistant') {
+    html =
+      shouldShowMessageRawToggle(block) && isBlockRawMode(block, 'message')
+        ? renderHighlightedPlainText(block.text, query)
+        : isStreamingMessageMarkdownBlock(block)
+          ? getMessageStreamingBlocks(block)
+              .map(part => part.html)
+              .join('')
+          : renderMarkdown(getMessageMarkdownText(block), getMessageMarkdownRenderOptions(block));
+  } else if (block.tool && isPlanTool(block.tool)) {
+    html = isBlockRawMode(block, 'plan')
+      ? renderHighlightedPlainText(block.tool.output ?? '', query)
+      : isStreamingPlanMarkdownBlock(block)
+        ? getPlanStreamingBlocks(block)
+            .map(part => part.html)
+            .join('')
+        : renderMarkdown(getPlanToolMarkdownText(block), getPlanToolMarkdownRenderOptions(block));
+  } else {
+    return countWebSessionConversationSearchOccurrences(block, query);
+  }
+  return countWebSessionConversationSearchHighlights(html);
+}
 const visibleRawTimelineBlockKeys = computed(() => {
   const keys: string[] = [];
   visibleBlocks.value.forEach(block => {
@@ -6123,6 +6263,47 @@ const streamingMarkdownTargets = computed(() =>
 const pendingApproval = computed(() =>
   currentRealSession.value ? webSessionStore.getPendingApproval(currentRealSession.value.id) : null
 );
+const approvalSubmitting = ref(false);
+const canApproveWithYolo = computed(
+  () =>
+    (currentRealSession.value?.agent === 'devin' || currentRealSession.value?.agent === 'claude') &&
+    currentRealSession.value.permissionLevel !== 'yolo'
+);
+// Devin's request_permission often carries only a toolCallId, so the stored
+// prompt is a generic fallback. When the tool call is on the timeline, prefer
+// its real title/command — this also repairs approvals persisted before the
+// backend started filling those fields.
+function isGenericDevinApprovalPrompt(prompt: string) {
+  return /^Devin is waiting for (permission to continue|approval to use [^.]+)\.$/.test(prompt);
+}
+const pendingApprovalTool = computed(() => {
+  const itemId = pendingApproval.value?.itemId?.trim() ?? '';
+  if (!itemId) {
+    return null;
+  }
+  for (let index = blocks.value.length - 1; index >= 0; index -= 1) {
+    const tool = blocks.value[index].tool;
+    if (tool && tool.id === itemId) {
+      return tool;
+    }
+  }
+  return null;
+});
+const pendingApprovalPrompt = computed(() => {
+  const prompt = pendingApproval.value?.prompt?.trim() ?? '';
+  if (prompt && !isGenericDevinApprovalPrompt(prompt)) {
+    return prompt;
+  }
+  return pendingApprovalTool.value?.name?.trim() || prompt;
+});
+const pendingApprovalCommand = computed(() => {
+  const command = pendingApproval.value?.command?.trim() ?? '';
+  if (command) {
+    return command;
+  }
+  const input = asRecord(pendingApprovalTool.value?.input);
+  return String(input?.command ?? input?.cmd ?? '').trim();
+});
 const approvalRecoveryKey = ref('');
 const approvalRecoveryStatus = ref<'idle' | 'loading' | 'unavailable'>('idle');
 let approvalRecoveryRequestId = 0;
@@ -6848,22 +7029,38 @@ async function navigateTimelineViewportUserMessage(
   }
 }
 
-function scrollToTimelineBlock(targetKey: string) {
+function scrollToTimelineBlock(targetKey: string, highlight?: HTMLElement) {
   const container = timelineScrollRef.value;
   const element = timelineBlockElements.get(targetKey);
   if (!container || !element) {
     return;
   }
   const containerRect = container.getBoundingClientRect();
-  const elementRect = element.getBoundingClientRect();
-  const targetTop = container.scrollTop + (elementRect.top - containerRect.top) - 12;
+  const elementRect = (highlight ?? element).getBoundingClientRect();
+  const offset = highlight ? Math.max(64, (container.clientHeight - elementRect.height) / 2) : 12;
+  const targetTop = container.scrollTop + (elementRect.top - containerRect.top) - offset;
+  // Code blocks and tables can scroll horizontally inside the timeline.
+  for (
+    let parent = highlight?.parentElement;
+    parent && parent !== container;
+    parent = parent.parentElement
+  ) {
+    if (
+      parent.scrollWidth > parent.clientWidth &&
+      ['auto', 'scroll'].includes(getComputedStyle(parent).overflowX)
+    ) {
+      const parentRect = parent.getBoundingClientRect();
+      parent.scrollLeft +=
+        elementRect.left - parentRect.left - (parent.clientWidth - elementRect.width) / 2;
+    }
+  }
   invalidateTimelineScrollSync();
   autoFollowBottom.value = false;
   showJumpToBottom.value = true;
   lastTimelineScrollTop.value = container.scrollTop;
   container.scrollTo({
     top: Math.max(0, targetTop),
-    behavior: 'smooth',
+    behavior: highlight ? 'auto' : 'smooth',
   });
 }
 
@@ -6954,7 +7151,11 @@ async function forkTimelineUserMessage(block: WebSessionBlock) {
   }
   devinForkPendingItemId.value = block.id;
   try {
-    const target = await webSessionStore.forkSessionMessage(session.projectId, session.id, block.id);
+    const target = await webSessionStore.forkSessionMessage(
+      session.projectId,
+      session.id,
+      block.id
+    );
     const branch = target.session;
     if (!branch) {
       throw new Error(t('common.error'));
@@ -8551,8 +8752,8 @@ const liveStateDetail = computed(() => {
   if (isOptimisticExecuteFeedbackActive.value) {
     return '';
   }
-  if (pendingApproval.value?.prompt) {
-    return pendingApproval.value.prompt;
+  if (pendingApprovalPrompt.value) {
+    return pendingApprovalPrompt.value;
   }
   if (
     displayLiveState.value.phase === 'waiting_approval' ||
@@ -10810,7 +11011,7 @@ function mergeSidebarSearchResults(
 }
 
 const crossProjectSessions = computed<CrossProjectSessionItem[]>(() => {
-  return collectWebSessionSidebarSessions(
+  const items = collectWebSessionSidebarSessions(
     sidebarVisibleProjectIds.value,
     webSessionStore.getSessions
   ).map(session => {
@@ -10821,6 +11022,7 @@ const crossProjectSessions = computed<CrossProjectSessionItem[]>(() => {
       isCurrent: session.projectId === props.projectId && session.id === activeSessionId.value,
     };
   });
+  return withProjectBadges(items);
 });
 
 const filteredCrossProjectSessions = computed(() => {
@@ -11174,12 +11376,9 @@ const agentOptions: Array<{ label: string; value: WebSessionAgent }> = [
   { label: 'Devin', value: 'devin' },
 ];
 const showAdditionalCodexModels = ref(false);
-const showAllPiModels = ref(false);
-const showAllDevinModels = ref(false);
 const showModelSelector = ref(false);
 const showReasoningSelector = ref(false);
 const keepAdditionalCodexModelsForNextOpen = ref(false);
-const keepAllPiModelsForNextOpen = ref(false);
 const piModelSearchQuery = ref('');
 const devinModelSearchQuery = ref('');
 const piModelSearchInputRef = ref<InstanceType<typeof NInput> | null>(null);
@@ -11210,9 +11409,7 @@ const MODEL_SELECT_CHAR_WIDTH = 7;
 const modelMenuHovered = ref(false);
 const modelOptionPopoverValues = ref<Set<string>>(new Set());
 const modelSelectMenuProps = computed(() => {
-  const piCatalogOpen =
-    (selectedAgent.value === 'pi' && showAllPiModels.value) ||
-    (selectedAgent.value === 'devin' && showAllDevinModels.value);
+  const piCatalogOpen = selectedAgent.value === 'pi' || selectedAgent.value === 'devin';
   return {
     class: piCatalogOpen
       ? 'web-session-model-select-menu is-pi-model-catalog'
@@ -11220,8 +11417,6 @@ const modelSelectMenuProps = computed(() => {
     style: piCatalogOpen
       ? { width: 'min(280px, calc(100vw - 64px))', maxWidth: 'calc(100vw - 64px)' }
       : { minWidth: '132px', maxWidth: '180px' },
-    placement: 'top-start',
-    flip: false,
     onMouseenter: () => {
       modelMenuHovered.value = true;
       handleComposerSelectorPointerEnter('model');
@@ -11233,10 +11428,16 @@ const modelSelectMenuProps = computed(() => {
   };
 });
 
+function clearModelOptionPopovers() {
+  modelOptionPopoverValues.value = new Set();
+}
+
 function handleModelOptionPopoverShow(value: string, show: boolean) {
   const next = new Set(modelOptionPopoverValues.value);
-  if (show) {
+  if (show && showModelSelector.value) {
+    next.clear();
     next.add(value);
+    clearComposerSelectorHoverCloseTimer('model');
   } else {
     next.delete(value);
   }
@@ -11417,7 +11618,7 @@ function renderModelOption(info: {
     'div',
     {
       ...info.node.props,
-      ...(removable ? { 'data-devin-recent': 'true' } : {}),
+      ...(removable ? { 'data-model-recent': 'true' } : {}),
     },
     [
       h('div', { class: 'n-base-select-option__content' }, [
@@ -11441,11 +11642,11 @@ function renderModelOption(info: {
               type: 'button',
               class: 'model-option-remove',
               'aria-label': t('webSession.removeRecentModel'),
-              'data-devin-recent': 'true',
+              'data-model-recent': 'true',
               onClick: (event: MouseEvent) => {
                 event.stopPropagation();
                 event.preventDefault();
-                removeRecentDevinModel(String(info.option.value ?? ''));
+                removeRecentModel(String(info.option.value ?? ''));
               },
               onMousedown: (event: MouseEvent) => {
                 event.stopPropagation();
@@ -11497,11 +11698,17 @@ function renderModelOption(info: {
   return h(
     NPopover,
     {
+      key: String(info.option.value ?? ''),
+      show:
+        showModelSelector.value &&
+        modelOptionPopoverValues.value.has(String(info.option.value ?? '')),
       trigger: 'hover',
       placement: 'right-start',
       showArrow: false,
-      delay: 200,
-      duration: 300,
+      animated: false,
+      style: { maxWidth: 'calc(100vw - 24px)' },
+      delay: 0,
+      duration: 100,
       keepAliveOnHover: true,
       'onUpdate:show': (show: boolean) =>
         handleModelOptionPopoverShow(String(info.option.value ?? ''), show),
@@ -11634,11 +11841,14 @@ function defaultReasoningEffortForAgent(agent: WebSessionAgent): WebSessionReaso
   return resolveDefaultReasoningEffortForAgent(agent, configuredDefaultReasoningEffortFor(agent));
 }
 
+function configuredDefaultPermissionLevelFor(agent: WebSessionAgent) {
+  return agent === 'devin'
+    ? developerConfig.value.webSessionDevinDefaultPermissionLevel
+    : developerConfig.value.webSessionCodexDefaultPermissionLevel;
+}
+
 function defaultPermissionLevelForAgent(agent: WebSessionAgent): 'default' | 'elevated' | 'yolo' {
-  return resolveDefaultPermissionLevelForAgent(
-    agent,
-    developerConfig.value.webSessionCodexDefaultPermissionLevel
-  );
+  return resolveDefaultPermissionLevelForAgent(agent, configuredDefaultPermissionLevelFor(agent));
 }
 
 function reasoningEffortLabel(effort: WebSessionReasoningEffort) {
@@ -11710,9 +11920,7 @@ function withCurrentReasoningEffortOption(
 
 function piModelMenuInteractionState() {
   return {
-    catalogOpen:
-      (selectedAgent.value === 'pi' && showAllPiModels.value) ||
-      (selectedAgent.value === 'devin' && showAllDevinModels.value),
+    catalogOpen: selectedAgent.value === 'pi' || selectedAgent.value === 'devin',
     searchFocused: piModelSearchFocused.value || devinModelSearchFocused.value,
     searchComposing: piModelSearchComposing.value,
   };
@@ -11734,7 +11942,7 @@ function handleDevinModelSearchBlur() {
 }
 
 function refocusPiModelSearch() {
-  if (selectedAgent.value === 'pi' && showAllPiModels.value) {
+  if (selectedAgent.value === 'pi' && showModelSelector.value) {
     nextTick(() => piModelSearchInputRef.value?.focus());
   }
 }
@@ -11769,15 +11977,18 @@ function handlePiModelSearchEscape(event: KeyboardEvent) {
   handleModelSelectorShowChange(false);
 }
 
-function removeRecentDevinModel(model: string) {
+function removeRecentModel(model: string) {
   const value = model.trim();
   if (!value) {
     return;
   }
-  devinFrequentModelValues.value = devinFrequentModelValues.value.filter(item => item !== value);
+  const recentModels =
+    selectedAgent.value === 'pi' ? piFrequentModelValues : devinFrequentModelValues;
+  recentModels.value = recentModels.value.filter(item => item !== value);
+  clearModelOptionPopovers();
 }
 
-function scrollDevinModelMenuToRecent() {
+function scrollModelMenuToRecent() {
   const menu = document.querySelector<HTMLElement>(
     '.web-session-model-select-menu.is-pi-model-catalog'
   );
@@ -11789,9 +12000,7 @@ function scrollDevinModelMenuToRecent() {
     pending.scrollIntoView({ block: 'nearest' });
     return;
   }
-  const target = menu.querySelector<HTMLElement>(
-    '.n-base-select-option[data-devin-recent="true"]'
-  );
+  const target = menu.querySelector<HTMLElement>('.n-base-select-option[data-model-recent="true"]');
   if (target) {
     target.scrollIntoView({ block: 'nearest' });
     return;
@@ -11803,36 +12012,28 @@ function scrollDevinModelMenuToRecent() {
 }
 
 function handleModelSelectorShowChange(show: boolean) {
-  if (!show && shouldSuppressPiModelMenuClose('show-change', piModelMenuInteractionState())) {
+  if (
+    show === showModelSelector.value ||
+    (!show && shouldSuppressPiModelMenuClose('show-change', piModelMenuInteractionState()))
+  ) {
     return;
   }
   if (show && selectedAgent.value === 'codex' && !keepAdditionalCodexModelsForNextOpen.value) {
     showAdditionalCodexModels.value = false;
   }
-  if (show && selectedAgent.value === 'pi' && !keepAllPiModelsForNextOpen.value) {
-    showAllPiModels.value = false;
-    piModelSearchQuery.value = '';
-    resetPiModelSearchInteraction();
-  }
-  if (show && selectedAgent.value === 'devin') {
-    showAllDevinModels.value = true;
-    devinModelSearchQuery.value = '';
-    nextTick(() => window.setTimeout(scrollDevinModelMenuToRecent, 40));
-  }
+  resetPiModelSearchInteraction();
+  piModelSearchQuery.value = '';
+  devinModelSearchQuery.value = '';
+  clearModelOptionPopovers();
+  showModelSelector.value = show;
   if (show) {
     keepAdditionalCodexModelsForNextOpen.value = false;
-    keepAllPiModelsForNextOpen.value = false;
-    if (selectedAgent.value === 'pi' && showAllPiModels.value) {
-      refocusPiModelSearch();
+    if (selectedAgent.value === 'pi' || selectedAgent.value === 'devin') {
+      nextTick(() => window.setTimeout(scrollModelMenuToRecent, 40));
     }
+    refocusPiModelSearch();
   } else {
-    resetPiModelSearchInteraction();
-    devinModelSearchQuery.value = '';
-  }
-  showModelSelector.value = show;
-  if (!show) {
     modelMenuHovered.value = false;
-    modelOptionPopoverValues.value = new Set();
   }
 }
 
@@ -11901,13 +12102,14 @@ const claudeRuntimeOptions = computed(() =>
 );
 
 const piModelOptionGroups = computed(() =>
-  resolvePiModelOptionGroups(runtimeConfig.value?.piModels ?? [])
+  resolvePiModelOptionGroups(
+    runtimeConfig.value?.piModels ?? [],
+    piFrequentModelValues.value,
+    t('webSession.recentlyUsedModels')
+  )
 );
 const filteredPiModelOptionGroups = computed(() =>
   filterPiModelOptionGroups(piModelOptionGroups.value, piModelSearchQuery.value)
-);
-const piDefaultPrimaryModelOptions = computed(() =>
-  resolvePiPrimaryModelOptions(runtimeConfig.value?.piModels ?? [])
 );
 const piPrimaryModelOptions = computed(() =>
   resolvePiPrimaryModelOptions(runtimeConfig.value?.piModels ?? [], piFrequentModelValues.value)
@@ -12065,15 +12267,16 @@ function builtinModelValuesForAgent(agent: WebSessionAgent) {
   return resolvePiModelOptions(runtimeConfig.value?.piModels ?? []).map(option => option.value);
 }
 
-function recordUsedDevinModel(session?: Pick<WebSessionSummary, 'agent' | 'model'> | null) {
-  if (session?.agent !== 'devin') {
+function recordUsedModel(session?: Pick<WebSessionSummary, 'agent' | 'model'> | null) {
+  if (session?.agent !== 'devin' && session?.agent !== 'pi') {
     return;
   }
   const model = String(session.model || '').trim();
   if (!model) {
     return;
   }
-  devinFrequentModelValues.value = rememberPiFrequentModel(devinFrequentModelValues.value, model);
+  const recentModels = session.agent === 'pi' ? piFrequentModelValues : devinFrequentModelValues;
+  recentModels.value = rememberPiFrequentModel(recentModels.value, model);
 }
 
 function rememberCustomModelForAgent(agent: WebSessionCustomModelAgent, model: string) {
@@ -12110,9 +12313,8 @@ const modelOptions = computed(() => {
     if (dynamicOptions.length > 0) {
       const groups = filteredDevinModelOptionGroups.value;
       const recentValues = new Set(
-        groups
-          .find(group => group.key === 'devin-recent')
-          ?.children.map(option => option.value) ?? []
+        groups.find(group => group.key === 'devin-recent')?.children.map(option => option.value) ??
+          []
       );
       const specialOptions = devinSpecialModelOptions.value
         .filter(option =>
@@ -12143,12 +12345,6 @@ const modelOptions = computed(() => {
     ];
   }
   if (selectedAgent.value === 'pi') {
-    if (!showAllPiModels.value) {
-      return [
-        ...withCurrentModelOption(piPrimaryModelOptions.value, activeModel),
-        { label: t('webSession.allModels'), value: MORE_MODELS_VALUE },
-      ];
-    }
     return piModelSearchQuery.value.trim()
       ? filteredPiModelOptionGroups.value
       : withCurrentPiModelOption(filteredPiModelOptionGroups.value, activeModel);
@@ -12261,14 +12457,8 @@ const selectedModel = computed({
   set: value => {
     const next = normalizeDevinModelOptionValue(String(value));
     if (next === MORE_MODELS_VALUE) {
-      if (selectedAgent.value === 'pi') {
-        showAllPiModels.value = true;
-        keepAllPiModelsForNextOpen.value = true;
-        piModelSearchQuery.value = '';
-      } else {
-        showAdditionalCodexModels.value = true;
-        keepAdditionalCodexModelsForNextOpen.value = true;
-      }
+      showAdditionalCodexModels.value = true;
+      keepAdditionalCodexModelsForNextOpen.value = true;
       nextTick(() => {
         handleModelSelectorShowChange(true);
       });
@@ -12278,10 +12468,8 @@ const selectedModel = computed({
       openCustomModelDialog();
       return;
     }
-    if (
-      selectedAgent.value === 'pi' &&
-      !piDefaultPrimaryModelOptions.value.some(option => option.value === next)
-    ) {
+    clearModelOptionPopovers();
+    if (selectedAgent.value === 'pi') {
       piFrequentModelValues.value = rememberPiFrequentModel(piFrequentModelValues.value, next);
     }
     const currentEffort = currentSession.value?.reasoningEffort ?? draftReasoningEffort.value;
@@ -12850,7 +13038,10 @@ function handleActivityDisplayClick(block: WebSessionBlock) {
 }
 
 function shouldHideTimelineMeta(item: WebSessionBlock) {
-  if (isReasoningDisclosureBlock(item)) {
+  if (
+    isReasoningDisclosureBlock(item) ||
+    (isApprovalHistoryBlock(item) && !timelineSubAgent(item))
+  ) {
     return true;
   }
   if (!Number.isFinite(item.timestamp) || item.timestamp <= 0) {
@@ -13012,7 +13203,9 @@ async function openCommandExecutionDetail(block: WebSessionBlock) {
   }
 
   try {
-    const detail = await webSessionStore.loadCommandGroupDetail(requestSessionId, groupId);
+    const detail = await loadWebSessionCompactToolDetail(block, sourceId =>
+      webSessionStore.loadCommandGroupDetail(requestSessionId, sourceId)
+    );
     if (
       currentRealSession.value?.id === requestSessionId &&
       activeCommandExecutionGroupId.value === requestGroupId
@@ -13077,7 +13270,7 @@ function isReasoningDisclosureExpanded(tool: NonNullable<WebSessionBlock['tool']
   if (claimed !== undefined) {
     return claimed;
   }
-  return currentSession.value?.agent === 'pi' && tool.status === 'running';
+  return false;
 }
 
 function toggleReasoningDisclosure(tool: NonNullable<WebSessionBlock['tool']>) {
@@ -13147,14 +13340,47 @@ function timelineRoleLabel(item: WebSessionBlock) {
   return t('common.info');
 }
 
+function isApprovalHistoryBlock(item: WebSessionBlock) {
+  return (
+    item.kind === 'system' &&
+    (item.detail?.type === 'approval_request' || item.detail?.type === 'approval_response')
+  );
+}
+
+function historyApprovalState(item: WebSessionBlock): 'request' | 'approve' | 'reject' | 'cancel' {
+  if (item.detail?.type === 'approval_request') {
+    return 'request';
+  }
+  const action = item.detail?.action;
+  return action === 'reject' || action === 'cancel' ? action : 'approve';
+}
+
+function historyApprovalTime(item: WebSessionBlock) {
+  const requestedAt = item.approvalRequest?.timestamp;
+  const resolvedTime = formatTime(item.timestamp);
+  return requestedAt && requestedAt !== item.timestamp
+    ? `${formatTime(requestedAt)} → ${resolvedTime}`
+    : resolvedTime;
+}
+
+function historyApprovalTimeTitle(item: WebSessionBlock) {
+  const requestedAt = item.approvalRequest?.timestamp;
+  const resolvedTime = formatDateTime(item.timestamp);
+  return requestedAt && requestedAt !== item.timestamp
+    ? `${formatDateTime(requestedAt)} → ${resolvedTime}`
+    : resolvedTime;
+}
+
 function historyInteractionTitle(item: WebSessionBlock) {
   switch (item.detail?.type) {
     case 'approval_request':
       return t('webSession.approvalTitle');
     case 'approval_response':
-      return item.detail.action === 'reject'
-        ? t('webSession.historyApprovalRejected')
-        : t('webSession.historyApprovalApproved');
+      return item.detail.action === 'cancel'
+        ? t('webSession.historyApprovalCanceled')
+        : item.detail.action === 'reject'
+          ? t('webSession.historyApprovalRejected')
+          : t('webSession.historyApprovalApproved');
     case 'user_input_request':
       return t('webSession.userInputTitle');
     case 'user_input_response':
@@ -14641,7 +14867,7 @@ async function handleRetryTimelineUserMessage(item: WebSessionBlock) {
       attachments: item.attachments,
       freshContext: item.freshContext,
     });
-    recordUsedDevinModel(prepared.session);
+    recordUsedModel(prepared.session);
     recordSubmittedPrompt(item.text, prepared.session.projectId || props.projectId);
     if (prepared.navigateProjectId && isCurrentVisibleSession(prepared.session.id)) {
       projectStore.addRecentProject(prepared.navigateProjectId);
@@ -14672,7 +14898,7 @@ async function continueErroredSession(session: WebSessionSummary) {
     shouldActivate: () => isCurrentVisibleSession(sourceSessionId),
   });
   await webSessionStore.sendMessage(prepared.session.id, 'continue', []);
-  recordUsedDevinModel(prepared.session);
+  recordUsedModel(prepared.session);
   if (prepared.navigateProjectId && isCurrentVisibleSession(prepared.session.id)) {
     projectStore.addRecentProject(prepared.navigateProjectId);
     await router.push(buildProjectRouteLocation(prepared.navigateProjectId, prepared.session.id));
@@ -14823,7 +15049,7 @@ async function handleSubmit() {
       beginAwaitingRuntime(session.id, submitKind, submitStartedAt);
     }
     submissionSucceeded = true;
-    recordUsedDevinModel(session);
+    recordUsedModel(session);
     recordSubmittedPrompt(draftText, session.projectId || submitProjectId);
     const isCurrentSubmissionSession = isCurrentVisibleSession(session.id);
     if (prepared.navigateProjectId && isCurrentSubmissionSession) {
@@ -14917,7 +15143,7 @@ async function handleConfirmScheduledSend() {
         dependsOnId: scheduledDependsOnId.value || undefined,
       }
     );
-    recordUsedDevinModel(session);
+    recordUsedModel(session);
     recordSubmittedPrompt(draftText, session.projectId || submitProjectId);
     clearComposerDraftAfterSubmit(draftSessionId, submitProjectId);
     const isCurrentSubmissionSession = isCurrentVisibleSession(session.id);
@@ -15083,7 +15309,7 @@ async function handlePreinput(mode: 'redirect' | 'queue') {
       { attachments }
     );
     submissionSucceeded = true;
-    recordUsedDevinModel(session);
+    recordUsedModel(session);
     recordSubmittedPrompt(draftText, session.projectId || submitProjectId);
     if (isCurrentVisibleSession(session.id)) {
       isMobileComposerSettingsExpanded.value = false;
@@ -15257,10 +15483,9 @@ function pendingInputPreview(item: WebSessionPendingInput) {
 }
 
 function pendingInputTimingLabel(item: WebSessionPendingInput) {
+  const nowMs = Math.max(liveStateClockMs.value, Date.now());
   const remainingSeconds =
-    item.readyAt == null
-      ? 0
-      : Math.max(0, Math.ceil((item.readyAt - liveStateClockMs.value) / 1000));
+    item.readyAt == null ? 0 : Math.max(0, Math.ceil((item.readyAt - nowMs) / 1000));
   if (item.status === 'failed') {
     return t('webSession.pendingSteerFailed');
   }
@@ -15578,11 +15803,10 @@ function scheduledIdleStatusLabel(item: WebSessionScheduledInput) {
       .join(locale.value === 'zh-CN' ? '、' : ', ');
   }
   if (item.idleSince != null) {
+    const nowMs = Math.max(liveStateClockMs.value, Date.now());
     const remainingSeconds = Math.max(
       0,
-      Math.ceil(
-        (item.idleSince + scheduledIdleConfirmationWindowMs - liveStateClockMs.value) / 1000
-      )
+      Math.ceil((item.idleSince + scheduledIdleConfirmationWindowMs - nowMs) / 1000)
     );
     return remainingSeconds > 0
       ? t('webSession.scheduledIdleStabilizing', { seconds: remainingSeconds })
@@ -15594,11 +15818,10 @@ function scheduledIdleStatusLabel(item: WebSessionScheduledInput) {
 function scheduledInputTimeLabel(item: WebSessionScheduledInput) {
   if (item.scheduleKind === 'when_idle') {
     if (item.idleSince != null && item.blockingReasons.length === 0) {
+      const nowMs = Math.max(liveStateClockMs.value, Date.now());
       const remainingSeconds = Math.max(
         0,
-        Math.ceil(
-          (item.idleSince + scheduledIdleConfirmationWindowMs - liveStateClockMs.value) / 1000
-        )
+        Math.ceil((item.idleSince + scheduledIdleConfirmationWindowMs - nowMs) / 1000)
       );
       return remainingSeconds > 0
         ? t('webSession.scheduledIdleCountdownShort', { seconds: remainingSeconds })
@@ -15918,7 +16141,7 @@ async function handlePlanCardImplement() {
         []
       );
       if (sendResult.accepted) {
-        recordUsedDevinModel(targetSession);
+        recordUsedModel(targetSession);
       }
       if (sendResult.accepted && !sendResult.runtimeObserved) {
         beginAwaitingRuntime(targetSession.id, 'execute_plan', submitStartedAt);
@@ -15960,7 +16183,7 @@ async function handlePlanCardImplementFreshContext() {
       freshContext: true,
     });
     if (sendResult.accepted) {
-      recordUsedDevinModel(sourceSession);
+      recordUsedModel(sourceSession);
     }
     if (sendResult.accepted && !sendResult.runtimeObserved) {
       beginAwaitingRuntime(sourceSession.id, 'execute_plan', submitStartedAt);
@@ -16023,22 +16246,46 @@ async function handleUserInputSubmit() {
   }
 }
 
-async function handleApproval(action: 'approve' | 'reject') {
-  if (!currentRealSession.value || !pendingApproval.value) {
+async function handleApproval(action: 'approve' | 'reject' | 'approve_yolo') {
+  const session = currentRealSession.value;
+  const approval = pendingApproval.value;
+  if (!session || !approval || approvalSubmitting.value) {
     return;
   }
-  if (pendingApproval.value.stale) {
-    message.info(pendingApproval.value.recoveryMessage || t('webSession.recoveredActionExpired'));
+  if (approval.stale || !approval.actionable) {
+    message.info(approval.recoveryMessage || t('webSession.recoveredActionExpired'));
     return;
   }
+  if (action === 'approve_yolo' && session.agent !== 'devin' && session.agent !== 'claude') {
+    return;
+  }
+  const { itemId, requestedAt } = approval;
+  approvalSubmitting.value = true;
   try {
-    if (action === 'approve') {
-      await webSessionStore.approveSession(currentRealSession.value.id);
+    if (action === 'approve_yolo') {
+      await webSessionStore.updatePermissionLevel(session.id, 'yolo');
+      // A permission change can resolve or replace the request while in flight.
+      // Only approve the original request, even if the user switches tabs.
+      const currentApproval = webSessionStore.getPendingApproval(session.id);
+      if (
+        !currentApproval ||
+        currentApproval.stale ||
+        !currentApproval.actionable ||
+        currentApproval.itemId !== itemId ||
+        currentApproval.requestedAt !== requestedAt
+      ) {
+        return;
+      }
+    }
+    if (action !== 'reject') {
+      await webSessionStore.approveSession(session.id);
       return;
     }
-    await webSessionStore.rejectSession(currentRealSession.value.id);
+    await webSessionStore.rejectSession(session.id);
   } catch (error) {
     message.error(formatSessionInteractionError(error));
+  } finally {
+    approvalSubmitting.value = false;
   }
 }
 

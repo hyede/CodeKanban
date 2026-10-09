@@ -141,7 +141,10 @@ func Init(ctx context.Context, cfg *utils.AppConfig, assets embed.FS, info *AppI
 				return websession.ReasoningEffort(cfg.Developer.WebSessionCodexDefaultReasoningEffort)
 			}
 		},
-		DefaultCodexPermissionLevel: func() string {
+		DefaultAgentPermissionLevel: func(agent websession.Agent) string {
+			if agent == websession.AgentDevin {
+				return cfg.Developer.WebSessionDevinDefaultPermissionLevel
+			}
 			return cfg.Developer.WebSessionCodexDefaultPermissionLevel
 		},
 		DefaultCodexSyncMode: func() websession.SyncMode {

@@ -174,6 +174,7 @@ func TestNormalizeDeveloperConfigPreservesCustomCodexDefaults(t *testing.T) {
 		WebSessionCodexDefaultReasoningEffort: " HIGH ",
 		WebSessionCodexDefaultPermissionLevel: " YOLO ",
 		WebSessionCodexDefaultSyncMode:        " DEEP ",
+		WebSessionDevinDefaultPermissionLevel: " STANDARD ",
 	})
 	if got.WebSessionCodexClientName != "custom-client" {
 		t.Fatalf("expected trimmed custom client name, got %q", got.WebSessionCodexClientName)
@@ -196,11 +197,15 @@ func TestNormalizeDeveloperConfigPreservesCustomCodexDefaults(t *testing.T) {
 	if got.WebSessionCodexDefaultSyncMode != "deep" {
 		t.Fatalf("expected normalized deep sync mode, got %q", got.WebSessionCodexDefaultSyncMode)
 	}
+	if got.WebSessionDevinDefaultPermissionLevel != "standard" {
+		t.Fatalf("expected normalized devin standard permission, got %q", got.WebSessionDevinDefaultPermissionLevel)
+	}
 
 	invalid := NormalizeDeveloperConfig(DeveloperConfig{
 		WebSessionCodexDefaultReasoningEffort: "unsupported",
 		WebSessionCodexDefaultPermissionLevel: "unsupported",
 		WebSessionCodexDefaultSyncMode:        "unsupported",
+		WebSessionDevinDefaultPermissionLevel: "unsupported",
 	})
 	if invalid.WebSessionCodexDefaultReasoningEffort != WebSessionCodexDefaultSetting {
 		t.Fatalf(
@@ -210,7 +215,8 @@ func TestNormalizeDeveloperConfigPreservesCustomCodexDefaults(t *testing.T) {
 		)
 	}
 	if invalid.WebSessionCodexDefaultPermissionLevel != WebSessionCodexDefaultSetting ||
-		invalid.WebSessionCodexDefaultSyncMode != WebSessionCodexDefaultSetting {
+		invalid.WebSessionCodexDefaultSyncMode != WebSessionCodexDefaultSetting ||
+		invalid.WebSessionDevinDefaultPermissionLevel != WebSessionCodexDefaultSetting {
 		t.Fatalf("expected invalid Codex settings to use sentinels, got %#v", invalid)
 	}
 

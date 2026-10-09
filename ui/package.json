@@ -46,6 +46,7 @@
     "dayjs": "^1.11.18",
     "eventemitter3": "^5.0.1",
     "highlight.js": "^11.11.1",
+    "katex": "^0.16.47",
     "marked": "^17.0.0",
     "naive-ui": "^2.43.1",
     "pinia": "^3.0.3",

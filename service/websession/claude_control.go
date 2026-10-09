@@ -414,9 +414,19 @@ func (m *Manager) respondClaudeControl(
 	if run == nil || pending == nil || strings.TrimSpace(pending.ControlRequestID) == "" {
 		return fmt.Errorf("Claude control request is unavailable")
 	}
+	result := claudeControlResult(behavior, input, message)
+	if behavior == "allow" && pending.Kind != pendingServerRequestUserInput && effectivePermissionLevel(session) == PermissionLevelYolo {
+		// Apply the current session permission to the live CLI together with this
+		// approval. Session scope avoids changing the user's settings on disk.
+		result["updatedPermissions"] = []map[string]any{{
+			"type":        "setMode",
+			"mode":        "bypassPermissions",
+			"destination": "session",
+		}}
+	}
 	if err := run.writeJSONInput(claudeControlResponse(
 		pending.ControlRequestID,
-		claudeControlResult(behavior, input, message),
+		result,
 	)); err != nil {
 		return err
 	}
@@ -454,8 +464,15 @@ func (m *Manager) respondClaudeControl(
 	}); err != nil {
 		return err
 	}
-	_ = m.updateRuntimeState(context.Background(), session.ID,
-		applyAssistantStateUpdates(map[string]any{"updated_at": now}, AssistantStateWorking, now))
+	updates := applyAssistantStateUpdates(map[string]any{"updated_at": now}, AssistantStateWorking, now)
+	if behavior == "allow" && pending.Kind == pendingServerRequestPlanApproval {
+		// ExitPlanMode was approved in the current process; do not re-enter plan
+		// mode when launching the next turn.
+		updates["workflow_mode"] = string(WorkflowModeDefault)
+	}
+	if err := m.updateRuntimeState(context.Background(), session.ID, updates); err != nil {
+		return err
+	}
 	m.broadcastSessionSummary(context.Background(), session.ID)
 	return nil
 }

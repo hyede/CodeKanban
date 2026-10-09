@@ -17,7 +17,7 @@ describe('WebSessionPanel Pi reasoning disclosure', () => {
     );
   });
 
-  it('auto-opens live Pi thinking into the capped box and folds it once settled', () => {
+  it('keeps live Pi thinking collapsed until the reader expands it', () => {
     expect(panelSource).toMatch(
       /function isReasoningDisclosureExpanded\(tool: NonNullable<WebSessionBlock\['tool'\]>\)/
     );
@@ -25,7 +25,7 @@ describe('WebSessionPanel Pi reasoning disclosure', () => {
     // still streaming and folds away once it settles. The auto-opened body is
     // the capped scroll box, so the stream grows inside a stable frame.
     expect(panelSource).toMatch(
-      /return currentSession\.value\?\.agent === 'pi' && tool\.status === 'running';/
+      /function isReasoningDisclosureExpanded\([^\n]+\) \{\s*const claimed = expandedTools\.value\[tool\.id\];\s*if \(claimed !== undefined\) \{\s*return claimed;\s*\}\s*return false;\s*\}/
     );
     expect(panelSource).toMatch(
       /function toggleReasoningDisclosure\(tool: NonNullable<WebSessionBlock\['tool'\]>\)/
@@ -42,6 +42,7 @@ describe('WebSessionPanel Pi reasoning disclosure', () => {
     expect(panelSource).toMatch(/v-else-if="isReasoningDisclosureBlock\(item\) && item\.tool"/);
     expect(panelSource).toMatch(/:summary="reasoningDisclosurePreview\(item\)"/);
     expect(panelSource).toMatch(/:streaming="isReasoningStreaming\(item\)"/);
+    expect(panelSource).toMatch(/:plain="isPiReasoningBlock\(item\)"/);
     // Reasoning rows stay text-only: no tool card chrome is introduced.
     expect(panelSource).toMatch(/function reasoningDisclosurePreview\(block: WebSessionBlock\)/);
   });
@@ -59,8 +60,12 @@ describe('WebSessionPanel streaming render cost', () => {
   it('routes Pi thinking through the throttled streaming markdown controller', () => {
     // The streaming surfaces are the only ones allowed to bypass a full
     // re-render per delta; thinking has to be one of them.
-    expect(panelSource).toMatch(/type StreamingMarkdownSurface = 'message' \| 'plan' \| 'reasoning'/);
-    expect(panelSource).toMatch(/function isStreamingReasoningMarkdownBlock\(block: WebSessionBlock\)/);
+    expect(panelSource).toMatch(
+      /type StreamingMarkdownSurface = 'message' \| 'plan' \| 'reasoning'/
+    );
+    expect(panelSource).toMatch(
+      /function isStreamingReasoningMarkdownBlock\(block: WebSessionBlock\)/
+    );
     expect(panelSource).toMatch(/key: buildStreamingMarkdownKey\(block, 'reasoning'\)/);
     expect(panelSource).toMatch(/getEffectiveStreamingMarkdownText\(block, 'reasoning'\)/);
   });

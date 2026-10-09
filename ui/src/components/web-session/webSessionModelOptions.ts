@@ -1,7 +1,7 @@
 import type {
   WebSessionAgent,
+  WebSessionAgentDefaultPermissionLevel,
   WebSessionCCRModelInfo,
-  WebSessionCodexDefaultPermissionLevel,
   WebSessionCodexDefaultReasoningEffort,
   WebSessionDevinModelInfo,
   WebSessionPiModelInfo,
@@ -14,6 +14,7 @@ import {
   EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_MODEL,
   EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_PERMISSION_LEVEL,
   EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT,
+  GENERIC_CODEX_REASONING_EFFORTS,
 } from '@/constants/webSessionDefaults';
 
 export type WebSessionAgentOption = WebSessionAgent;
@@ -259,28 +260,50 @@ export function resolveCustomModelOptions(
 }
 
 export function resolvePiModelOptionGroups(
-  models: WebSessionPiModelInfo[]
+  models: WebSessionPiModelInfo[],
+  recentModelValues: string[] = [],
+  recentLabel = 'Recently Used'
 ): WebSessionModelOptionGroup[] {
-  const groups = new Map<string, WebSessionModelOption[]>();
+  const optionsByValue = new Map(
+    resolvePiModelOptions(models).map(option => [option.value, option] as const)
+  );
+  const recentValues = [...new Set(recentModelValues.map(value => String(value || '').trim()))]
+    .filter(value => optionsByValue.has(value))
+    .slice(0, PI_FREQUENT_MODEL_LIMIT);
+  const recent = new Set(recentValues);
+  const providers = new Map<string, WebSessionModelOption[]>();
   for (const model of models) {
     const provider = model.provider.trim();
-    if (!provider || !model.id.trim()) {
+    if (!provider || !model.id.trim() || recent.has(piModelValue(model))) {
       continue;
     }
-    const options = groups.get(provider) ?? [];
-    options.push({
-      label: model.name || model.id,
-      value: `${provider}/${model.id}`,
-      menuLabel: model.name || model.id,
-    });
-    groups.set(provider, options);
+    const options = providers.get(provider) ?? [];
+    options.push(piModelOption(model));
+    providers.set(provider, options);
   }
-  return [...groups.entries()].map(([provider, children]) => ({
-    type: 'group',
-    key: `pi-provider-${provider}`,
-    label: provider,
-    children,
-  }));
+  const groups: WebSessionModelOptionGroup[] = recentValues.length
+    ? [
+        {
+          type: 'group',
+          key: 'pi-recent',
+          label: recentLabel,
+          children: recentValues.map(value => ({
+            ...optionsByValue.get(value)!,
+            accentLabel: value.slice(0, value.indexOf('/')),
+            removable: true,
+          })),
+        },
+      ]
+    : [];
+  return [
+    ...groups,
+    ...[...providers.entries()].map(([provider, children]) => ({
+      type: 'group' as const,
+      key: `pi-provider-${provider}`,
+      label: provider,
+      children,
+    })),
+  ];
 }
 
 export function filterPiModelOptionGroups(
@@ -760,6 +783,8 @@ export const CODEX_PRIMARY_MODEL_OPTIONS: WebSessionModelOption[] = [
   { label: '5.6L', value: 'gpt-5.6-luna', menuLabel: 'GPT-5.6 Luna' },
   { label: '5.6T', value: 'gpt-5.6-terra', menuLabel: 'GPT-5.6 Terra' },
   { label: '5.6S', value: 'gpt-5.6-sol', menuLabel: 'GPT-5.6 Sol' },
+  { label: '6L', value: 'gpt-6-luna', menuLabel: 'GPT-6 Luna' },
+  { label: '6S', value: 'gpt-6-sol', menuLabel: 'GPT-6 Sol' },
   { label: '6A', value: 'gpt-6-astra', menuLabel: 'GPT-6 Astra' },
 ];
 
@@ -778,6 +803,8 @@ export const CODEX_MODEL_OPTIONS: WebSessionModelOption[] = [
 
 const CODEX_REASONING_EFFORT_FALLBACKS: Record<string, WebSessionReasoningEffort[]> = {
   'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -798,7 +825,9 @@ export function resolveCodexReasoningEfforts(
     ];
   }
   const fallback = CODEX_REASONING_EFFORT_FALLBACKS[normalizedModel];
-  return fallback ? [...fallback] : null;
+  return fallback
+    ? [...fallback]
+    : GENERIC_CODEX_REASONING_EFFORTS.filter(effort => effort !== 'default');
 }
 
 export const BUILTIN_DEFAULT_MODELS: Record<WebSessionAgentOption, string> = {
@@ -842,15 +871,15 @@ export function defaultReasoningEffortForAgent(
 
 export function defaultPermissionLevelForAgent(
   agent: WebSessionAgentOption,
-  configuredCodexPermission: WebSessionCodexDefaultPermissionLevel = DEFAULT_WEB_SESSION_CODEX_PERMISSION_LEVEL
+  configuredPermission: WebSessionAgentDefaultPermissionLevel = DEFAULT_WEB_SESSION_CODEX_PERMISSION_LEVEL
 ): 'default' | 'elevated' | 'yolo' {
-  if (agent !== 'codex') {
+  if (agent !== 'codex' && agent !== 'devin') {
     return 'elevated';
   }
-  if (configuredCodexPermission === 'standard') {
+  if (configuredPermission === 'standard') {
     return 'default';
   }
-  return configuredCodexPermission === 'default'
+  return configuredPermission === 'default'
     ? EFFECTIVE_DEFAULT_WEB_SESSION_CODEX_PERMISSION_LEVEL
-    : configuredCodexPermission;
+    : configuredPermission;
 }

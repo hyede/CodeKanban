@@ -85,6 +85,7 @@ type DeveloperConfig struct {
 	WebSessionPiDefaultReasoningEffort     string                            `json:"webSessionPiDefaultReasoningEffort" yaml:"webSessionPiDefaultReasoningEffort"`
 	WebSessionDevinDefaultModel            string                            `json:"webSessionDevinDefaultModel" yaml:"webSessionDevinDefaultModel"`
 	WebSessionDevinDefaultReasoningEffort  string                            `json:"webSessionDevinDefaultReasoningEffort" yaml:"webSessionDevinDefaultReasoningEffort"`
+	WebSessionDevinDefaultPermissionLevel  string                            `json:"webSessionDevinDefaultPermissionLevel" yaml:"webSessionDevinDefaultPermissionLevel"`
 	WebSessionAutoRetryDefaults            WebSessionAutoRetryDefaultsConfig `json:"webSessionAutoRetryDefaults" yaml:"webSessionAutoRetryDefaults"`
 	WebSessionActiveCallTimeout            WebSessionActiveCallTimeoutConfig `json:"webSessionActiveCallTimeout" yaml:"webSessionActiveCallTimeout"`
 }
@@ -468,6 +469,7 @@ func ReadConfig() *AppConfig {
 			WebSessionPiDefaultReasoningEffort:     WebSessionCodexDefaultSetting,
 			WebSessionDevinDefaultModel:            WebSessionCodexDefaultSetting,
 			WebSessionDevinDefaultReasoningEffort:  WebSessionCodexDefaultSetting,
+			WebSessionDevinDefaultPermissionLevel:  WebSessionCodexDefaultSetting,
 			WebSessionAutoRetryDefaults:            NormalizeWebSessionAutoRetryDefaultsConfig(defaultWebSessionAutoRetryDefaultsConfig),
 			WebSessionActiveCallTimeout:            NormalizeWebSessionActiveCallTimeoutConfig(defaultWebSessionActiveCallTimeoutConfig),
 		},
@@ -610,6 +612,9 @@ func NormalizeDeveloperConfig(config DeveloperConfig) DeveloperConfig {
 	config.WebSessionDevinDefaultReasoningEffort = normalizeWebSessionCodexReasoningEffort(
 		config.WebSessionDevinDefaultReasoningEffort,
 	)
+	config.WebSessionDevinDefaultPermissionLevel = normalizeWebSessionCodexPermissionLevel(
+		config.WebSessionDevinDefaultPermissionLevel,
+	)
 	switch strings.ToLower(strings.TrimSpace(config.WebSessionCodexDefaultSyncMode)) {
 	case WebSessionCodexDefaultSetting:
 		config.WebSessionCodexDefaultSyncMode = WebSessionCodexDefaultSetting
@@ -690,6 +695,9 @@ func MergeDeveloperConfig(current DeveloperConfig, incoming DeveloperConfig) Dev
 	}
 	if strings.TrimSpace(incoming.WebSessionDevinDefaultReasoningEffort) == "" {
 		incoming.WebSessionDevinDefaultReasoningEffort = current.WebSessionDevinDefaultReasoningEffort
+	}
+	if strings.TrimSpace(incoming.WebSessionDevinDefaultPermissionLevel) == "" {
+		incoming.WebSessionDevinDefaultPermissionLevel = current.WebSessionDevinDefaultPermissionLevel
 	}
 	if incoming.WebSessionAutoRetryDefaults == (WebSessionAutoRetryDefaultsConfig{}) {
 		incoming.WebSessionAutoRetryDefaults = current.WebSessionAutoRetryDefaults
