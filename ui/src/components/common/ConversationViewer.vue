@@ -452,6 +452,7 @@ const conversationWindow = computed<ConversationWindowState>(() => {
   );
 });
 const markdownRenderOptions = computed(() => ({
+  repairMalformedOuterFence: true,
   enableCodeBlockCopy: true,
   codeBlockCopyLabel: 'copy',
   enableLinkCopy: true,

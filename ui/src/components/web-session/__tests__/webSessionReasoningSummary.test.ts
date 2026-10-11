@@ -84,6 +84,34 @@ describe('WebSessionReasoningSummary', () => {
     expect(wrapper.find('.reasoning-summary-body').exists()).toBe(false);
   });
 
+  it('aligns plain Pi thinking without a disclosure arrow', () => {
+    const wrapper = mount(WebSessionReasoningSummary, {
+      props: { ...props, plain: true, summary: 'Latest thinking' },
+    });
+    expect(wrapper.get('.reasoning-summary').classes()).toContain('is-plain');
+    expect(wrapper.get('button').text()).not.toMatch(/[▾▸]/);
+    expect(wrapper.get('button').attributes('aria-expanded')).toBe('false');
+    expect(wrapper.find('.reasoning-summary-body').exists()).toBe(false);
+  });
+
+  it('scrolls the single-line Pi preview to the newest words on updates', async () => {
+    const wrapper = mount(WebSessionReasoningSummary, {
+      props: { ...props, plain: true, streaming: true, summary: 'Initial thinking' },
+    });
+    const preview = wrapper.get('.reasoning-summary-preview').element as HTMLElement;
+    Object.defineProperty(preview, 'scrollWidth', { value: 900, configurable: true });
+    Object.defineProperty(preview, 'clientWidth', { value: 240, configurable: true });
+    await wrapper.setProps({ summary: 'Initial thinking followed by the newest words' });
+    await nextTick();
+    expect(preview.scrollLeft).toBe(900);
+    expect(wrapper.get('button').attributes('aria-expanded')).toBe('false');
+    expect(wrapper.find('.reasoning-summary-body').exists()).toBe(false);
+    await wrapper.setProps({ streaming: false });
+    await nextTick();
+    expect(preview.scrollLeft).toBe(0);
+    wrapper.unmount();
+  });
+
   it('omits the preview and streaming marker for settled summaries', () => {
     const wrapper = mountSummary();
     expect(wrapper.find('.reasoning-summary-preview').exists()).toBe(false);

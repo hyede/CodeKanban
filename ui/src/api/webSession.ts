@@ -59,6 +59,7 @@ export type SessionSearchChunkResult = {
 
 export type SessionConversationSearchMatch = {
   id: string;
+  text?: string;
   sourceThreadId?: string;
   sourceTurnId?: string;
   sourceItemId?: string;

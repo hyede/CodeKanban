@@ -656,7 +656,7 @@ func (m *Manager) dispatchDevinACPMessage(client *devinACPClient, session tables
 	}
 	if message.Method == "session/request_permission" {
 		if mode == devinACPDispatchLive || mode == devinACPDispatchReplay {
-			m.handleDevinPermissionRequest(client, session, run, message)
+			m.handleDevinPermissionRequest(client, session, run, proj, message)
 		} else if message.ID != nil {
 			_ = client.respond(message.ID, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
 		}
@@ -673,6 +673,12 @@ func (m *Manager) dispatchDevinACPMessage(client *devinACPClient, session tables
 	if isDevinCompactionNotification(message.Method) {
 		if mode == devinACPDispatchLive {
 			m.handleDevinCompactionNotification(session, run, proj, message.Params)
+		}
+		return
+	}
+	if isDevinQuotaStatsNotification(message.Method) {
+		if mode == devinACPDispatchLive {
+			m.handleDevinQuotaStatsNotification(session, run, proj, message.Params)
 		}
 		return
 	}
@@ -750,6 +756,12 @@ type devinRunProjection struct {
 	// plain update plus a second copy tagged with subagent_context for the
 	// same request, and only the first must be counted.
 	usageSignatures map[string]bool
+	// turnStatRequestIDs dedupes per-request quota reports carried by
+	// cognition.ai/turn_stats and cognition.ai/agent_stopped — the same turn's
+	// stats appear in both notifications. Kept separate from usageSignatures
+	// because sawDevinUsageUpdate treats an empty map as "no usage_update
+	// arrived" and falls back to the prompt response's usage block.
+	turnStatRequestIDs map[string]bool
 	// compactionToolID is the open context-compaction tool event, if any.
 	compactionToolID string
 }
@@ -764,10 +776,27 @@ type devinToolState struct {
 
 func newDevinRunProjection() *devinRunProjection {
 	return &devinRunProjection{
-		messages:        make(map[string]*devinMessageState),
-		tools:           make(map[string]*devinToolState),
-		usageSignatures: make(map[string]bool),
+		messages:           make(map[string]*devinMessageState),
+		tools:              make(map[string]*devinToolState),
+		usageSignatures:    make(map[string]bool),
+		turnStatRequestIDs: make(map[string]bool),
 	}
+}
+
+// recordDevinTurnStatRequest reports whether requestID's quota stats were
+// already folded in during this run; the first occurrence is recorded and
+// returns false. An empty requestID is never deduped.
+func (p *devinRunProjection) recordDevinTurnStatRequest(requestID string) bool {
+	if requestID == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.turnStatRequestIDs[requestID] {
+		return true
+	}
+	p.turnStatRequestIDs[requestID] = true
+	return false
 }
 
 // recordDevinUsageSignature reports whether signature was already observed in
@@ -808,6 +837,25 @@ func (p *devinRunProjection) takeDevinCompactionToolID() string {
 	id := p.compactionToolID
 	p.compactionToolID = ""
 	return id
+}
+
+// devinToolSnapshot returns a copy of the tracked tool call, or nil when the
+// projection has not seen it. session/request_permission payloads often carry
+// only a toolCallId, so the approval card borrows the title/input captured
+// from the earlier tool_call update.
+func (p *devinRunProjection) devinToolSnapshot(toolCallID string) *devinToolState {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	tool := p.tools[strings.TrimSpace(toolCallID)]
+	if tool == nil {
+		return nil
+	}
+	clone := *tool
+	clone.meta = cloneMap(tool.meta)
+	return &clone
 }
 
 // messageState returns the streaming state for a sub-agent context.
@@ -1434,12 +1482,25 @@ type devinUsageUpdateValues struct {
 	cost        float64
 	costUSD     bool
 	hasTokens   bool
+	acu         float64
+	hasAcu      bool
+	credit      float64
+	hasCredit   bool
 }
 
 func devinUsageToken(meta map[string]any, keys ...string) (int64, bool) {
 	for _, key := range keys {
 		if value, ok := meta[key]; ok {
 			return int64(numberValue(value)), true
+		}
+	}
+	return 0, false
+}
+
+func devinUsageQuota(meta map[string]any, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		if value, ok := meta[key]; ok {
+			return numberValue(value), true
 		}
 	}
 	return 0, false
@@ -1456,6 +1517,8 @@ func parseDevinUsageUpdate(update map[string]any) devinUsageUpdateValues {
 	values.cachedInput = cachedRead + cachedWrite
 	values.output = out
 	values.hasTokens = hasIn || hasOut || hasCachedRead || hasCachedWrite
+	values.acu, values.hasAcu = devinUsageQuota(meta, "cognition.ai/totalAcuCost", "totalAcuCost")
+	values.credit, values.hasCredit = devinUsageQuota(meta, "cognition.ai/totalCreditCost", "totalCreditCost")
 	values.used = int64(numberValue(update["used"]))
 	values.size = int64(numberValue(update["size"]))
 	if cost := decodeRawObject(update["cost"]); len(cost) > 0 {
@@ -1539,6 +1602,14 @@ func (m *Manager) handleDevinUsageUpdate(session tables.WebSessionTable, run *ac
 	if costUSD {
 		updates["total_cost"] = gorm.Expr("total_cost + ?", values.cost)
 	}
+	// The agent reports session-cumulative quota totals, so they replace the
+	// stored values rather than accumulating per request.
+	if values.hasAcu {
+		updates["total_acu_cost"] = values.acu
+	}
+	if values.hasCredit {
+		updates["total_credit_cost"] = values.credit
+	}
 	_ = m.updateRuntimeState(context.Background(), session.ID, updates)
 	eventPayload := map[string]any{
 		"in":  values.input,
@@ -1551,10 +1622,16 @@ func (m *Manager) handleDevinUsageUpdate(session tables.WebSessionTable, run *ac
 	if costUSD {
 		eventPayload["cost"] = values.cost
 	}
+	if values.hasAcu {
+		eventPayload["acu"] = values.acu
+	}
+	if values.hasCredit {
+		eventPayload["crd"] = values.credit
+	}
 	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
 		ID: utils.NewID(), Type: "usage", RunID: run.runID, Timestamp: now, Payload: eventPayload,
 	})
-	if values.size > 0 {
+	if values.size > 0 || values.hasAcu || values.hasCredit {
 		m.broadcastSessionSummary(context.Background(), session.ID)
 	}
 }
@@ -1572,7 +1649,9 @@ func (m *Manager) applyDevinPromptUsageFallback(session tables.WebSessionTable, 
 	out := int64(numberValue(usage["outputTokens"]))
 	cin := int64(numberValue(usage["cachedReadTokens"])) + int64(numberValue(usage["cachedWriteTokens"]))
 	used := int64(numberValue(usage["totalTokens"]))
-	if in <= 0 && out <= 0 && cin <= 0 && used <= 0 {
+	acu, hasAcu := devinUsageQuota(usage, "totalAcuCost", "acuCost")
+	credit, hasCredit := devinUsageQuota(usage, "totalCreditCost", "creditCost")
+	if in <= 0 && out <= 0 && cin <= 0 && used <= 0 && !hasAcu && !hasCredit {
 		return
 	}
 	now := time.Now()
@@ -1582,6 +1661,12 @@ func (m *Manager) applyDevinPromptUsageFallback(session tables.WebSessionTable, 
 		"total_output_tokens":       gorm.Expr("total_output_tokens + ?", out),
 		"updated_at":                now,
 	}
+	if hasAcu {
+		updates["total_acu_cost"] = acu
+	}
+	if hasCredit {
+		updates["total_credit_cost"] = credit
+	}
 	if used > 0 {
 		updates["latest_token_count_input_tokens"] = in
 		updates["latest_token_count_cached_input_tokens"] = cin
@@ -1590,9 +1675,16 @@ func (m *Manager) applyDevinPromptUsageFallback(session tables.WebSessionTable, 
 		updates["latest_token_count_updated_at"] = now
 	}
 	_ = m.updateRuntimeState(context.Background(), session.ID, updates)
+	eventPayload := map[string]any{"in": in, "cin": cin, "out": out}
+	if hasAcu {
+		eventPayload["acu"] = acu
+	}
+	if hasCredit {
+		eventPayload["crd"] = credit
+	}
 	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
 		ID: utils.NewID(), Type: "usage", RunID: run.runID, Timestamp: now,
-		Payload: map[string]any{"in": in, "cin": cin, "out": out},
+		Payload: eventPayload,
 	})
 }
 
@@ -1600,6 +1692,68 @@ func (m *Manager) applyDevinPromptUsageFallback(session tables.WebSessionTable, 
 // method; on the wire the agent prefixes private notifications with "_".
 func isDevinCompactionNotification(method string) bool {
 	return method == "_cognition.ai/compaction" || method == "cognition.ai/compaction"
+}
+
+// isDevinQuotaStatsNotification matches the private notifications that carry
+// per-turn quota stats: cognition.ai/turn_stats fires once per request and
+// cognition.ai/agent_stopped repeats the last turn's stats under params.stats.
+func isDevinQuotaStatsNotification(method string) bool {
+	switch method {
+	case "_cognition.ai/turn_stats", "cognition.ai/turn_stats",
+		"_cognition.ai/agent_stopped", "cognition.ai/agent_stopped":
+		return true
+	}
+	return false
+}
+
+// handleDevinQuotaStatsNotification folds acuCost/creditCost from turn_stats
+// and agent_stopped into the session totals. usage_update only reports token
+// counts, so per-request quota costs ride on these notifications instead —
+// acuCost/creditCost are per-request deltas here, while usage_update's
+// totalAcuCost/totalCreditCost remain cumulative and overwrite the sums.
+// agent_stopped repeats the last turn's stats under params.stats, so reports
+// dedupe by turnRequestId/requestId.
+func (m *Manager) handleDevinQuotaStatsNotification(session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, raw json.RawMessage) {
+	params := decodeRawObject(raw)
+	stats := params
+	if nested := decodeRawObject(params["stats"]); len(nested) > 0 {
+		stats = nested
+	}
+	acu, hasAcu := devinUsageQuota(stats, "acuCost", "cognition.ai/acuCost")
+	credit, hasCredit := devinUsageQuota(stats, "creditCost", "cognition.ai/creditCost")
+	if (!hasAcu || acu <= 0) && (!hasCredit || credit <= 0) {
+		return
+	}
+	requestID := stringValue(params["turnRequestId"])
+	if requestID == "" {
+		requestID = stringValue(stats["requestId"])
+	}
+	if requestID == "" {
+		requestID = stringValue(params["requestId"])
+	}
+	if proj.recordDevinTurnStatRequest(requestID) {
+		return
+	}
+	updates := map[string]any{"updated_at": time.Now()}
+	if hasAcu && acu > 0 {
+		updates["total_acu_cost"] = gorm.Expr("total_acu_cost + ?", acu)
+	}
+	if hasCredit && credit > 0 {
+		updates["total_credit_cost"] = gorm.Expr("total_credit_cost + ?", credit)
+	}
+	_ = m.updateRuntimeState(context.Background(), session.ID, updates)
+	eventPayload := map[string]any{}
+	if hasAcu && acu > 0 {
+		eventPayload["acu"] = acu
+	}
+	if hasCredit && credit > 0 {
+		eventPayload["crd"] = credit
+	}
+	_, _ = m.appendAndBroadcast(context.Background(), session.ID, session, Event{
+		ID: utils.NewID(), Type: "usage", RunID: run.runID, Timestamp: time.Now(),
+		Payload: eventPayload,
+	})
+	m.broadcastSessionSummary(context.Background(), session.ID)
 }
 
 // handleDevinCompactionNotification projects cognition.ai/compaction
@@ -1727,7 +1881,15 @@ func (m *Manager) syncDevinSessionMode(ctx context.Context, sessionID string) {
 	m.applyDevinSessionMode(ctx, client, record, nativeSessionID, modes)
 }
 
-func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session tables.WebSessionTable, run *activeRun, message devinACPMessage) {
+func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session tables.WebSessionTable, run *activeRun, proj *devinRunProjection, message devinACPMessage) {
+	// The event loop holds the session snapshot from the start of the run.
+	// Honor permission changes made while a previous request was pending.
+	current, err := m.GetSession(context.Background(), session.ID)
+	if err != nil {
+		_ = client.respond(message.ID, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
+		return
+	}
+	session = current
 	var params map[string]any
 	_ = json.Unmarshal(message.Params, &params)
 	options, _ := params["options"].([]any)
@@ -1740,19 +1902,46 @@ func (m *Manager) handleDevinPermissionRequest(client *devinACPClient, session t
 	autoApprove := !planExit && (effectivePermissionLevel(session) == PermissionLevelYolo ||
 		(effectivePermissionLevel(session) == PermissionLevelElevated && !client.modeAppliedSnapshot()))
 	if !autoApprove {
+		itemID := strings.TrimSpace(stringValue(decodeRawObject(params["toolCall"])["toolCallId"]))
+		wantKind := pendingServerRequestCommandApproval
+		if planExit {
+			wantKind = pendingServerRequestPlanApproval
+		}
+		// session/load replays and re-attach re-requests resend the same
+		// request_permission; keep the single pending request but retarget the
+		// response at the latest JSON-RPC id instead of stacking duplicate
+		// approval cards in the timeline.
+		if existing, ok := run.pendingServerRequest(); ok && existing.Kind == wantKind && itemID != "" && existing.ItemID == itemID {
+			existing.RawID = append(json.RawMessage(nil), message.ID...)
+			existing.Permissions = params
+			// The retried request may now resolve tool details that were
+			// missing when the pending request was first recorded.
+			tracked := proj.devinToolSnapshot(itemID)
+			if wantKind != pendingServerRequestPlanApproval &&
+				(existing.Prompt == "" || existing.Prompt == devinPermissionFallbackPrompt) {
+				if prompt := devinPermissionPrompt(params, tracked); prompt != "" {
+					existing.Prompt = prompt
+				}
+			}
+			if existing.Command == "" {
+				existing.Command = devinPermissionCommand(params, tracked)
+			}
+			run.setPendingServerRequest(existing)
+			return
+		}
+		tracked := proj.devinToolSnapshot(itemID)
 		now := time.Now()
 		request := &pendingServerRequest{
 			RawID:       append(json.RawMessage(nil), message.ID...),
-			Kind:        pendingServerRequestCommandApproval,
-			ItemID:      strings.TrimSpace(stringValue(decodeRawObject(params["toolCall"])["toolCallId"])),
-			Prompt:      devinPermissionPrompt(params),
-			Command:     devinPermissionCommand(params),
+			Kind:        wantKind,
+			ItemID:      itemID,
+			Prompt:      devinPermissionPrompt(params, tracked),
+			Command:     devinPermissionCommand(params, tracked),
 			RequestedAt: &now,
 			Permissions: params,
 		}
 		assistantState := AssistantStateWaitingApproval
 		if planExit {
-			request.Kind = pendingServerRequestPlanApproval
 			request.Prompt = "Exit plan mode"
 			run.markCompletedPlanTool()
 			assistantState = AssistantStateWaitingPlanApproval
@@ -1805,19 +1994,39 @@ func devinPermissionIsPlanExit(params map[string]any) bool {
 	return devinToolCallIsPlanExit(decodeRawObject(params["toolCall"]))
 }
 
-func devinPermissionPrompt(params map[string]any) string {
+const devinPermissionFallbackPrompt = "Devin is waiting for permission to continue."
+
+func devinPermissionPrompt(params map[string]any, tracked *devinToolState) string {
 	if reason := strings.TrimSpace(stringValue(params["reason"])); reason != "" {
 		return reason
 	}
 	if title := strings.TrimSpace(stringValue(decodeRawObject(params["toolCall"])["title"])); title != "" {
 		return title
 	}
-	return "Devin is waiting for permission to continue."
+	if tracked != nil {
+		if name := strings.TrimSpace(tracked.name); name != "" {
+			return name
+		}
+	}
+	if kind := strings.TrimSpace(stringValue(decodeRawObject(params["toolCall"])["kind"])); kind != "" {
+		return fmt.Sprintf("Devin is waiting for approval to use %s.", kind)
+	}
+	return devinPermissionFallbackPrompt
 }
 
-func devinPermissionCommand(params map[string]any) string {
-	rawInput := decodeRawObject(decodeRawObject(params["toolCall"])["rawInput"])
-	return strings.TrimSpace(firstNonEmpty(stringValue(rawInput["command"]), stringValue(rawInput["cmd"])))
+func devinPermissionCommand(params map[string]any, tracked *devinToolState) string {
+	if command := devinToolInputCommand(decodeRawObject(params["toolCall"])["rawInput"]); command != "" {
+		return command
+	}
+	if tracked != nil {
+		return devinToolInputCommand(tracked.input)
+	}
+	return ""
+}
+
+func devinToolInputCommand(rawInput any) string {
+	input := decodeRawObject(rawInput)
+	return strings.TrimSpace(firstNonEmpty(stringValue(input["command"]), stringValue(input["cmd"])))
 }
 
 func devinPermissionResponsePayload(action string, request *pendingServerRequest, session tables.WebSessionTable) any {

@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import type { WebSessionCommandExecutionGroupDetail } from '@/api/webSession';
 import type { WebSessionBlock } from '@/stores/webSession';
 import {
   isEmptyAssistantBlock,
   isTransportRetryNoteBlock,
+  loadWebSessionCompactToolDetail,
   projectWebSessionCompactTimelineBlocks,
   projectWebSessionVisibleTimelineBlocks,
 } from '@/components/web-session/webSessionCompactTimeline';
@@ -174,10 +176,334 @@ function buildMessageBlock(id: string, orderIndex: number): WebSessionBlock {
   };
 }
 
+function buildApprovalBlock(
+  id: string,
+  type: 'approval_request' | 'approval_response',
+  orderIndex: number,
+  extra: Partial<WebSessionBlock> = {}
+): WebSessionBlock {
+  return {
+    key: id,
+    id,
+    orderIndex,
+    kind: 'system',
+    itemType: type,
+    text:
+      type === 'approval_request'
+        ? 'Calling browser_run_code_unsafe from playwright'
+        : 'Approval granted',
+    timestamp: Date.UTC(2026, 9, 2, 5, 20, 20) + orderIndex * 1000,
+    attachments: [],
+    detail: {
+      type,
+      prompt: 'Calling browser_run_code_unsafe from playwright',
+      ...(type === 'approval_response' ? { action: 'approve' } : {}),
+    },
+    ...extra,
+  };
+}
+
 function readGroupItems(block: WebSessionBlock): Array<Record<string, unknown>> {
   const raw = block.payload?.groupItems;
   return Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : [];
 }
+
+function buildToolDetail(
+  groupId: string,
+  toolIds: string[],
+  status: 'running' | 'done' | 'error' = 'done'
+): WebSessionCommandExecutionGroupDetail {
+  return {
+    groupId,
+    kind: 'command_execution',
+    title: 'CommandExecution',
+    summary: groupId,
+    count: toolIds.length,
+    firstSeq: 1,
+    lastSeq: toolIds.length * 2,
+    status,
+    latestToolId: toolIds[toolIds.length - 1],
+    items: toolIds.map(toolId => ({
+      toolId,
+      kind: 'command_execution',
+      title: 'CommandExecution',
+      summary: toolId,
+      command: toolId,
+      input: { command: toolId },
+      output: ('full output for ' + toolId).repeat(300),
+      status,
+      timestamp: '2026-04-20T12:00:00.000Z',
+    })),
+  };
+}
+
+describe('compact tool detail loading', () => {
+  it('loads Devin synthetic command groups through their original tool IDs', async () => {
+    const blocks = [buildCommandBlock('call-1'), buildCommandBlock('call-2')];
+    const [projected] = projectWebSessionCompactTimelineBlocks(blocks, 'devin');
+    const load = vi.fn(async (id: string) => {
+      if (!['call-1', 'call-2'].includes(id)) {
+        throw new Error('tool group not found');
+      }
+      return buildToolDetail(id, [id]);
+    });
+
+    const detail = await loadWebSessionCompactToolDetail(projected!, load);
+
+    expect(load.mock.calls).toEqual([['call-1'], ['call-2']]);
+    expect(detail.groupId).toBe(projected!.tool!.commandGroup!.id);
+    expect(detail.count).toBe(2);
+    expect(detail.items.map(item => item.toolId)).toEqual(['call-1', 'call-2']);
+    expect(detail.items[0]!.output).toBe(buildToolDetail('call-1', ['call-1']).items[0]!.output);
+  });
+
+  it('loads every persisted group when adjacent Devin rows have different group IDs', async () => {
+    const [projected] = projectWebSessionCompactTimelineBlocks(
+      [
+        buildCommandBlock('call-2', { groupId: 'group-1', count: 2 }),
+        buildCommandBlock('call-4', { groupId: 'group-2', count: 2 }),
+      ],
+      'devin'
+    );
+    const first = buildToolDetail('group-1', ['call-1', 'call-2']);
+    const second = buildToolDetail('group-2', ['call-3', 'call-4']);
+    second.firstSeq = 5;
+    second.lastSeq = 8;
+    const load = vi.fn(async (id: string) => (id === 'group-1' ? first : second));
+
+    const detail = await loadWebSessionCompactToolDetail(projected!, load);
+
+    expect(load.mock.calls).toEqual([['group-1'], ['group-2']]);
+    expect(detail.items.map(item => item.toolId)).toEqual(['call-1', 'call-2', 'call-3', 'call-4']);
+    expect(detail).toMatchObject({ count: 4, firstSeq: 1, lastSeq: 8, latestToolId: 'call-4' });
+  });
+
+  it('requests shared persisted groups once and keeps all server details', async () => {
+    const [projected] = projectWebSessionCompactTimelineBlocks([
+      buildCommandBlock('call-1', { groupId: 'group-1' }),
+      buildCommandBlock('call-2', { groupId: 'group-1', count: 3 }),
+    ]);
+    const fullDetail = buildToolDetail('group-1', ['call-0', 'call-1', 'call-2']);
+    const load = vi.fn(async () => fullDetail);
+
+    expect(await loadWebSessionCompactToolDetail(projected!, load)).toBe(fullDetail);
+    expect(load.mock.calls).toEqual([['group-1']]);
+  });
+
+  it('preserves original source IDs when synthetic file-change rows are folded again', async () => {
+    const [first] = projectWebSessionCompactTimelineBlocks([
+      buildFileChangeBlock('edit-1'),
+      buildFileChangeBlock('edit-2'),
+    ]);
+    const [projected] = projectWebSessionCompactTimelineBlocks([
+      first!,
+      buildFileChangeBlock('edit-3'),
+    ]);
+    const load = vi.fn(async (id: string) => buildToolDetail(id, [id]));
+
+    const detail = await loadWebSessionCompactToolDetail(projected!, load);
+
+    expect(load.mock.calls).toEqual([['edit-1'], ['edit-2'], ['edit-3']]);
+    expect(detail.count).toBe(3);
+  });
+
+  it('deduplicates overlapping group items while preserving current tool status', async () => {
+    const [projected] = projectWebSessionCompactTimelineBlocks([
+      buildCommandBlock('call-1', { groupId: 'group-1' }),
+      buildCommandBlock('call-2', { groupId: 'group-2' }),
+    ]);
+    const first = buildToolDetail('group-1', ['call-1', 'call-2']);
+    const second = buildToolDetail('group-2', ['call-2'], 'running');
+    const load = vi.fn(async (id: string) => (id === 'group-1' ? first : second));
+
+    const detail = await loadWebSessionCompactToolDetail(projected!, load);
+
+    expect(detail.items.map(item => item.toolId)).toEqual(['call-1', 'call-2']);
+    expect(detail.items[1]!.status).toBe('running');
+    expect(detail.status).toBe('running');
+    expect(detail.count).toBe(2);
+  });
+
+  it('loads single tools by their stored ID', async () => {
+    const block = buildDynamicToolBlock('read-1', 'Read file', { path: 'src/main.ts' });
+    const fullDetail = buildToolDetail('read-1', ['read-1']);
+    const load = vi.fn(async () => fullDetail);
+
+    expect(await loadWebSessionCompactToolDetail(block, load)).toBe(fullDetail);
+    expect(load.mock.calls).toEqual([['read-1']]);
+  });
+
+  it('reports source failures instead of presenting partial group details as complete', async () => {
+    const [projected] = projectWebSessionCompactTimelineBlocks([
+      buildCommandBlock('call-1'),
+      buildCommandBlock('call-2'),
+    ]);
+    const load = vi.fn(async (id: string) => {
+      if (id === 'call-2') {
+        throw new Error('failed to load tool group');
+      }
+      return buildToolDetail(id, [id]);
+    });
+
+    await expect(loadWebSessionCompactToolDetail(projected!, load)).rejects.toThrow(
+      'failed to load tool group'
+    );
+  });
+});
+
+describe('approval history projection', () => {
+  it.each(['approve', 'reject', 'cancel'])(
+    'merges a request and its %s response without changing stored blocks',
+    action => {
+      const request = buildApprovalBlock('request', 'approval_request', 1, {
+        sourceItemId: 'tool-1',
+        detail: {
+          type: 'approval_request',
+          prompt: 'Run tool',
+          command: 'browser command',
+          approvalKind: 'mcp',
+        },
+      });
+      const response = buildApprovalBlock('response', 'approval_response', 3, {
+        payload: { iid: 'tool-1' },
+        detail: { type: 'approval_response', action },
+      });
+      const message = buildMessageBlock('between', 2);
+      const original = structuredClone([request, message, response]);
+
+      const visible = projectWebSessionVisibleTimelineBlocks([request, message, response], 'devin');
+
+      expect(visible).toHaveLength(2);
+      expect(visible[0]).toBe(message);
+      expect(visible[1]).toMatchObject({
+        id: response.id,
+        key: response.key,
+        orderIndex: response.orderIndex,
+        timestamp: response.timestamp,
+        detail: {
+          type: 'approval_response',
+          prompt: 'Run tool',
+          command: 'browser command',
+          approvalKind: 'mcp',
+          action,
+        },
+        approvalRequest: { id: request.id, key: request.key, timestamp: request.timestamp },
+      });
+      expect([request, message, response]).toEqual(original);
+    }
+  );
+
+  it('matches legacy responses without IDs by prompt and inherits the request command', () => {
+    const request = buildApprovalBlock('request', 'approval_request', 1);
+    request.detail!.command = 'browser command';
+    const response = buildApprovalBlock('response', 'approval_response', 2);
+
+    const visible = projectWebSessionVisibleTimelineBlocks([request, response]);
+
+    expect(visible).toHaveLength(1);
+    expect(visible[0]!.detail!.command).toBe('browser command');
+  });
+
+  it('keeps repeated approvals for the same tool as separate interactions', () => {
+    const first = buildApprovalBlock('request-1', 'approval_request', 1);
+    const second = buildApprovalBlock('request-2', 'approval_request', 3);
+    const visible = projectWebSessionVisibleTimelineBlocks([
+      first,
+      buildApprovalBlock('response-1', 'approval_response', 2),
+      second,
+      buildApprovalBlock('response-2', 'approval_response', 4),
+    ]);
+
+    expect(visible.map(block => block.id)).toEqual(['response-1', 'response-2']);
+    expect(visible.map(block => block.approvalRequest?.id)).toEqual(['request-1', 'request-2']);
+  });
+
+  it('uses request IDs rather than identical prompts to match concurrent approvals', () => {
+    const visible = projectWebSessionVisibleTimelineBlocks([
+      buildApprovalBlock('request-1', 'approval_request', 1, { sourceItemId: 'tool-1' }),
+      buildApprovalBlock('request-2', 'approval_request', 2, { sourceItemId: 'tool-2' }),
+      buildApprovalBlock('response-1', 'approval_response', 3, { payload: { iid: 'tool-1' } }),
+    ]);
+
+    expect(visible.map(block => block.id)).toEqual(['request-2', 'response-1']);
+    expect(visible[1]!.approvalRequest?.id).toBe('request-1');
+  });
+
+  it.each([
+    { sourceThreadId: 'other-thread' },
+    { sourceTurnId: 'other-turn' },
+    { runId: 'other-run' },
+    { payload: { iid: 'other-tool' } },
+    { timestamp: 1 },
+    {
+      detail: {
+        type: 'approval_response' as const,
+        prompt: 'Different operation',
+        action: 'approve',
+      },
+    },
+    {
+      detail: {
+        type: 'approval_response' as const,
+        prompt: 'Run tool',
+        command: 'different command',
+        action: 'approve',
+      },
+    },
+  ])('does not merge unrelated approvals: %j', extra => {
+    const request = buildApprovalBlock('request', 'approval_request', 1, {
+      sourceThreadId: 'thread',
+      sourceTurnId: 'turn',
+      runId: 'run',
+      sourceItemId: 'tool',
+      detail: { type: 'approval_request', prompt: 'Run tool', command: 'command' },
+    });
+    const response = buildApprovalBlock('response', 'approval_response', 2, {
+      sourceThreadId: 'thread',
+      sourceTurnId: 'turn',
+      runId: 'run',
+      detail: {
+        type: 'approval_response',
+        prompt: 'Run tool',
+        command: 'command',
+        action: 'approve',
+      },
+      ...extra,
+    });
+
+    expect(projectWebSessionVisibleTimelineBlocks([request, response])).toEqual([
+      request,
+      response,
+    ]);
+  });
+
+  it('keeps unmatched requests and responses and never matches across a user message', () => {
+    const request = buildApprovalBlock('request', 'approval_request', 1);
+    const user = { ...buildMessageBlock('user', 2), kind: 'user' as const };
+    const response = buildApprovalBlock('response', 'approval_response', 3);
+
+    expect(projectWebSessionVisibleTimelineBlocks([request])).toEqual([request]);
+    expect(projectWebSessionVisibleTimelineBlocks([response])).toEqual([response]);
+    expect(projectWebSessionVisibleTimelineBlocks([request, user, response])).toEqual([
+      request,
+      user,
+      response,
+    ]);
+  });
+
+  it('preserves approval boundaries between compact tool groups', () => {
+    const visible = projectWebSessionVisibleTimelineBlocks([
+      buildCommandBlock('before', { orderIndex: 1 }),
+      buildApprovalBlock('request', 'approval_request', 2),
+      buildCommandBlock('during', { orderIndex: 3 }),
+      buildApprovalBlock('response', 'approval_response', 4),
+      buildCommandBlock('after', { orderIndex: 5 }),
+    ]);
+
+    expect(visible.map(block => block.id)).toEqual(['before', 'during', 'response', 'after']);
+    expect(visible.every(block => !block.tool?.commandGroup)).toBe(true);
+  });
+});
 
 describe('webSessionCompactTimeline', () => {
   it('identifies transport retry notes without treating ordinary notes as retries', () => {

@@ -1041,6 +1041,22 @@
                         }}</span>
                       </n-space>
                     </n-form-item>
+                    <n-form-item
+                      :label="t('settings.webSessionAgentDefaultPermissionLevel')"
+                      data-search-key="webSessionDevinDefaultPermissionLevel"
+                    >
+                      <n-space vertical size="small">
+                        <n-select
+                          v-model:value="developerForm.webSessionDevinDefaultPermissionLevel"
+                          :options="webSessionCodexDefaultPermissionLevelOptions"
+                          :disabled="developerLoading"
+                          style="max-width: 320px"
+                        />
+                        <span class="form-tip">{{
+                          t('settings.webSessionDevinDefaultPermissionLevelTip')
+                        }}</span>
+                      </n-space>
+                    </n-form-item>
                   </template>
                 </n-form>
               </n-card>
@@ -3215,6 +3231,8 @@ const developerSessionDirty = computed(() => {
       developerOriginal.value.webSessionDevinDefaultModel ||
     developerForm.webSessionDevinDefaultReasoningEffort !==
       developerOriginal.value.webSessionDevinDefaultReasoningEffort ||
+    developerForm.webSessionDevinDefaultPermissionLevel !==
+      developerOriginal.value.webSessionDevinDefaultPermissionLevel ||
     JSON.stringify(developerForm.webSessionAutoRetryDefaults) !==
       JSON.stringify(developerOriginal.value.webSessionAutoRetryDefaults) ||
     JSON.stringify(developerForm.webSessionActiveCallTimeout) !==
@@ -4753,6 +4771,7 @@ const allSettingsCards = computed<SettingsCardDefinition[]>(() => {
         t('webSession.contextWindowSetting'),
         t('settings.webSessionCodexDefaultReasoningEffort'),
         t('settings.webSessionCodexDefaultPermissionLevel'),
+        t('settings.webSessionAgentDefaultPermissionLevel'),
         t('settings.webSessionCodexDefaultSyncMode'),
         t('settings.webSessionActiveCallTimeout'),
         t('settings.webSessionActiveCallTimeoutSeconds'),

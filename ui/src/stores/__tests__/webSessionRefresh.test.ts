@@ -5766,6 +5766,61 @@ describe('webSession loading behavior', () => {
     });
   });
 
+  it('hides the generic approval card for devin plan approvals only', async () => {
+    const store = useWebSessionStore();
+    const devinSession = makeSession({
+      id: 'session-devin-plan-approval',
+      agent: 'devin',
+      status: 'running',
+      assistantState: 'waiting_plan_approval',
+      workflowMode: 'plan',
+    });
+    const claudeSession = makeSession({
+      id: 'session-claude-plan-approval',
+      agent: 'claude',
+      status: 'running',
+      assistantState: 'waiting_plan_approval',
+      workflowMode: 'plan',
+    });
+    listMock.mockResolvedValue([devinSession, claudeSession]);
+    snapshotMock.mockImplementation(async (_projectId: string, sessionId: string) => ({
+      session: sessionId === devinSession.id ? devinSession : claudeSession,
+      history: {
+        items: [
+          makeWireHistoryItem(1, {
+            id: `${sessionId}-plan-approval`,
+            tp: 'approval_req',
+            dt: {
+              type: 'approval_request',
+              prompt: 'Exit plan mode',
+              approvalKind: 'plan_approval',
+            },
+          }),
+        ],
+        hasMore: false,
+        total: 1,
+      },
+    }));
+
+    await store.loadSessions(devinSession.projectId);
+    await store.loadSessionSnapshot(devinSession.projectId, devinSession.id);
+    await store.loadSessionSnapshot(claudeSession.projectId, claudeSession.id);
+
+    expect(store.getPendingApproval(devinSession.id)).toBeNull();
+    expect(store.getLiveState(devinSession.id)).toMatchObject({
+      phase: 'waiting_plan_approval',
+      running: false,
+    });
+    expect(store.getPendingApproval(claudeSession.id)).toMatchObject({
+      kind: 'plan_approval',
+      prompt: 'Exit plan mode',
+      actionable: true,
+    });
+    expect(store.getLiveState(claudeSession.id)).toMatchObject({
+      phase: 'waiting_plan_approval',
+    });
+  });
+
   it('restores an actionable approval from snapshot when approval history is missing', async () => {
     const store = useWebSessionStore();
     const session = makeSession({

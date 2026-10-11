@@ -141,15 +141,6 @@
     padding: 14px 12px 20px;
   }
 
-  .timeline-agent-toolbar.is-search-open {
-    flex-wrap: wrap;
-    width: 100%;
-  }
-
-  .timeline-agent-toolbar.is-search-open .timeline-search-input {
-    flex-basis: 100%;
-  }
-
   .composer {
     padding: 8px;
   }

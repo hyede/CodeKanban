@@ -197,6 +197,12 @@ func (m *Manager) mapSessionSummaryWithContext(
 	summary := mapSessionRecord(record)
 	summary.ActiveCallTimeoutEnabled = m.effectiveActiveCallTimeoutEnabled(record)
 	decorateSessionSummaryWithContext(&summary, contextConfig)
+	if normalizeAgent(summary.Agent) == AgentDevin {
+		// Per-session ACU/credit costs are never emitted over ACP, so the
+		// account-level quota from the Devin CLI's user_status cache is the
+		// only quota signal we can surface.
+		summary.DevinQuota = m.devinPlanQuota()
+	}
 	return summary
 }
 

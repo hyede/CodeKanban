@@ -130,6 +130,9 @@ export function sanitizeDeveloperConfig(value?: Partial<DeveloperConfig> | null)
     webSessionDevinDefaultReasoningEffort: normalizeConfiguredCodexReasoningEffort(
       value?.webSessionDevinDefaultReasoningEffort ?? DEFAULT_WEB_SESSION_CODEX_REASONING_EFFORT
     ),
+    webSessionDevinDefaultPermissionLevel: normalizeConfiguredCodexPermissionLevel(
+      value?.webSessionDevinDefaultPermissionLevel ?? DEFAULT_WEB_SESSION_CODEX_PERMISSION_LEVEL
+    ),
     webSessionAutoRetryDefaults: sanitizeAutoRetryDefaultsConfig(
       value?.webSessionAutoRetryDefaults
     ),

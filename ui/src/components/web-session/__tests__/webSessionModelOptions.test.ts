@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -36,7 +38,29 @@ import {
   shouldSuppressPiModelMenuClose,
 } from '@/components/web-session/webSessionModelOptions';
 
+const panelSource = readFileSync(new URL('../WebSessionPanel.vue', import.meta.url), 'utf8');
+
 describe('webSessionModelOptions', () => {
+  it('opens the Pi search catalog directly and keeps searches when entering the menu', () => {
+    expect(panelSource).toContain(
+      "<template v-if=\"selectedAgent === 'pi' || selectedAgent === 'devin'\" #header>"
+    );
+    expect(panelSource).not.toContain('showAllPiModels');
+    expect(panelSource).toContain('show === showModelSelector.value ||');
+  });
+
+  it('controls model detail popovers and dismisses them through the select scroll event', () => {
+    expect(panelSource).toContain('@scroll="clearModelOptionPopovers"');
+    expect(panelSource).toMatch(
+      /show:\s*showModelSelector\.value &&\s*modelOptionPopoverValues\.value\.has/
+    );
+    expect(panelSource).toMatch(
+      /function clearModelOptionPopovers\(\) \{\s*modelOptionPopoverValues\.value = new Set\(\);/
+    );
+    expect(panelSource).toContain('animated: false');
+    expect(panelSource.match(/@update:value="clearModelOptionPopovers"/g)).toHaveLength(2);
+  });
+
   it('uses the Devin catalog for model, reasoning, and pricing metadata', () => {
     const models = [
       {
@@ -330,6 +354,8 @@ describe('webSessionModelOptions', () => {
       'gpt-5.6-luna',
       'gpt-5.6-terra',
       'gpt-5.6-sol',
+      'gpt-6-luna',
+      'gpt-6-sol',
       'gpt-6-astra',
     ]);
     expect(CODEX_PRIMARY_MODEL_OPTIONS.map(option => option.label)).toEqual([
@@ -337,6 +363,8 @@ describe('webSessionModelOptions', () => {
       '5.6L',
       '5.6T',
       '5.6S',
+      '6L',
+      '6S',
       '6A',
     ]);
     expect(CODEX_PRIMARY_MODEL_OPTIONS.map(option => option.menuLabel)).toEqual([
@@ -344,6 +372,8 @@ describe('webSessionModelOptions', () => {
       'GPT-5.6 Luna',
       'GPT-5.6 Terra',
       'GPT-5.6 Sol',
+      'GPT-6 Luna',
+      'GPT-6 Sol',
       'GPT-6 Astra',
     ]);
   });
@@ -423,7 +453,10 @@ describe('webSessionModelOptions', () => {
     expect(defaultReasoningEffortForAgent('devin', 'low')).toBe('low');
     expect(defaultReasoningEffortForAgent('devin', 'model_default')).toBe('default');
     expect(defaultPermissionLevelForAgent('pi', 'standard')).toBe('elevated');
-    expect(defaultPermissionLevelForAgent('devin', 'standard')).toBe('elevated');
+    expect(defaultPermissionLevelForAgent('devin')).toBe('elevated');
+    expect(defaultPermissionLevelForAgent('devin', 'standard')).toBe('default');
+    expect(defaultPermissionLevelForAgent('devin', 'elevated')).toBe('elevated');
+    expect(defaultPermissionLevelForAgent('devin', 'yolo')).toBe('yolo');
   });
 
   it('uses model-specific reasoning efforts from the Codex catalog', () => {
@@ -623,6 +656,66 @@ describe('webSessionModelOptions', () => {
     expect(filterPiModelOptionGroups(groups, 'missing')).toEqual([]);
   });
 
+  it('shows Pi recent models before provider categories without duplicate values', () => {
+    const catalog = [
+      { provider: 'openai', id: 'gpt-5.4', name: 'GPT-5.4', reasoning: true },
+      { provider: 'openai', id: 'gpt-5.5', name: 'GPT-5.5', reasoning: true },
+      { provider: 'anthropic', id: 'sonnet', name: 'Sonnet', reasoning: true },
+    ];
+    const groups = resolvePiModelOptionGroups(
+      catalog,
+      [' anthropic/sonnet ', 'openai/gpt-5.4', 'anthropic/sonnet', 'missing/model'],
+      '最近使用'
+    );
+
+    expect(groups.map(group => group.label)).toEqual(['最近使用', 'openai']);
+    expect(groups[0]?.children).toEqual([
+      {
+        label: 'Sonnet',
+        value: 'anthropic/sonnet',
+        menuLabel: 'Sonnet',
+        accentLabel: 'anthropic',
+        removable: true,
+      },
+      {
+        label: 'GPT-5.4',
+        value: 'openai/gpt-5.4',
+        menuLabel: 'GPT-5.4',
+        accentLabel: 'openai',
+        removable: true,
+      },
+    ]);
+    const values = groups.flatMap(group => group.children.map(option => option.value));
+    expect(new Set(values).size).toBe(catalog.length);
+    expect(filterPiModelOptionGroups(groups, 'anthropic')[0]?.children[0]?.value).toBe(
+      'anthropic/sonnet'
+    );
+    expect(filterPiModelOptionGroups(groups, 'gpt-5.5')[0]?.children[0]?.value).toBe(
+      'openai/gpt-5.5'
+    );
+    expect(resolvePiModelOptionGroups(catalog, ['missing/model'])).toEqual(
+      resolvePiModelOptionGroups(catalog)
+    );
+  });
+
+  it('bounds Pi recent entries and normalizes catalog values', () => {
+    const catalog = Array.from({ length: 8 }, (_, index) => ({
+      provider: ' provider ',
+      id: ` model-${index} `,
+      name: `Model ${index}`,
+      reasoning: false,
+    }));
+    const groups = resolvePiModelOptionGroups(
+      catalog,
+      catalog.map((_, index) => `provider/model-${index}`)
+    );
+    expect(groups[0]?.children).toHaveLength(6);
+    expect(groups[1]?.children.map(option => option.value)).toEqual([
+      'provider/model-6',
+      'provider/model-7',
+    ]);
+  });
+
   it('keeps Pi user-selected primary models unique and bounded', () => {
     expect(rememberPiFrequentModel(['provider/one', 'provider/two'], ' provider/two ')).toEqual([
       'provider/two',
@@ -669,6 +762,22 @@ describe('webSessionModelOptions', () => {
       'max',
       'ultra',
     ]);
+    expect(resolveCodexReasoningEfforts('gpt-6-sol')).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+      'ultra',
+    ]);
+    expect(resolveCodexReasoningEfforts('gpt-6-luna')).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]);
+    expect(resolveCodexReasoningEfforts('gpt-6-luna')).not.toContain('ultra');
     expect(resolveCodexReasoningEfforts('gpt-5.6-terra')).toEqual([
       'low',
       'medium',
@@ -686,6 +795,19 @@ describe('webSessionModelOptions', () => {
     ]);
     expect(resolveCodexReasoningEfforts('gpt-5.6-luna')).not.toContain('none');
     expect(resolveCodexReasoningEfforts('gpt-5.6-luna')).not.toContain('ultra');
+  });
+
+  it('offers max and ultra for custom Codex models without catalog metadata', () => {
+    expect(resolveCodexReasoningEfforts('custom-codex-model')).toEqual([
+      'none',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+      'ultra',
+    ]);
+    expect(resolveCodexReasoningEfforts('')).toBeNull();
   });
 });
 

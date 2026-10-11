@@ -852,6 +852,8 @@ func TestDevinACPUsageUpdateProjectsSessionStats(t *testing.T) {
 		"cognition.ai/inputTokens":      11899,
 		"cognition.ai/outputTokens":     27,
 		"cognition.ai/cachedReadTokens": 11776,
+		"cognition.ai/totalAcuCost":     1.5,
+		"cognition.ai/totalCreditCost":  0.75,
 	}})
 
 	record, err := manager.GetSession(context.Background(), session.ID)
@@ -874,8 +876,15 @@ func TestDevinACPUsageUpdateProjectsSessionStats(t *testing.T) {
 		t.Fatalf("unexpected context window: %d at=%v",
 			record.SessionContextWindowTokens, record.SessionContextWindowObservedAt)
 	}
+	if record.TotalAcuCost != 1.5 || record.TotalCreditCost != 0.75 {
+		t.Fatalf("unexpected quota totals: acu=%v credit=%v", record.TotalAcuCost, record.TotalCreditCost)
+	}
 
 	summary := manager.mapSessionSummary(record)
+	if summary.Usage.AcuCost != 1.5 || summary.Usage.CreditCost != 0.75 {
+		t.Fatalf("summary quota totals = acu %v credit %v, want 1.5/0.75",
+			summary.Usage.AcuCost, summary.Usage.CreditCost)
+	}
 	if summary.ContextEstimateMode != ContextEstimateModeLatestTokenCount {
 		t.Fatalf("context estimate mode = %q, want %q", summary.ContextEstimateMode, ContextEstimateModeLatestTokenCount)
 	}
@@ -968,6 +977,40 @@ func TestDevinACPPromptUsageFallback(t *testing.T) {
 	}
 	if record.TotalInputTokens != 31651 || record.TotalOutputTokens != 132 {
 		t.Fatalf("prompt usage counted twice: %#v", record)
+	}
+}
+
+func TestDevinQuotaStatsNotification(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	run := &activeRun{runID: "devin-quota-stats"}
+	proj := newDevinRunProjection()
+	sess := *session
+
+	// turn_stats carries per-request acuCost/creditCost at the top level.
+	manager.handleDevinQuotaStatsNotification(sess, run, proj, json.RawMessage(
+		`{"sessionId":"native-1","turnClientMessageId":"msg-1","turnRequestId":"req-1","acuCost":0.5,"creditCost":0.25}`))
+	// agent_stopped repeats the same turn's stats under stats{} — deduped by
+	// requestId so the quota must not double count.
+	manager.handleDevinQuotaStatsNotification(sess, run, proj, json.RawMessage(
+		`{"sessionId":"native-1","cause":"complete","stats":{"requestId":"req-1","acuCost":0.5,"creditCost":0.25}}`))
+	// A later turn's stats accumulate on top.
+	manager.handleDevinQuotaStatsNotification(sess, run, proj, json.RawMessage(
+		`{"sessionId":"native-1","turnRequestId":"req-2","acuCost":0.75}`))
+	// Notifications without quota fields are ignored entirely.
+	manager.handleDevinQuotaStatsNotification(sess, run, proj, json.RawMessage(
+		`{"sessionId":"native-1","turnRequestId":"req-3","inputTokens":10}`))
+
+	record, err := manager.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if record.TotalAcuCost != 1.25 || record.TotalCreditCost != 0.25 {
+		t.Fatalf("unexpected quota totals: acu=%v credit=%v", record.TotalAcuCost, record.TotalCreditCost)
+	}
+	summary := manager.mapSessionSummary(record)
+	if summary.Usage.AcuCost != 1.25 || summary.Usage.CreditCost != 0.25 {
+		t.Fatalf("summary quota totals = acu %v credit %v",
+			summary.Usage.AcuCost, summary.Usage.CreditCost)
 	}
 }
 
@@ -1139,7 +1182,7 @@ func TestDevinPlanExitPermissionRequest(t *testing.T) {
 	sess := *session
 	run := &activeRun{runID: "devin-plan", sessionID: session.ID, backend: SessionBackendDevinACP, agent: AgentDevin}
 
-	manager.handleDevinPermissionRequest(&devinACPClient{}, sess, run, devinPlanExitPermissionMessage())
+	manager.handleDevinPermissionRequest(&devinACPClient{}, sess, run, nil, devinPlanExitPermissionMessage())
 
 	pending, ok := run.pendingApprovalRequest()
 	if !ok {
@@ -1192,7 +1235,7 @@ func TestDevinOrdinaryPermissionRequest(t *testing.T) {
 		CurrentModeID:    "smart",
 		AvailableModeIDs: map[string]bool{"smart": true},
 	}, true)
-	manager.handleDevinPermissionRequest(client, sess, run, devinACPMessage{ID: json.RawMessage(`12`), Params: params})
+	manager.handleDevinPermissionRequest(client, sess, run, nil, devinACPMessage{ID: json.RawMessage(`12`), Params: params})
 
 	pending, ok := run.pendingApprovalRequest()
 	if !ok || pending.Kind != pendingServerRequestCommandApproval {
@@ -1207,6 +1250,98 @@ func TestDevinOrdinaryPermissionRequest(t *testing.T) {
 	}
 	if record.AssistantState != string(AssistantStateWaitingApproval) {
 		t.Fatalf("assistant state = %q, want %q", record.AssistantState, AssistantStateWaitingApproval)
+	}
+}
+
+func TestDevinPermissionRequestUsesTrackedToolDetails(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	sess := *session
+	run := &activeRun{runID: "devin-cmd-details", sessionID: session.ID, backend: SessionBackendDevinACP, agent: AgentDevin}
+	proj := newDevinRunProjection()
+
+	manager.handleDevinACPUpdate(sess, run, proj, devinACPUpdatePayload("tool_call", map[string]any{
+		"toolCallId": "exec:1#abc",
+		"title":      "Ran git",
+		"kind":       "execute",
+		"rawInput":   map[string]any{"command": "git status --short"},
+	}))
+
+	client, _ := newDevinTestClient()
+	client.setSessionModes("native-1", &devinACPSessionModes{
+		CurrentModeID:    "smart",
+		AvailableModeIDs: map[string]bool{"smart": true},
+	}, true)
+	params, _ := json.Marshal(map[string]any{
+		"sessionId": "native-1",
+		"toolCall":  map[string]any{"toolCallId": "exec:1#abc"},
+		"options": []any{
+			map[string]any{"optionId": "allow_once", "kind": "allow_once"},
+			map[string]any{"optionId": "reject_once", "kind": "reject_once"},
+		},
+	})
+	manager.handleDevinPermissionRequest(client, sess, run, proj, devinACPMessage{ID: json.RawMessage(`21`), Params: params})
+
+	pending, ok := run.pendingApprovalRequest()
+	if !ok {
+		t.Fatal("expected a pending approval request")
+	}
+	if pending.Prompt != "Ran git" {
+		t.Fatalf("pending prompt = %q, want tracked tool title", pending.Prompt)
+	}
+	if pending.Command != "git status --short" {
+		t.Fatalf("pending command = %q, want tracked rawInput command", pending.Command)
+	}
+	var approvalReq *Event
+	events := readTextDeltaTestEvents(t, manager, session.ID)
+	for i, event := range events {
+		if event.Type == "approval_req" {
+			approvalReq = &events[i]
+		}
+	}
+	if approvalReq == nil {
+		t.Fatal("expected an approval_req event")
+	}
+	if stringValue(approvalReq.Payload["prompt"]) != "Ran git" || stringValue(approvalReq.Payload["command"]) != "git status --short" {
+		t.Fatalf("approval_req payload missing tool details: %#v", approvalReq.Payload)
+	}
+}
+
+func TestDevinPermissionRequestDedupesRetriedRequest(t *testing.T) {
+	manager, session := newDevinSubAgentTestManager(t)
+	sess := *session
+	run := &activeRun{runID: "devin-dedup", sessionID: session.ID, backend: SessionBackendDevinACP, agent: AgentDevin}
+
+	client, _ := newDevinTestClient()
+	client.setSessionModes("native-1", &devinACPSessionModes{
+		CurrentModeID:    "smart",
+		AvailableModeIDs: map[string]bool{"smart": true},
+	}, true)
+	params, _ := json.Marshal(map[string]any{
+		"sessionId": "native-1",
+		"toolCall":  map[string]any{"toolCallId": "exec:1#abc", "kind": "execute", "title": "Ran git"},
+		"options": []any{
+			map[string]any{"optionId": "allow_once", "kind": "allow_once"},
+			map[string]any{"optionId": "reject_once", "kind": "reject_once"},
+		},
+	})
+	manager.handleDevinPermissionRequest(client, sess, run, nil, devinACPMessage{ID: json.RawMessage(`31`), Params: params})
+	manager.handleDevinPermissionRequest(client, sess, run, nil, devinACPMessage{ID: json.RawMessage(`32`), Params: params})
+
+	pending, ok := run.pendingApprovalRequest()
+	if !ok {
+		t.Fatal("expected a pending approval request")
+	}
+	if string(pending.RawID) != `32` {
+		t.Fatalf("pending RawID = %s, want the retried request id", pending.RawID)
+	}
+	count := 0
+	for _, event := range readTextDeltaTestEvents(t, manager, session.ID) {
+		if event.Type == "approval_req" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("retried request produced %d approval_req events, want 1", count)
 	}
 }
 

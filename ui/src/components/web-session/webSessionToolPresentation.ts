@@ -2,6 +2,15 @@ import { normalizeWebSessionActivityToolKind } from '@/constants/webSessionActiv
 import type { WebSessionBlock } from '@/stores/webSession';
 import { parseImageViewToolOutput, resolveImageViewDisplayName } from '@/utils/webSessionImages';
 
+export function getMcpToolDisplayName(input?: Record<string, unknown>): string {
+  const server = String(input?.server ?? '').trim();
+  const name =
+    [input?.tool_name, input?.tool, input?.name]
+      .map(value => String(value ?? '').trim())
+      .find(Boolean) ?? '';
+  return server && name && !name.startsWith(`${server}.`) ? `${server}.${name}` : name;
+}
+
 type WebSessionTool = NonNullable<WebSessionBlock['tool']>;
 type Translate = (key: string) => string;
 
@@ -196,7 +205,7 @@ export function createWebSessionToolPresentation({
       return changes > 0 ? `${changes} change${changes > 1 ? 's' : ''}` : '';
     }
     if (kind === 'mcp_tool_call') {
-      const toolName = String(input?.tool_name ?? input?.name ?? '').trim();
+      const toolName = getMcpToolDisplayName(input);
       const args = asRecord(input?.arguments);
       const target =
         String(
@@ -206,13 +215,12 @@ export function createWebSessionToolPresentation({
             args?.file ??
             args?.name ??
             args?.id ??
-            input?.server ??
             input?.path ??
             ''
-        ).trim() || subtitle;
+        ).trim() || (toolName ? '' : subtitle);
       return toolName && target && toolName !== target
         ? `${toolName} · ${target}`
-        : toolName || target;
+        : toolName || target || String(input?.server ?? '').trim();
     }
     if (kind === 'web_search') {
       const query = String(input?.query ?? '').trim();

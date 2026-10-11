@@ -126,7 +126,7 @@ func (m *Manager) SearchSessionConversation(
 
 	var rows []tables.WebSessionItemTable
 	if err := pageScope.
-		Select("id, source_thread_id, source_turn_id, source_item_id, order_index, item_kind, tool_json").
+		Select("id, text, source_thread_id, source_turn_id, source_item_id, order_index, item_kind, tool_json").
 		Order("order_index DESC").
 		Order("id DESC").
 		Limit(limit + 1).
@@ -208,6 +208,10 @@ func mapSessionConversationSearchMatch(
 		SourceItemID:   row.SourceItemID,
 		OrderIndex:     row.OrderIndex,
 		Kind:           strings.ToLower(strings.TrimSpace(row.ItemKind)),
+	}
+	// Count rendered occurrences on the client, including repeated history hits.
+	if match.Kind == "user" || match.Kind == "assistant" {
+		match.Text = row.Text
 	}
 
 	var tool HistoryTool

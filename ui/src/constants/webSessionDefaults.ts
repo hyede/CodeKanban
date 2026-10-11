@@ -39,6 +39,8 @@ export const GENERIC_CODEX_REASONING_EFFORTS: WebSessionReasoningEffort[] = [
   'medium',
   'high',
   'xhigh',
+  'max',
+  'ultra',
 ];
 
 export const WEB_SESSION_CODEX_DEFAULT_REASONING_EFFORTS: WebSessionCodexDefaultReasoningEffort[] =

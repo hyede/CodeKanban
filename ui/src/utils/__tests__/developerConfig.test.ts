@@ -20,6 +20,7 @@ describe('developer config defaults', () => {
     expect(config.webSessionPiDefaultReasoningEffort).toBe('default');
     expect(config.webSessionDevinDefaultModel).toBe('default');
     expect(config.webSessionDevinDefaultReasoningEffort).toBe('default');
+    expect(config.webSessionDevinDefaultPermissionLevel).toBe('default');
     expect(config.webSessionAutoRetryDefaults).toEqual({
       scope: 'network_only',
       preset: 'gentle_stop',
@@ -90,6 +91,7 @@ describe('developer config defaults', () => {
       webSessionPiDefaultReasoningEffort: 'max',
       webSessionDevinDefaultModel: 'swe-2',
       webSessionDevinDefaultReasoningEffort: 'model_default',
+      webSessionDevinDefaultPermissionLevel: 'yolo',
     });
 
     expect(config.webSessionClaudeDefaultModel).toBe('sonnet');
@@ -99,6 +101,7 @@ describe('developer config defaults', () => {
     expect(config.webSessionPiDefaultReasoningEffort).toBe('max');
     expect(config.webSessionDevinDefaultModel).toBe('swe-2');
     expect(config.webSessionDevinDefaultReasoningEffort).toBe('model_default');
+    expect(config.webSessionDevinDefaultPermissionLevel).toBe('yolo');
   });
 
   it('keeps explicitly cleared client metadata as the opt-out value', () => {

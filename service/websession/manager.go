@@ -123,7 +123,7 @@ type Config struct {
 	CodexClientVersion          func() string
 	DefaultCodexContextWindow   func() int64
 	DefaultAgentReasoningEffort func(agent Agent) ReasoningEffort
-	DefaultCodexPermissionLevel func() string
+	DefaultAgentPermissionLevel func(agent Agent) string
 	DefaultCodexSyncMode        func() SyncMode
 	AutoRetryDefaultsConfig     func() utils.WebSessionAutoRetryDefaultsConfig
 	ActiveCallTimeoutConfig     func() utils.WebSessionActiveCallTimeoutConfig
@@ -185,6 +185,8 @@ type Manager struct {
 	historyCleanupMu            sync.Mutex
 	workTimingBackfillMu        sync.Mutex
 	workTimingLocks             [64]sync.Mutex
+	devinQuotaMu                sync.Mutex
+	devinQuotaCache             *devinQuotaCacheEntry
 }
 
 type clientKind string
@@ -5619,6 +5621,7 @@ func (m *Manager) handleClaudeEvent(session tables.WebSessionTable, run *activeR
 						Timestamp: now,
 						Payload: map[string]any{
 							"iid":    request.ItemID,
+							"kind":   string(request.Kind),
 							"prompt": request.Prompt,
 						},
 					})
@@ -6509,6 +6512,8 @@ func (m *Manager) buildExecCommand(ctx context.Context, session tables.WebSessio
 			"--output-format", "stream-json",
 			"--input-format", "stream-json",
 			"--permission-prompt-tool", "stdio",
+			// Enable a later user-approved transition without starting in bypass mode.
+			"--allow-dangerously-skip-permissions",
 			"--autocompact", "auto",
 			"--replay-user-messages",
 			"--verbose",
@@ -6701,6 +6706,12 @@ func (m *Manager) respondToApproval(sessionID, action string) error {
 			PermissionDecision: decision,
 		}); err != nil {
 			return err
+		}
+		if decision == "allow" && pending.Kind == pendingServerRequestPlanApproval {
+			if _, err := m.UpdateWorkflowMode(context.Background(), sessionID, WorkflowModeDefault); err != nil {
+				return err
+			}
+			record.WorkflowMode = string(WorkflowModeDefault)
 		}
 		now := time.Now()
 		_, _ = m.appendAndBroadcast(context.Background(), sessionID, record, Event{
@@ -7382,6 +7393,8 @@ func mapSessionRecord(record tables.WebSessionTable) SessionSummary {
 			CachedInputTokens: record.TotalCachedInputTokens,
 			OutputTokens:      record.TotalOutputTokens,
 			Cost:              record.TotalCost,
+			AcuCost:           record.TotalAcuCost,
+			CreditCost:        record.TotalCreditCost,
 		},
 		LatestTurnUsage:         latestTurnUsage,
 		ContextEstimate:         contextEstimate,
@@ -7760,12 +7773,16 @@ func (m *Manager) resolveSessionPermissionLevel(
 	agent Agent,
 	provided PermissionLevel,
 ) PermissionLevel {
-	if strings.TrimSpace(string(provided)) != "" || normalizeAgent(agent) != AgentCodex {
+	if strings.TrimSpace(string(provided)) != "" {
+		return normalizePermissionLevel(provided)
+	}
+	normalizedAgent := normalizeAgent(agent)
+	if normalizedAgent != AgentCodex && normalizedAgent != AgentDevin {
 		return normalizePermissionLevel(provided)
 	}
 	configured := utils.WebSessionCodexDefaultSetting
-	if m != nil && m.cfg.DefaultCodexPermissionLevel != nil {
-		if value := strings.TrimSpace(m.cfg.DefaultCodexPermissionLevel()); value != "" {
+	if m != nil && m.cfg.DefaultAgentPermissionLevel != nil {
+		if value := strings.TrimSpace(m.cfg.DefaultAgentPermissionLevel(normalizedAgent)); value != "" {
 			configured = strings.ToLower(value)
 		}
 	}
@@ -7891,7 +7908,7 @@ func normalizeCodexReasoningEffort(modelName string, effort ReasoningEffort) Rea
 	normalized := normalizeReasoningEffort(effort)
 	modelName = strings.ToLower(strings.TrimSpace(modelName))
 	switch modelName {
-	case "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra":
+	case "gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra":
 		switch normalized {
 		case ReasoningEffortDefault,
 			ReasoningEffortLow,
@@ -7902,7 +7919,7 @@ func normalizeCodexReasoningEffort(modelName string, effort ReasoningEffort) Rea
 			ReasoningEffortUltra:
 			return normalized
 		}
-	case "gpt-5.6-luna":
+	case "gpt-6-luna", "gpt-5.6-luna":
 		switch normalized {
 		case ReasoningEffortDefault,
 			ReasoningEffortLow,

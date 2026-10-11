@@ -4,12 +4,38 @@ import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 
 import WebSessionStreamingMarkdown from '../WebSessionStreamingMarkdown.vue';
+import { renderMarkdown, renderStreamingMarkdownBlocks } from '@/utils/markdown';
 
 function mountStreaming(blocks: Array<{ key: string; html: string }>) {
   return mount(WebSessionStreamingMarkdown, { props: { blocks } });
 }
 
 describe('WebSessionStreamingMarkdown component', () => {
+  it('keeps the final workflow and following sections inside the repaired card', () => {
+    const body = ['Intro', '```text', 'Read source', '```', 'Validation:', '- Keep evidence'];
+    const source = ['```text', ...body, '```'].join('\n');
+    const html = renderMarkdown(source, {
+      repairMalformedOuterFence: true,
+      enableCodeBlockCopy: true,
+    });
+    const wrapper = mountStreaming([{ key: 'complete', html }]);
+    expect(wrapper.findAll('pre')).toHaveLength(1);
+    expect(wrapper.findAll('[data-message-code-copy]')).toHaveLength(1);
+    expect(wrapper.find('code').element.textContent).toBe(body.join('\n'));
+    expect(wrapper.findAll('li')).toHaveLength(0);
+  });
+
+  it('does not leave an empty code card in a streaming message', () => {
+    const wrapper = mountStreaming(
+      renderStreamingMarkdownBlocks('empty-card', 'Before\n\n```\n', {
+        enableCodeBlockCopy: true,
+      })
+    );
+    expect(wrapper.find('pre').exists()).toBe(false);
+    expect(wrapper.find('[data-message-code-copy]').exists()).toBe(false);
+    expect(wrapper.text()).toBe('Before');
+  });
+
   it('renders one wrapper per block and keeps markup intact', () => {
     const wrapper = mountStreaming([
       { key: '0', html: '<h1>Title</h1>' },

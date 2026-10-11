@@ -283,6 +283,7 @@ export interface DeveloperConfig {
   webSessionPiDefaultReasoningEffort: WebSessionAgentDefaultReasoningEffort;
   webSessionDevinDefaultModel: string;
   webSessionDevinDefaultReasoningEffort: WebSessionAgentDefaultReasoningEffort;
+  webSessionDevinDefaultPermissionLevel: WebSessionAgentDefaultPermissionLevel;
   webSessionAutoRetryDefaults: WebSessionAutoRetryDefaultsConfig;
   webSessionActiveCallTimeout: WebSessionActiveCallTimeoutConfig;
 }
@@ -314,6 +315,9 @@ export interface WebSessionUsage {
   cachedInputTokens: number;
   outputTokens: number;
   cost: number;
+  // Devin-reported session quota totals (usage_update totalAcuCost/totalCreditCost)
+  acuCost?: number;
+  creditCost?: number;
 }
 
 export interface WebSessionContextEstimate {
@@ -321,6 +325,18 @@ export interface WebSessionContextEstimate {
   cachedInputTokens: number;
   outputTokens: number;
   usedTokens: number;
+}
+
+// Account-level Devin plan quota read from the Devin CLI's local user_status
+// cache. Percent fields are 0-100 remaining values; reset fields are unix
+// seconds.
+export interface WebSessionDevinQuota {
+  planName: string;
+  dailyRemainingPercent: number;
+  weeklyRemainingPercent: number;
+  dailyResetAtUnix: number;
+  weeklyResetAtUnix: number;
+  fetchedAtUnix: number;
 }
 
 export type WebSessionContextEstimateMode =
@@ -380,6 +396,8 @@ export type WebSessionCodexDefaultReasoningEffort = WebSessionReasoningEffort | 
 export type WebSessionAgentDefaultReasoningEffort = WebSessionCodexDefaultReasoningEffort;
 
 export type WebSessionCodexDefaultPermissionLevel = 'default' | 'standard' | 'elevated' | 'yolo';
+
+export type WebSessionAgentDefaultPermissionLevel = WebSessionCodexDefaultPermissionLevel;
 
 export type WebSessionClaudeDefaultRuntime = 'default' | 'claude' | 'ccr';
 
@@ -568,6 +586,7 @@ export interface WebSessionSummary {
   createdAt: string;
   updatedAt: string;
   usage: WebSessionUsage;
+  devinQuota?: WebSessionDevinQuota | null;
   latestTurnUsage?: WebSessionContextEstimate | null;
   contextEstimate: WebSessionContextEstimate;
   contextEstimateMode: WebSessionContextEstimateMode;

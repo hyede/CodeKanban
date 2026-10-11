@@ -1,4 +1,5 @@
 import './assets/main.css';
+import 'katex/dist/katex.min.css';
 import './styles/chat-markdown.css';
 import './styles/project-badges.css';
 import './styles/variables.css';

@@ -129,6 +129,10 @@ type Usage struct {
 	CachedInputTokens int64   `json:"cachedInputTokens"`
 	OutputTokens      int64   `json:"outputTokens"`
 	Cost              float64 `json:"cost"`
+	// AcuCost/CreditCost are the session-level quota totals reported by the
+	// Devin agent's usage_update extension (_meta totalAcuCost/totalCreditCost).
+	AcuCost    float64 `json:"acuCost"`
+	CreditCost float64 `json:"creditCost"`
 }
 
 type ContextEstimate struct {
@@ -349,6 +353,7 @@ type SessionSummary struct {
 	CreatedAt                         time.Time                  `json:"createdAt"`
 	UpdatedAt                         time.Time                  `json:"updatedAt"`
 	Usage                             Usage                      `json:"usage"`
+	DevinQuota                        *DevinQuotaStatus          `json:"devinQuota,omitempty"`
 	LatestTurnUsage                   ContextEstimate            `json:"latestTurnUsage"`
 	ContextEstimate                   ContextEstimate            `json:"contextEstimate"`
 	ContextEstimateMode               ContextEstimateMode        `json:"contextEstimateMode"`
@@ -398,6 +403,7 @@ type SessionSearchChunkResult struct {
 
 type SessionConversationSearchMatch struct {
 	ID             string  `json:"id"`
+	Text           string  `json:"text,omitempty"`
 	SourceThreadID *string `json:"sourceThreadId,omitempty"`
 	SourceTurnID   *string `json:"sourceTurnId,omitempty"`
 	SourceItemID   *string `json:"sourceItemId,omitempty"`

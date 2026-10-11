@@ -1838,7 +1838,17 @@ func (m *Manager) hasBlockingNonPlanSession(ctx context.Context, projectID strin
 		}
 		assistantState := effectiveAssistantState(session)
 		status := effectiveStatus(session, assistantState)
-		if m.hasActiveRun(session.ID) ||
+		activeRun := m.hasActiveRun(session.ID)
+		// A completed plan can retain its plan-approval state after the
+		// workflow mode is changed. It is no longer work in progress unless
+		// an active run, abort, or retry is still present.
+		if assistantState == AssistantStateWaitingPlanApproval &&
+			!activeRun &&
+			status != StatusAborting &&
+			session.AutoRetryNextAt == nil {
+			continue
+		}
+		if activeRun ||
 			assistantState != AssistantStateNone ||
 			status == StatusRunning ||
 			status == StatusWaitingApproval ||

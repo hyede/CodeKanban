@@ -451,7 +451,7 @@ func TestManagerCreateSessionUsesConfiguredCodexDefaultsAndExplicitOverrides(t *
 		DefaultAgentReasoningEffort: func(Agent) ReasoningEffort {
 			return configuredEffort
 		},
-		DefaultCodexPermissionLevel: func() string {
+		DefaultAgentPermissionLevel: func(Agent) string {
 			return configuredPermission
 		},
 	}, zap.NewNop())
@@ -586,7 +586,7 @@ func TestManagerCreateSessionResolvesCodexDefaultSentinels(t *testing.T) {
 		DefaultAgentReasoningEffort: func(Agent) ReasoningEffort {
 			return configuredEffort
 		},
-		DefaultCodexPermissionLevel: func() string {
+		DefaultAgentPermissionLevel: func(Agent) string {
 			return configuredPermission
 		},
 	}, zap.NewNop())
@@ -621,6 +621,61 @@ func TestManagerCreateSessionResolvesCodexDefaultSentinels(t *testing.T) {
 		modelDefaults.ReasoningEffort != ReasoningEffortDefault ||
 		modelDefaults.PermissionLevel != PermissionLevelDefault {
 		t.Fatalf("expected model-default reasoning and standard permission, got %#v", modelDefaults)
+	}
+}
+
+func TestManagerCreateSessionUsesConfiguredDevinPermissionDefault(t *testing.T) {
+	cleanup := initTestDB(t)
+	defer cleanup()
+
+	project := seedProject(t)
+	configuredPermission := utils.WebSessionCodexStandardPermission
+	manager, err := NewManager(Config{
+		DataDir: t.TempDir(),
+		DefaultAgentPermissionLevel: func(agent Agent) string {
+			if agent == AgentDevin {
+				return configuredPermission
+			}
+			return utils.WebSessionCodexDefaultSetting
+		},
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	devinSession, err := manager.CreateSession(context.Background(), CreateParams{
+		ProjectID: project.ID,
+		Agent:     AgentDevin,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession returned error: %v", err)
+	}
+	if devinSession.PermissionLevel != PermissionLevelDefault {
+		t.Fatalf("expected devin session to use configured standard permission, got %q", devinSession.PermissionLevel)
+	}
+
+	configuredPermission = string(PermissionLevelYolo)
+	yoloSession, err := manager.CreateSession(context.Background(), CreateParams{
+		ProjectID: project.ID,
+		Agent:     AgentDevin,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession after config update returned error: %v", err)
+	}
+	if yoloSession.PermissionLevel != PermissionLevelYolo {
+		t.Fatalf("expected devin session to use configured yolo permission, got %q", yoloSession.PermissionLevel)
+	}
+
+	explicit, err := manager.CreateSession(context.Background(), CreateParams{
+		ProjectID:       project.ID,
+		Agent:           AgentDevin,
+		PermissionLevel: PermissionLevelElevated,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession with explicit permission returned error: %v", err)
+	}
+	if explicit.PermissionLevel != PermissionLevelElevated {
+		t.Fatalf("expected explicit permission to win, got %q", explicit.PermissionLevel)
 	}
 }
 
@@ -3799,6 +3854,10 @@ func TestNormalizeCodexReasoningEffortUsesModelCapabilities(t *testing.T) {
 		want   ReasoningEffort
 	}{
 		{name: "Astra Ultra", model: "gpt-6-astra", effort: ReasoningEffortUltra, want: ReasoningEffortUltra},
+		{name: "GPT-6 Sol Ultra", model: "gpt-6-sol", effort: ReasoningEffortUltra, want: ReasoningEffortUltra},
+		{name: "GPT-6 Sol None", model: "gpt-6-sol", effort: ReasoningEffortNone, want: ReasoningEffortDefault},
+		{name: "GPT-6 Luna Max", model: "gpt-6-luna", effort: ReasoningEffortMax, want: ReasoningEffortMax},
+		{name: "GPT-6 Luna Ultra", model: "gpt-6-luna", effort: ReasoningEffortUltra, want: ReasoningEffortDefault},
 		{name: "Sol Ultra", model: "gpt-5.6-sol", effort: ReasoningEffortUltra, want: ReasoningEffortUltra},
 		{name: "Terra Max", model: "gpt-5.6-terra", effort: ReasoningEffortMax, want: ReasoningEffortMax},
 		{name: "Luna Ultra", model: "gpt-5.6-luna", effort: ReasoningEffortUltra, want: ReasoningEffortDefault},
@@ -3809,6 +3868,25 @@ func TestNormalizeCodexReasoningEffortUsesModelCapabilities(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := normalizeCodexReasoningEffort(tt.model, tt.effort); got != tt.want {
 				t.Fatalf("normalizeCodexReasoningEffort(%q, %q) = %q, want %q", tt.model, tt.effort, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUsesCodexIncompleteTurnGuard(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{model: "gpt-6-astra", want: true},
+		{model: "gpt-6-sol", want: true},
+		{model: "gpt-6-luna", want: true},
+		{model: "gpt-5.5", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.model, func(t *testing.T) {
+			if got := usesCodexIncompleteTurnGuard(test.model); got != test.want {
+				t.Fatalf("usesCodexIncompleteTurnGuard(%q) = %t, want %t", test.model, got, test.want)
 			}
 		})
 	}
