@@ -42,6 +42,7 @@ import {
 import { buildUploadImageFileName } from '@/utils/webSessionImages';
 import { resolveWsUrl } from '@/utils/ws';
 import { selectMostRecentWebSession } from '@/utils/webSessionRecency';
+import { normalizeTokenSpeed, WebSessionTokenSpeedState } from '@/utils/webSessionTokenSpeed';
 
 type WebSessionSocketKind = 'event' | 'command';
 type SessionStatus = WebSessionSummary['status'];
@@ -52,6 +53,7 @@ type SessionAssistantState =
   | 'waiting_plan_approval';
 
 type WireSession = {
+  tsp?: unknown;
   id: string;
   rev?: string;
   ar?: string;
@@ -65,6 +67,7 @@ type WireSession = {
   be?: 'legacy_exec' | 'codex_app_server' | 'pi_rpc' | 'devin_acp' | string;
   md: string;
   re?: WebSessionReasoningEffort;
+  cfm?: boolean;
   wm: 'default' | 'plan';
   pl: 'default' | 'elevated' | 'yolo';
   acte?: boolean;
@@ -82,6 +85,7 @@ type WireSession = {
   nsid?: string | null;
   cpf?: boolean;
   spe?: boolean;
+  hsi?: boolean;
   st: SessionStatus;
   ast?: SessionAssistantState | null;
   unr: boolean;
@@ -2153,6 +2157,10 @@ export const useWebSessionStore = defineStore('web-session', () => {
   const snapshotApprovalsBySession = ref<Record<string, WebSessionApprovalState>>({});
   const subAgentsBySession = ref<Record<string, WebSessionSubAgent[]>>({});
   const codexAppServerBySession = ref<Record<string, CodexAppServerRuntime>>({});
+  const tokenSpeedState = reactive(new WebSessionTokenSpeedState());
+  function getTokenSpeed(sessionId: string) {
+    return tokenSpeedState.get(sessionId);
+  }
   const activeSessionIdByProject = ref<Record<string, string>>(loadStoredActiveSessions());
   const loadedProjects = ref<Record<string, boolean>>({});
   const cachedCounts = reactive(new Map<string, number>());
@@ -2328,6 +2336,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
   }
 
   function replaceProjectSessions(projectId: string, sessions: WebSessionSummary[]) {
+    for (const session of sessions) tokenSpeedState.apply(session.id, session.tokenSpeed);
     const previous = sessionsByProject.value[projectId] ?? [];
     previous.forEach(session => {
       if (currentSessionProjectById.get(session.id) === projectId) {
@@ -2542,6 +2551,15 @@ export const useWebSessionStore = defineStore('web-session', () => {
 
   function getScheduledInputs(sessionId: string) {
     return scheduledInputsBySession.value[sessionId] ?? [];
+  }
+
+  function hasScheduledInput(session: Pick<WebSessionSummary, 'id' | 'hasScheduledInput'>) {
+    // Only the focused session receives schedule details; summaries keep
+    // background markers current even when those cached details are stale.
+    return (
+      session.hasScheduledInput ??
+      getScheduledInputs(session.id).some(item => item.status === 'scheduled')
+    );
   }
 
   function getHistoryMeta(sessionId: string): HistoryMeta {
@@ -3276,6 +3294,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
       title: session.ttl,
       model: session.md,
       reasoningEffort: session.re ?? 'default',
+      codexFastMode: session.cfm === true,
       workflowMode: session.wm ?? 'default',
       permissionLevel: session.pl ?? 'elevated',
       activeCallTimeoutEnabled: session.acte === true,
@@ -3297,6 +3316,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
       cwd: session.cwd,
       nativeSessionId: session.nsid ?? null,
       cyberPolicyFlagged: session.cpf === true,
+      ...(typeof session.hsi === 'boolean' ? { hasScheduledInput: session.hsi } : {}),
       hasScheduledPlanExecution: session.spe === true,
       status: session.st,
       assistantState: normalizeAssistantStateValue(session.ast) || null,
@@ -3377,6 +3397,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
         session.cws === 'unavailable'
           ? session.cws
           : 'unavailable',
+      tokenSpeed: normalizeTokenSpeed(session.tsp),
       workTiming: {
         completedDurationMs: Math.max(0, Number(session.wt?.dur ?? 0) || 0),
         currentRun:
@@ -3950,6 +3971,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
       preserveScopeOrder?: boolean;
     }
   ) {
+    tokenSpeedState.apply(summary.id, summary.tokenSpeed);
     const previous = archivedSessionsById.value[summary.id];
     const nextSummary = mergeSessionAttentionState(
       previous,
@@ -4049,6 +4071,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
   }
 
   function clearSessionRuntimeState(sessionId: string, projectId?: string) {
+    tokenSpeedState.remove(sessionId);
     invalidateSessionSnapshotRequests(sessionId);
     const nextEvents = { ...eventsBySession.value };
     delete nextEvents[sessionId];
@@ -4102,6 +4125,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
   }
 
   function upsertCurrentSession(summary: WebSessionSummary, options?: { syncCount?: boolean }) {
+    tokenSpeedState.apply(summary.id, summary.tokenSpeed);
     const incomingSummary = applyPendingActiveCallTimeoutOverride(
       applyPendingAutoRetryDispatchOverride(
         applyPendingAutoRetryOverride(normalizeSessionAttentionState(summary))
@@ -4341,6 +4365,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
       sessionId,
       current => ({
         ...current,
+        hasScheduledInput: items.some(item => item.status === 'scheduled'),
         hasScheduledPlanExecution,
       }),
       { preserveOrder: true }
@@ -5601,6 +5626,10 @@ export const useWebSessionStore = defineStore('web-session', () => {
     }
 
     if (frame.k === 'evt' && frame.sid) {
+      if (frame.op === 'token_speed') {
+        tokenSpeedState.apply(frame.sid, frame.p);
+        return;
+      }
       if (frame.op === 'pending') {
         const previousProjection = getRuntimeProjection(frame.sid);
         if (applyPendingWireFrame(frame)) {
@@ -6308,6 +6337,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
       session.status === 'running' ||
       session.status === 'waiting_approval' ||
       session.status === 'aborting' ||
+      hasScheduledInput(session) ||
       Boolean(session.assistantState)
     );
   }
@@ -6657,6 +6687,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
       const responseRevision = normalizeWebSessionRevision(
         snapshot.revision ?? snapshot.session?.revision
       );
+      tokenSpeedState.apply(sessionId, snapshot.tokenSpeed ?? snapshot.session?.tokenSpeed);
       const responseMissingRevision = !responseRevision;
       let result = snapshot;
       let accepted = true;
@@ -7521,10 +7552,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
   }
 
   async function clearPendingInputs(sessionId: string) {
-    const hasAuthoritative = (pendingInputsBySession.value[sessionId] ?? []).some(
-      item => !item.nativeQueued && item.status !== 'persisting'
-    );
-    if (hasAuthoritative) {
+    if ((pendingInputsBySession.value[sessionId] ?? []).length > 0) {
       await runPendingMutationCommand(sessionId, 'pending_clear', {});
     }
     setStagedPendingInputs(sessionId, []);
@@ -7812,11 +7840,12 @@ export const useWebSessionStore = defineStore('web-session', () => {
     );
   }
 
-  async function compactSession(sessionId: string) {
+  async function compactSession(sessionId: string, customInstructions = '') {
+    const normalizedInstructions = customInstructions.trim();
     await runRuntimeMutationCommand(
       sessionId,
       'compact',
-      {},
+      normalizedInstructions ? { ci: normalizedInstructions } : {},
       {
         label: 'compact',
         predicate: () => getLiveState(sessionId).running,
@@ -7992,6 +8021,10 @@ export const useWebSessionStore = defineStore('web-session', () => {
     reasoningEffort: WebSessionReasoningEffort
   ) {
     await sendCommand('set_re', sessionId, { re: reasoningEffort });
+  }
+
+  async function updateCodexFastMode(sessionId: string, enabled: boolean) {
+    await sendCommand('set_cfm', sessionId, { cfm: enabled });
   }
 
   async function updateWorkflowMode(sessionId: string, workflowMode: 'default' | 'plan') {
@@ -8447,6 +8480,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
       claudeRuntime?: 'claude' | 'ccr';
       model?: string;
       reasoningEffort?: WebSessionReasoningEffort;
+      codexFastMode?: boolean;
       workflowMode?: 'default' | 'plan';
       permissionLevel?: 'default' | 'elevated' | 'yolo';
       activeCallTimeoutEnabled?: boolean;
@@ -8503,11 +8537,13 @@ export const useWebSessionStore = defineStore('web-session', () => {
     setDraftText,
     getPendingInputs,
     getScheduledInputs,
+    hasScheduledInput,
     getHistoryMeta,
     fetchHistoryWindow,
     loadCommandGroupDetail,
     getSubAgents,
     getCodexAppServerRuntime,
+    getTokenSpeed,
     setCodexAppServerRuntime,
     isSessionSnapshotCurrent,
     getBlocks,
@@ -8552,6 +8588,7 @@ export const useWebSessionStore = defineStore('web-session', () => {
     updateModel,
     updateClaudeRuntime,
     updateReasoningEffort,
+    updateCodexFastMode,
     updateWorkflowMode,
     refreshGoal,
     setGoal,

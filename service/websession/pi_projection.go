@@ -1,6 +1,7 @@
 package websession
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,18 +25,76 @@ const piToolProgressInterval = 100 * time.Millisecond
 const piToolHistoryKind = "dynamic_tool_call"
 
 type piRPCMessage struct {
-	Role         string `json:"role"`
-	Timestamp    int64  `json:"timestamp"`
-	StopReason   string `json:"stopReason"`
-	ErrorMessage string `json:"errorMessage"`
-	Content      []struct {
-		Type      string         `json:"type"`
-		Text      string         `json:"text"`
-		Thinking  string         `json:"thinking"`
-		ID        string         `json:"id"`
-		Name      string         `json:"name"`
-		Arguments map[string]any `json:"arguments"`
-	} `json:"content"`
+	Usage        *piRPCTokenUsage           `json:"usage"`
+	Role         string                     `json:"role"`
+	Timestamp    int64                      `json:"timestamp"`
+	StopReason   string                     `json:"stopReason"`
+	ErrorMessage string                     `json:"errorMessage"`
+	Content      []piRPCContentMessageBlock `json:"content"`
+}
+
+// Pi uses a string content value for system/user messages and an array of
+// typed blocks for assistant messages. Keep the wire parser tolerant of both
+// forms (and of a single block object from older/custom providers) so a
+// non-assistant lifecycle event cannot abort an otherwise valid run.
+type piRPCContentMessageBlock = struct {
+	Type      string         `json:"type"`
+	Text      string         `json:"text"`
+	Thinking  string         `json:"thinking"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+}
+
+func decodePiRPCMessageContent(data []byte) ([]piRPCContentMessageBlock, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	if trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err != nil {
+			return nil, err
+		}
+		return []piRPCContentMessageBlock{{Type: "text", Text: text}}, nil
+	}
+	if trimmed[0] == '{' {
+		var block piRPCContentMessageBlock
+		if err := json.Unmarshal(trimmed, &block); err != nil {
+			return nil, err
+		}
+		return []piRPCContentMessageBlock{block}, nil
+	}
+	var list []piRPCContentMessageBlock
+	if err := json.Unmarshal(trimmed, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func (message *piRPCMessage) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Usage        *piRPCTokenUsage `json:"usage"`
+		Role         string           `json:"role"`
+		Timestamp    int64            `json:"timestamp"`
+		StopReason   string           `json:"stopReason"`
+		ErrorMessage string           `json:"errorMessage"`
+		Content      json.RawMessage  `json:"content"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	content, err := decodePiRPCMessageContent(wire.Content)
+	if err != nil {
+		return fmt.Errorf("decode Pi message content: %w", err)
+	}
+	message.Usage = wire.Usage
+	message.Role = wire.Role
+	message.Timestamp = wire.Timestamp
+	message.StopReason = wire.StopReason
+	message.ErrorMessage = wire.ErrorMessage
+	message.Content = content
+	return nil
 }
 
 type piAssistantMessageEvent struct {
@@ -52,8 +111,9 @@ type piAssistantMessageEvent struct {
 }
 
 type piRPCMessageEvent struct {
-	Type    string       `json:"type"`
-	Message piRPCMessage `json:"message"`
+	Type    string           `json:"type"`
+	Usage   *piRPCTokenUsage `json:"usage"`
+	Message piRPCMessage     `json:"message"`
 }
 
 type piRPCToolExecutionEvent struct {
@@ -73,8 +133,20 @@ func (m *Manager) handlePiRuntimeEvent(dispatch *piRuntimeRun, event piRPCEvent)
 	switch event.Type {
 	case "agent_start":
 		now := time.Now()
+		dispatch.mu.Lock()
+		dispatch.hasLatestUsage = false
+		dispatch.mu.Unlock()
 		return m.updateRuntimeState(context.Background(), dispatch.session.ID, applyAssistantStateUpdates(map[string]any{
 			"status": string(StatusRunning), "updated_at": now,
+			"latest_token_count_input_tokens":        0,
+			"latest_token_count_cached_input_tokens": 0,
+			"latest_token_count_output_tokens":       0,
+			"latest_token_count_total_tokens":        0,
+			"latest_token_count_updated_at":          nil,
+			"latest_turn_input_tokens":               0,
+			"latest_turn_cached_input_tokens":        0,
+			"latest_turn_output_tokens":              0,
+			"latest_turn_usage_updated_at":           nil,
 		}, AssistantStateWorking, now))
 	case "message_start":
 		var payload piRPCMessageEvent
@@ -86,18 +158,32 @@ func (m *Manager) handlePiRuntimeEvent(dispatch *piRuntimeRun, event piRPCEvent)
 		}
 	case "message_update":
 		var payload struct {
+			Usage                 *piRPCTokenUsage        `json:"usage"`
 			AssistantMessageEvent piAssistantMessageEvent `json:"assistantMessageEvent"`
 		}
 		if err := json.Unmarshal(event.Raw, &payload); err != nil {
 			return fmt.Errorf("decode Pi message_update: %w", err)
 		}
-		return m.handlePiAssistantMessageEvent(dispatch, payload.AssistantMessageEvent)
+		if strings.TrimSpace(payload.AssistantMessageEvent.Type) != "" {
+			if err := m.handlePiAssistantMessageEvent(dispatch, payload.AssistantMessageEvent); err != nil {
+				return err
+			}
+		}
+		if payload.Usage != nil {
+			if err := m.handlePiUsageUpdate(dispatch, *payload.Usage); err != nil {
+				return err
+			}
+		}
+		return nil
 	case "message_end":
 		var payload piRPCMessageEvent
 		if err := json.Unmarshal(event.Raw, &payload); err != nil {
 			return fmt.Errorf("decode Pi message_end: %w", err)
 		}
 		if strings.EqualFold(payload.Message.Role, "assistant") {
+			if payload.Message.Usage == nil {
+				payload.Message.Usage = payload.Usage
+			}
 			return m.finishPiAssistantMessage(dispatch, payload.Message)
 		}
 	case "tool_execution_start", "tool_execution_update", "tool_execution_end":
@@ -123,9 +209,110 @@ func (m *Manager) handlePiRuntimeEvent(dispatch *piRuntimeRun, event piRPCEvent)
 			text += ": " + strings.TrimSpace(payload.Path)
 		}
 		m.appendRunNote(dispatch.session.ID, dispatch.session, dispatch.run, "warning", text, map[string]any{"code": "pi_extension_error"})
+	case "session_info_changed":
+		return m.handlePiSessionInfoChanged(dispatch, event.Raw)
+	case "thinking_level_changed":
+		return m.handlePiThinkingLevelChanged(dispatch, event.Raw)
 	case "agent_settled":
 		return m.finishPiSettledProjection(dispatch)
 	}
+	return nil
+}
+
+func (m *Manager) handlePiUsageUpdate(dispatch *piRuntimeRun, usage piRPCTokenUsage) error {
+	if dispatch == nil || dispatch.run == nil {
+		return nil
+	}
+	input := maxInt64(0, usage.Input)
+	output := maxInt64(0, usage.Output)
+	cached := usage.cachedInputTokens()
+	total := usage.totalTokens()
+	if input == 0 && output == 0 && cached == 0 && total == 0 {
+		return nil
+	}
+	cost := usage.costTotal()
+	dispatch.mu.Lock()
+	if dispatch.hasLatestUsage && piRPCUsageEqual(dispatch.latestUsage, usage) {
+		dispatch.mu.Unlock()
+		return nil
+	}
+	dispatch.latestUsage = usage
+	dispatch.hasLatestUsage = true
+	dispatch.mu.Unlock()
+
+	now := time.Now()
+	if err := m.updateRuntimeState(context.Background(), dispatch.session.ID, map[string]any{
+		"latest_token_count_input_tokens":        input,
+		"latest_token_count_cached_input_tokens": cached,
+		"latest_token_count_output_tokens":       output,
+		"latest_token_count_total_tokens":        total,
+		"latest_token_count_updated_at":          now,
+		"latest_turn_input_tokens":               input,
+		"latest_turn_cached_input_tokens":        cached,
+		"latest_turn_output_tokens":              output,
+		"latest_turn_usage_updated_at":           now,
+		"updated_at":                             now,
+	}); err != nil {
+		return err
+	}
+	payload := map[string]any{"in": input, "cin": cached, "out": output, "tot": total}
+	if cost != 0 {
+		payload["cost"] = cost
+	}
+	if _, err := m.appendAndBroadcast(context.Background(), dispatch.session.ID, dispatch.session, Event{
+		ID: utils.NewID(), Type: "usage", RunID: dispatch.run.runID, Timestamp: now, Payload: payload,
+	}); err != nil {
+		return err
+	}
+	m.broadcastSessionSummary(context.Background(), dispatch.session.ID)
+	return nil
+}
+
+func piRPCUsageEqual(left, right piRPCTokenUsage) bool {
+	return maxInt64(0, left.Input) == maxInt64(0, right.Input) &&
+		maxInt64(0, left.Output) == maxInt64(0, right.Output) &&
+		left.cachedInputTokens() == right.cachedInputTokens() &&
+		left.totalTokens() == right.totalTokens() &&
+		left.costTotal() == right.costTotal()
+}
+
+func (m *Manager) handlePiSessionInfoChanged(dispatch *piRuntimeRun, raw json.RawMessage) error {
+	var payload struct {
+		Name *string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return fmt.Errorf("decode Pi session_info_changed: %w", err)
+	}
+	name := strings.TrimSpace(pointerString(payload.Name))
+	updates := map[string]any{"updated_at": time.Now()}
+	if name != "" {
+		updates["title"] = name
+		updates["title_auto"] = false
+	}
+	if err := m.updateRuntimeState(context.Background(), dispatch.session.ID, updates); err != nil {
+		return err
+	}
+	m.broadcastSessionSummary(context.Background(), dispatch.session.ID)
+	return nil
+}
+
+func (m *Manager) handlePiThinkingLevelChanged(dispatch *piRuntimeRun, raw json.RawMessage) error {
+	var payload struct {
+		Level string `json:"level"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return fmt.Errorf("decode Pi thinking_level_changed: %w", err)
+	}
+	effort := piThinkingLevelToReasoning(payload.Level)
+	if effort == ReasoningEffortDefault {
+		return nil
+	}
+	if err := m.updateRuntimeState(context.Background(), dispatch.session.ID, map[string]any{
+		"reasoning_effort": string(effort), "updated_at": time.Now(),
+	}); err != nil {
+		return err
+	}
+	m.broadcastSessionSummary(context.Background(), dispatch.session.ID)
 	return nil
 }
 
@@ -139,7 +326,11 @@ func (m *Manager) startPiAssistantMessage(dispatch *piRuntimeRun) error {
 	dispatch.assistantMessageID = messageID
 	dispatch.assistantMessageOpen = true
 	dispatch.contents = make(map[int]*piRuntimeContentState)
+	dispatch.hasLatestUsage = false
 	dispatch.mu.Unlock()
+	m.updateTokenSpeed(dispatch.session.ID, dispatch.run.runID, func(s *tokenSpeedState, now time.Time) {
+		s.begin(messageID, now, true)
+	}, true)
 
 	dispatch.run.mu.Lock()
 	dispatch.run.assistantMessageID = messageID
@@ -158,7 +349,16 @@ func (m *Manager) ensurePiAssistantMessage(dispatch *piRuntimeRun) error {
 	if open {
 		return nil
 	}
-	return m.startPiAssistantMessage(dispatch)
+	if err := m.startPiAssistantMessage(dispatch); err != nil {
+		return err
+	}
+	// Reconstructing a missing message_start cannot establish a full timing boundary.
+	m.updateTokenSpeed(dispatch.session.ID, dispatch.run.runID, func(s *tokenSpeedState, _ time.Time) {
+		if cur := s.current(); cur != nil {
+			cur.completeBoundary = false
+		}
+	}, false)
+	return nil
 }
 
 func (m *Manager) handlePiAssistantMessageEvent(dispatch *piRuntimeRun, update piAssistantMessageEvent) error {
@@ -213,6 +413,11 @@ func (m *Manager) handlePiAssistantMessageEvent(dispatch *piRuntimeRun, update p
 	}
 	content := state.text
 	dispatch.mu.Unlock()
+	if update.Type == "text_delta" || update.Type == "thinking_delta" || update.Type == "toolcall_delta" {
+		m.updateTokenSpeed(dispatch.session.ID, dispatch.run.runID, func(s *tokenSpeedState, now time.Time) {
+			s.delta(messageID, fmt.Sprintf("%d", update.ContentIndex), update.Delta, now)
+		}, false)
+	}
 
 	switch update.Type {
 	case "text_delta":
@@ -255,6 +460,11 @@ func (m *Manager) finishPiAssistantMessage(dispatch *piRuntimeRun, message piRPC
 	if err := m.ensurePiAssistantMessage(dispatch); err != nil {
 		return err
 	}
+	if message.Usage != nil {
+		if err := m.handlePiUsageUpdate(dispatch, *message.Usage); err != nil {
+			return err
+		}
+	}
 	dispatch.mu.Lock()
 	messageID := dispatch.assistantMessageID
 	dispatch.assistantMessageOpen = false
@@ -264,6 +474,13 @@ func (m *Manager) finishPiAssistantMessage(dispatch *piRuntimeRun, message piRPC
 	}
 	dispatch.mu.Unlock()
 
+	m.updateTokenSpeed(dispatch.session.ID, dispatch.run.runID, func(s *tokenSpeedState, now time.Time) {
+		var output *int64
+		if message.Usage != nil {
+			output = &message.Usage.Output
+		}
+		s.finish(messageID, output, now, message.ErrorMessage == "" && message.StopReason != "error" && message.StopReason != "aborted")
+	}, true)
 	for index, block := range message.Content {
 		if block.Type != "thinking" {
 			continue
@@ -286,6 +503,9 @@ func (m *Manager) finishPiAssistantMessage(dispatch *piRuntimeRun, message piRPC
 }
 
 func (m *Manager) handlePiToolExecution(dispatch *piRuntimeRun, event piRPCEvent) error {
+	if event.Type == "tool_execution_start" {
+		m.updateTokenSpeed(dispatch.session.ID, dispatch.run.runID, func(s *tokenSpeedState, now time.Time) { s.finish("", nil, now, true) }, true)
+	}
 	var payload piRPCToolExecutionEvent
 	if err := json.Unmarshal(event.Raw, &payload); err != nil {
 		return fmt.Errorf("decode Pi %s: %w", event.Type, err)
@@ -350,13 +570,11 @@ func (m *Manager) handlePiCompactionEvent(dispatch *piRuntimeRun, event piRPCEve
 	dispatch.mu.Lock()
 	if dispatch.compactionToolID == "" {
 		dispatch.compactionToolID = "pi-compaction:" + utils.NewID()
-		dispatch.compactionStarted = time.Now()
 	}
 	toolID := dispatch.compactionToolID
 	parentID := dispatch.assistantMessageID
 	if event.Type == "compaction_end" {
 		dispatch.compactionToolID = ""
-		dispatch.compactionStarted = time.Time{}
 	}
 	dispatch.mu.Unlock()
 
@@ -399,6 +617,9 @@ func (m *Manager) handlePiQueueUpdate(dispatch *piRuntimeRun, event piRPCEvent) 
 }
 
 func (m *Manager) handlePiRetryEvent(dispatch *piRuntimeRun, event piRPCEvent) error {
+	if event.Type == "auto_retry_start" || event.Type == "summarization_retry_scheduled" {
+		m.updateTokenSpeed(dispatch.session.ID, dispatch.run.runID, func(s *tokenSpeedState, now time.Time) { s.finish("", nil, now, false) }, true)
+	}
 	var payload map[string]any
 	if err := json.Unmarshal(event.Raw, &payload); err != nil {
 		return fmt.Errorf("decode Pi %s: %w", event.Type, err)
@@ -515,7 +736,7 @@ func (m *Manager) handlePiExtensionUIRequest(dispatch *piRuntimeRun, raw json.Ra
 		return errors.New("Pi extension UI request could not be registered")
 	}
 	dispatch.mu.Lock()
-	dispatch.dialog = &piRuntimeDialog{id: request.ID, method: request.Method, itemID: itemID, title: pending.Prompt, requested: now, expiresAt: expiresAt}
+	dispatch.dialog = &piRuntimeDialog{id: request.ID}
 	parentID := dispatch.assistantMessageID
 	dispatch.mu.Unlock()
 

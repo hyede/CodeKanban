@@ -498,7 +498,8 @@ func shouldDiscardPiRPCEvent(eventType string) bool {
 		"compaction_start", "compaction_end", "queue_update",
 		"auto_retry_start", "auto_retry_end",
 		"summarization_retry_scheduled", "summarization_retry_attempt_start", "summarization_retry_finished",
-		"extension_ui_request", "extension_error":
+		"extension_ui_request", "extension_error",
+		"session_info_changed", "thinking_level_changed":
 		return false
 	default:
 		return true
@@ -613,7 +614,11 @@ func normalizePiRPCEvent(eventType string, line []byte, maxInlineToolBytes int) 
 	}
 	switch eventType {
 	case "message_start", "message_end":
-		var event piRPCMessageEvent
+		var event struct {
+			Message struct {
+				Role string `json:"role"`
+			} `json:"message"`
+		}
 		if err := json.Unmarshal(line, &event); err != nil {
 			return nil, false, fmt.Errorf("decode Pi RPC %s event: %w", eventType, err)
 		}

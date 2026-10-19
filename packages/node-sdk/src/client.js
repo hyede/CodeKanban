@@ -1126,6 +1126,9 @@ export class CodeKanbanClient {
             : {}),
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(input.codexFastMode !== undefined
+            ? { codexFastMode: input.codexFastMode === true }
+            : {}),
           workflowMode:
             ensureOptionalString(input.workflowMode) ||
             defaultWebSessionWorkflowMode(permissionMode),
@@ -1594,9 +1597,9 @@ export class CodeKanbanClient {
     );
   }
 
-  async compactWebSession({ sessionId }) {
+  async compactWebSession({ sessionId, customInstructions }) {
     return await this.withWebSessionCommandChannel((channel) =>
-      channel.compact(sessionId),
+      channel.compact(sessionId, customInstructions),
     );
   }
 
