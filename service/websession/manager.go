@@ -142,6 +142,9 @@ type Manager struct {
 	eventStatesMu        sync.Mutex
 	eventStates          map[string]*sessionEventState
 	textDeltaFlushWindow time.Duration
+	tokenSpeedMu         sync.Mutex
+	tokenSpeedEpoch      string
+	tokenSpeeds          map[string]*tokenSpeedState
 
 	mu   sync.RWMutex
 	runs map[string]*activeRun
@@ -1080,7 +1083,7 @@ func (m *Manager) ListSessions(ctx context.Context, projectID string) ([]Session
 	for _, record := range records {
 		items = append(items, m.mapSessionSummaryWithContext(record, contextConfig))
 	}
-	if err := m.decorateScheduledPlanExecutionState(ctx, items); err != nil {
+	if err := m.decorateScheduledInputState(ctx, items); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -1149,7 +1152,7 @@ func (m *Manager) ReconcileSessions(
 		}
 		result.Items = append(result.Items, m.mapSessionSummaryWithContext(record, contextConfig))
 	}
-	if err := m.decorateScheduledPlanExecutionState(ctx, result.Items); err != nil {
+	if err := m.decorateScheduledInputState(ctx, result.Items); err != nil {
 		return SessionReconcileResult{}, err
 	}
 	return result, nil
@@ -1246,7 +1249,7 @@ func (m *Manager) QuerySessions(
 	for _, record := range records {
 		items = append(items, m.mapSessionSummaryWithContext(record, contextConfig))
 	}
-	if err := m.decorateScheduledPlanExecutionState(ctx, items); err != nil {
+	if err := m.decorateScheduledInputState(ctx, items); err != nil {
 		return SessionPageResult{}, err
 	}
 	nextOffset := offset + len(items)
@@ -1287,6 +1290,9 @@ func (m *Manager) CreateSession(ctx context.Context, params CreateParams) (Sessi
 	}
 
 	modelName := m.resolveSessionModel(agent, params.Model)
+	if params.CodexFastMode && agent != AgentCodex {
+		return SessionSummary{}, fmt.Errorf("fast mode is only supported for Codex")
+	}
 	reasoningEffort := m.resolveSessionReasoningEffort(agent, modelName, params.ReasoningEffort)
 	if agent == AgentPi {
 		if modelName != "" {
@@ -1311,6 +1317,7 @@ func (m *Manager) CreateSession(ctx context.Context, params CreateParams) (Sessi
 		TitleAuto:                         strings.TrimSpace(params.Title) == "",
 		Model:                             modelName,
 		ReasoningEffort:                   string(reasoningEffort),
+		CodexFastMode:                     params.CodexFastMode,
 		WorkflowMode:                      string(normalizeWorkflowMode(params.WorkflowMode)),
 		SessionStartSource:                string(SessionStartSourceStartup),
 		PermissionLevel:                   string(permissionLevel),
@@ -2226,6 +2233,7 @@ func (m *Manager) SnapshotIfChanged(
 		pendingEpoch, pendingVersion, pendingInputs := m.pendingStateSnapshot(record.ID)
 		return SessionSnapshotResponse{
 			Revision:       formatSnapshotRevision(current),
+			TokenSpeed:     m.tokenSpeedSnapshot(sessionID),
 			HistoryEpoch:   strconv.FormatInt(normalizeHistoryEpoch(record.HistoryEpoch), 10),
 			EventCursor:    formatEventCursor(record.LastEventSeq, maxEventCursorOrder),
 			PendingEpoch:   pendingEpoch,
@@ -2321,6 +2329,7 @@ func (m *Manager) loadSnapshotLocal(
 		return SessionSnapshot{}, err
 	}
 	summary := m.mapSessionSummary(record)
+	summary.HasScheduledInput = ptr(scheduledInputsHavePendingInput(scheduledInputs))
 	summary.HasScheduledPlanExecution = scheduledInputsHavePendingPlanExecution(scheduledInputs)
 	subAgents, err := m.sessionSubAgents(ctx, record.ID)
 	if err != nil {
@@ -2822,6 +2831,7 @@ func (m *Manager) UpdateAgent(ctx context.Context, sessionID string, agent Agent
 		"backend":                            string(defaultSessionBackend(normalized)),
 		"model":                              modelName,
 		"reasoning_effort":                   string(m.resolveSessionReasoningEffort(normalized, modelName, "")),
+		"codex_fast_mode":                    false,
 		"permission_level":                   string(permissionLevel),
 		"native_session_id":                  nil,
 		"source_kind":                        defaultSourceKind(normalized),
@@ -3054,6 +3064,7 @@ func (m *Manager) DeleteSession(ctx context.Context, sessionID string) error {
 		eventState.timer.Stop()
 		eventState.timer = nil
 	}
+	m.clearTokenSpeed(sessionID)
 	eventState.timerGeneration++
 	if eventState.projectionTimer != nil {
 		eventState.projectionTimer.Stop()
@@ -3380,6 +3391,8 @@ func (m *Manager) HandleCommand(ctx context.Context, client *client, payload []b
 		return m.handleSetClaudeRuntimeCommand(ctx, client, frame)
 	case "set_re":
 		return m.handleSetReasoningEffortCommand(ctx, client, frame)
+	case "set_cfm":
+		return m.handleSetCodexFastModeCommand(ctx, client, frame)
 	case "set_wm":
 		return m.handleSetWorkflowModeCommand(ctx, client, frame)
 	case "goal_get":
@@ -3462,7 +3475,15 @@ func (m *Manager) HandleHeartbeatPayload(client *client, payload []byte) (bool, 
 	case "focus":
 		client.SetFocusedSessionID(frame.SessionID)
 		epoch, version, items := m.pendingStateSnapshot(frame.SessionID)
-		return true, client.send(newPendingFrame(frame.SessionID, epoch, version, items))
+		if err := client.send(newPendingFrame(frame.SessionID, epoch, version, items)); err != nil {
+			return true, err
+		}
+		if frame.SessionID != "" {
+			if err := client.send(wireFrame{Version: protocolVersion, Kind: wireKindEvent, SessionID: frame.SessionID, Timestamp: time.Now().UnixMilli(), Operation: wireOpTokenSpeed, Payload: m.tokenSpeedSnapshot(frame.SessionID)}); err != nil {
+				return true, err
+			}
+		}
+		return true, nil
 	default:
 		return true, nil
 	}
@@ -3565,6 +3586,7 @@ func (m *Manager) handleCreateCommand(ctx context.Context, client *client, frame
 		ClaudeRuntime                     string  `json:"cr"`
 		Model                             string  `json:"md"`
 		ReasoningEffort                   string  `json:"re"`
+		CodexFastMode                     bool    `json:"cfm"`
 		WorkflowMode                      string  `json:"wm"`
 		PermissionLevel                   string  `json:"pl"`
 		AutoRetryEnabled                  bool    `json:"ae"`
@@ -3600,6 +3622,7 @@ func (m *Manager) handleCreateCommand(ctx context.Context, client *client, frame
 		ClaudeRuntime:                     ClaudeRuntime(payload.ClaudeRuntime),
 		Model:                             payload.Model,
 		ReasoningEffort:                   ReasoningEffort(payload.ReasoningEffort),
+		CodexFastMode:                     payload.CodexFastMode,
 		WorkflowMode:                      workflowMode,
 		PermissionLevel:                   permissionLevel,
 		AutoRetryEnabled:                  payload.AutoRetryEnabled,
@@ -3808,7 +3831,9 @@ func (m *Manager) handlePendingReorderCommand(client *client, frame wireCommandF
 }
 
 func (m *Manager) handlePendingClearCommand(client *client, frame wireCommandFrame) error {
-	m.clearPendingInputsForSession(frame.SessionID)
+	if _, err := m.clearPendingInputsForSession(frame.SessionID); err != nil {
+		return client.send(newErrorFrame(frame.RequestID, frame.SessionID, "clear_queue_failed", err.Error(), true))
+	}
 	return m.sendPendingMutationAck(client, frame, nil)
 }
 
@@ -4129,10 +4154,20 @@ func (m *Manager) handleListCommand(ctx context.Context, client *client, frame w
 }
 
 func (m *Manager) handleCompactCommand(ctx context.Context, client *client, frame wireCommandFrame) error {
-	if len(bytes.TrimSpace(frame.Payload)) > 0 && string(bytes.TrimSpace(frame.Payload)) != "{}" {
-		return client.send(newErrorFrame(frame.RequestID, frame.SessionID, "bad_req", "compact takes no payload", false))
+	var payload struct {
+		CustomInstructions     string `json:"ci"`
+		LongCustomInstructions string `json:"customInstructions"`
 	}
-	if err := m.CompactSession(ctx, frame.SessionID); err != nil {
+	if len(bytes.TrimSpace(frame.Payload)) > 0 && string(bytes.TrimSpace(frame.Payload)) != "{}" {
+		if err := json.Unmarshal(frame.Payload, &payload); err != nil {
+			return client.send(newErrorFrame(frame.RequestID, frame.SessionID, "bad_req", "invalid compact payload", false))
+		}
+	}
+	customInstructions := payload.CustomInstructions
+	if strings.TrimSpace(customInstructions) == "" {
+		customInstructions = payload.LongCustomInstructions
+	}
+	if err := m.CompactSession(ctx, frame.SessionID, customInstructions); err != nil {
 		return client.send(newErrorFrame(frame.RequestID, frame.SessionID, "invalid_state", err.Error(), false))
 	}
 	return m.sendMutationAck(ctx, client, frame, nil)
@@ -4298,7 +4333,7 @@ func (m *Manager) SendMessageWithFreshContext(
 	})
 }
 
-func (m *Manager) CompactSession(ctx context.Context, sessionID string) error {
+func (m *Manager) CompactSession(ctx context.Context, sessionID string, customInstructions ...string) error {
 	dispatchLock := &m.sessionDispatchLocks[sessionRevisionLockIndex(sessionID)]
 	dispatchLock.Lock()
 	defer dispatchLock.Unlock()
@@ -4346,10 +4381,15 @@ func (m *Manager) CompactSession(ctx context.Context, sessionID string) error {
 	m.broadcastSessionSummary(ctx, sessionID)
 
 	runCtx, cancel := context.WithCancel(context.Background())
+	compactionInstructions := ""
+	if len(customInstructions) > 0 {
+		compactionInstructions = strings.TrimSpace(customInstructions[0])
+	}
 	run := &activeRun{
 		sessionID: sessionID, projectID: record.ProjectID, agent: AgentPi, backend: SessionBackendPiRPC,
 		contextWindowSetting: record.ContextWindowSetting,
 		runID:                runID, cancel: cancel, done: make(chan struct{}), piCompaction: true,
+		piCompactInstructions: compactionInstructions,
 	}
 	m.mu.Lock()
 	delete(m.codexTerminationRequests, sessionID)
@@ -5344,6 +5384,7 @@ func (m *Manager) handleRuntimePlainLine(session tables.WebSessionTable, run *ac
 }
 
 func (m *Manager) handleClaudeEvent(session tables.WebSessionTable, run *activeRun, raw map[string]any) {
+	m.observeClaudeTokenSpeed(session, run, raw)
 	eventType, _ := raw["type"].(string)
 	switch eventType {
 	case "control_request":
@@ -5931,6 +5972,7 @@ func (m *Manager) appendAndBroadcastNow(
 	if err := m.store.appendEvent(sessionID, event); err != nil {
 		return Event{}, err
 	}
+	m.observeTokenSpeedLifecycle(record, event)
 
 	retry := eventProjectionRetry{
 		record: record,
@@ -6347,6 +6389,12 @@ func (m *Manager) updateFields(ctx context.Context, sessionID string, updates ma
 		Updates(withSnapshotRevisionIncrement(updates)).Error; err != nil {
 		return SessionSummary{}, err
 	}
+	for _, key := range []string{"model", "agent", "claude_runtime"} {
+		if _, changed := updates[key]; changed {
+			m.clearTokenSpeed(sessionID)
+			break
+		}
+	}
 	record, err := m.GetSession(ctx, sessionID)
 	if err != nil {
 		return SessionSummary{}, err
@@ -6510,6 +6558,7 @@ func (m *Manager) buildExecCommand(ctx context.Context, session tables.WebSessio
 		args := []string{
 			"-p",
 			"--output-format", "stream-json",
+			"--include-partial-messages",
 			"--input-format", "stream-json",
 			"--permission-prompt-tool", "stdio",
 			// Enable a later user-approved transition without starting in bypass mode.
@@ -6560,6 +6609,7 @@ func (m *Manager) buildExecCommand(ctx context.Context, session tables.WebSessio
 		return cmd, stdin, true, nil
 	case AgentCodex:
 		args := []string{"exec", "--json", "--skip-git-repo-check"}
+		args = append(args, "-c", fmt.Sprintf("service_tier=%q", codexServiceTier(session)))
 		trimmedText := strings.TrimSpace(preparedText)
 		useStdinPrompt := trimmedText == ""
 		switch permissionLevel {
@@ -6573,7 +6623,7 @@ func (m *Manager) buildExecCommand(ctx context.Context, session tables.WebSessio
 		if strings.TrimSpace(session.Model) != "" {
 			args = append(args, "--model", strings.TrimSpace(session.Model))
 		}
-		if effort := normalizeCodexReasoningEffort(session.Model, ReasoningEffort(session.ReasoningEffort)); effort != ReasoningEffortDefault {
+		if effort := m.normalizeCodexReasoningEffort(session.Model, ReasoningEffort(session.ReasoningEffort)); effort != ReasoningEffortDefault {
 			args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", string(effort)))
 		}
 		for _, attachment := range attachments {
@@ -7186,6 +7236,10 @@ func (m *Manager) releaseActiveRun(sessionID string, run *activeRun) bool {
 	if current != run {
 		return false
 	}
+	m.updateTokenSpeed(sessionID, run.runID, func(s *tokenSpeedState, now time.Time) {
+		s.finish("", nil, now, false)
+		s.stopped = true
+	}, true)
 	m.triggerPendingProcessing(sessionID)
 	return true
 }
@@ -7268,7 +7322,7 @@ func shouldSendFrameToClient(client *client, frame wireFrame) bool {
 	switch frame.Kind {
 	case wireKindEvent:
 		switch strings.ToLower(strings.TrimSpace(frame.Operation)) {
-		case wireOpHistoryItem, wireOpHistoryPage, wireOpPending, wireOpScheduled, wireOpSubAgent, wireOpAppServer, wireOpResyncRequired:
+		case wireOpTokenSpeed, wireOpHistoryItem, wireOpHistoryPage, wireOpPending, wireOpScheduled, wireOpSubAgent, wireOpAppServer, wireOpResyncRequired:
 			return focusedSessionID != "" && focusedSessionID == strings.TrimSpace(frame.SessionID)
 		default:
 			return true
@@ -7347,6 +7401,7 @@ func mapSessionRecord(record tables.WebSessionTable) SessionSummary {
 		Title:                             record.Title,
 		Model:                             record.Model,
 		ReasoningEffort:                   ReasoningEffort(record.ReasoningEffort),
+		CodexFastMode:                     record.CodexFastMode,
 		WorkflowMode:                      effectiveWorkflowMode(record),
 		PermissionLevel:                   effectivePermissionLevel(record),
 		ActiveCallTimeoutEnabled:          activeCallTimeoutOverrideOrDefault(record.ActiveCallTimeoutEnabled),
@@ -7755,7 +7810,7 @@ func (m *Manager) resolveSessionReasoningEffort(
 			}
 		}
 		if normalizedAgent == AgentCodex {
-			return normalizeCodexReasoningEffort(
+			return m.normalizeCodexReasoningEffort(
 				modelName,
 				ReasoningEffort(utils.DefaultWebSessionCodexReasoningEffort),
 			)
@@ -7763,7 +7818,7 @@ func (m *Manager) resolveSessionReasoningEffort(
 		return defaultReasoningEffort(agent, "")
 	default:
 		if normalizedAgent == AgentCodex {
-			return normalizeCodexReasoningEffort(modelName, ReasoningEffort(configured))
+			return m.normalizeCodexReasoningEffort(modelName, ReasoningEffort(configured))
 		}
 		return normalizeReasoningEffort(ReasoningEffort(configured))
 	}
@@ -7904,11 +7959,30 @@ func normalizeReasoningEffort(effort ReasoningEffort) ReasoningEffort {
 	}
 }
 
+func (m *Manager) normalizeCodexReasoningEffort(modelName string, effort ReasoningEffort) ReasoningEffort {
+	if m != nil {
+		// Use the same catalog as the picker without blocking a turn on a probe.
+		for _, model := range m.codexContextWindow.models.snapshot(cloneCodexModelCatalog) {
+			if !sameCodexModel(model.Model, modelName) {
+				continue
+			}
+			normalized := normalizeReasoningEffort(effort)
+			for _, supported := range model.SupportedReasoningEfforts {
+				if supported == normalized {
+					return normalized
+				}
+			}
+			return ReasoningEffortDefault
+		}
+	}
+	return normalizeCodexReasoningEffort(modelName, effort)
+}
+
 func normalizeCodexReasoningEffort(modelName string, effort ReasoningEffort) ReasoningEffort {
 	normalized := normalizeReasoningEffort(effort)
 	modelName = strings.ToLower(strings.TrimSpace(modelName))
 	switch modelName {
-	case "gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra":
+	case "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra":
 		switch normalized {
 		case ReasoningEffortDefault,
 			ReasoningEffortLow,

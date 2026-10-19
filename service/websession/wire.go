@@ -24,6 +24,7 @@ const (
 	wireOpScheduled      = "scheduled"
 	wireOpSubAgent       = "sub_agent"
 	wireOpAppServer      = "app_server"
+	wireOpTokenSpeed     = "token_speed"
 	wireOpResyncRequired = "resync_required"
 )
 
@@ -80,6 +81,7 @@ type wireFrame struct {
 }
 
 type wireSess struct {
+	TokenSpeed                        *TokenSpeed     `json:"tsp,omitempty"`
 	ID                                string          `json:"id"`
 	Revision                          string          `json:"rev,omitempty"`
 	ProjectID                         string          `json:"pid"`
@@ -90,6 +92,7 @@ type wireSess struct {
 	Backend                           string          `json:"be"`
 	Model                             string          `json:"md"`
 	ReasoningEffort                   string          `json:"re"`
+	CodexFastMode                     bool            `json:"cfm"`
 	WorkflowMode                      string          `json:"wm"`
 	PermissionLevel                   string          `json:"pl"`
 	ActiveCallTimeoutEnabled          bool            `json:"acte"`
@@ -108,6 +111,7 @@ type wireSess struct {
 	NativeLeafID                      *string         `json:"nlid,omitempty"`
 	SourceRevision                    *string         `json:"srev,omitempty"`
 	CyberPolicyFlagged                bool            `json:"cpf,omitempty"`
+	HasScheduledInput                 *bool           `json:"hsi,omitempty"`
 	HasScheduledPlanExecution         bool            `json:"spe,omitempty"`
 	Status                            string          `json:"st"`
 	AssistantState                    string          `json:"ast,omitempty"`
@@ -559,6 +563,7 @@ func mapWireSession(session SessionSummary) *wireSess {
 		Backend:                           string(session.Backend),
 		Model:                             session.Model,
 		ReasoningEffort:                   string(session.ReasoningEffort),
+		CodexFastMode:                     session.CodexFastMode,
 		WorkflowMode:                      string(session.WorkflowMode),
 		PermissionLevel:                   string(session.PermissionLevel),
 		ActiveCallTimeoutEnabled:          session.ActiveCallTimeoutEnabled,
@@ -577,6 +582,7 @@ func mapWireSession(session SessionSummary) *wireSess {
 		NativeLeafID:                      session.NativeLeafID,
 		SourceRevision:                    session.SourceRevision,
 		CyberPolicyFlagged:                session.CyberPolicyFlagged,
+		HasScheduledInput:                 session.HasScheduledInput,
 		HasScheduledPlanExecution:         session.HasScheduledPlanExecution,
 		Status:                            string(session.Status),
 		AssistantState:                    string(session.AssistantState),
@@ -622,6 +628,7 @@ func mapWireSession(session SessionSummary) *wireSess {
 		ContextWindowSource:     string(session.ContextWindowSource),
 		Goal:                    mapWireGoal(session.Goal),
 		WorkTiming:              mapWireWorkTiming(session.WorkTiming),
+		TokenSpeed:              session.TokenSpeed,
 		DevinQuota:              mapWireDevinQuota(session.DevinQuota),
 	}
 	if session.LatestTurnUsage.InputTokens > 0 ||

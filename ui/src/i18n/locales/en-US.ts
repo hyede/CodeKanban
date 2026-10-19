@@ -1009,8 +1009,14 @@ export default {
     fusionSidekick: 'Sidekick',
     fusionSidekickEffort: 'Sidekick effort',
     fusionFastMode: 'Fast Mode',
+    codexFastMode: 'Codex Fast mode',
+    codexFastModeHint:
+      'Use priority service for faster responses, which may increase usage. Changes apply from the next turn.',
     fusionCost: 'Cost',
     modelSearchPlaceholder: 'Search models or providers',
+    modelEffortSearchPlaceholder: 'Search models or reasoning effort',
+    reloadModels: 'Reload models',
+    reloadModelsFailed: 'Failed to reload models. Please try again.',
     customModelTitle: 'Custom Model',
     customModelPlaceholder: 'Enter a model name, for example gpt-5.5',
     customModelEmpty: 'Model name cannot be empty',
@@ -1048,6 +1054,11 @@ export default {
       'Note: when available, the latest hidden Codex usage snapshot estimates current context occupancy; cumulative usage is still shown separately.',
     contextUsageDisclaimerClaude:
       'The window limit comes from Claude result.modelUsage. Current occupancy is estimated from session usage; Claude Code controls the actual automatic-compaction trigger.',
+    tokenSpeedUnavailable: 'Model generation speed: no data yet',
+    tokenSpeedEstimated:
+      'Estimated model generation speed, excluding tool execution and user waits',
+    tokenSpeedCalibrated:
+      'Model generation speed calibrated using actual output usage for this request',
     contextUsageWindow: 'Window: {count} tokens',
     contextUsageCompactLimit: 'Compact at: {count} tokens',
     contextUsageRemainingEstimate: 'Remaining to compact limit: {count} tokens',
@@ -1122,7 +1133,19 @@ export default {
     piRpcTimeout: 'Pi RPC capability detection timed out.',
     piCompactRequiresSession: 'Start the Pi session before compacting its context.',
     piCompactUnavailable: 'Pi context compaction is unavailable.',
+    piTreeRequiresSession: 'Start the Pi session before opening its conversation tree.',
+    piTreeUnavailable: 'The Pi conversation tree is unavailable for this session.',
     compactAttachmentsUnsupported: '/compact does not accept attachments.',
+    piSlashCommandAttachmentsUnsupported: 'Pi slash commands do not accept attachments.',
+    piSlashCommandArgumentRequired: '{command} requires an argument.',
+    piSlashCommandNoArguments: '{command} does not accept arguments.',
+    piModelInvalid: 'Pi model must use the provider/model format.',
+    piThinkingLevelInvalid:
+      'Unsupported Pi thinking level. Use off, minimal, low, medium, high, xhigh, or max.',
+    piThinkingLevelUnsupported: 'Pi model {model} does not support thinking level {level}.',
+    piCommandModelChanged: 'Pi model changed to {model}.',
+    piCommandThinkingChanged: 'Pi thinking level changed to {level}.',
+    piCommandNameChanged: 'Pi session name updated.',
     composerHintUploading:
       'Image upload is in progress. Sending is disabled until it finishes, but you can keep adding images.',
     composerHintRunning:
@@ -1851,7 +1874,7 @@ export default {
     dark: 'Dark',
     dim: 'Dim',
     warm: 'Warm',
-    presetTheme: 'Preset Theme',
+    presetTheme: 'Theme',
     followSystem: 'Follow System Theme',
     followSystemHint:
       'Default behaves the same as No and only indicates no explicit choice yet; choosing Yes will switch themes based on system dark/light mode',
@@ -1861,7 +1884,7 @@ export default {
     maintenanceWarningFollowSystem:
       'Follow System Theme automatically switches between the supported Light and Dark themes. Continue?',
     customTheme: 'Custom Theme',
-    customThemeHint: 'Customizing colors will override preset theme settings',
+    customThemeHint: 'Custom colors override the current theme colors',
     terminalColors: 'Terminal Colors',
     statusColors: 'Terminal Tab Status Alerts',
     baseColors: 'Base Interface',

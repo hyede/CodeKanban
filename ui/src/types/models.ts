@@ -366,6 +366,17 @@ export type WebSessionWorkTimingOutcome =
   | 'timeout'
   | 'interrupted';
 
+export interface WebSessionTokenSpeed {
+  epoch: string;
+  version: number;
+  runId: string;
+  sampleId: string;
+  tokensPerSecond: number | null;
+  estimated: boolean;
+  generating: boolean;
+  updatedAt: string;
+}
+
 export interface WebSessionWorkTimingCurrentRun {
   id: string;
   startedAt: string;
@@ -404,6 +415,7 @@ export type WebSessionClaudeDefaultRuntime = 'default' | 'claude' | 'ccr';
 export interface WebSessionCodexModelInfo {
   model: string;
   displayName: string;
+  hidden?: boolean;
   defaultReasoningEffort: WebSessionReasoningEffort;
   supportedReasoningEfforts: WebSessionReasoningEffort[];
 }
@@ -454,6 +466,7 @@ export interface WebSessionPiModelInfo {
   id: string;
   name: string;
   reasoning: boolean;
+  reasoningEfforts?: WebSessionReasoningEffort[];
   input: string[];
   contextWindow: number;
   maxTokens: number;
@@ -541,6 +554,7 @@ export interface WebSessionSummary {
   title: string;
   model: string;
   reasoningEffort: WebSessionReasoningEffort;
+  codexFastMode?: boolean;
   workflowMode: 'default' | 'plan';
   permissionLevel: 'default' | 'elevated' | 'yolo';
   activeCallTimeoutEnabled?: boolean;
@@ -558,6 +572,7 @@ export interface WebSessionSummary {
   nativeLeafId?: string | null;
   sourceRevision?: string | null;
   cyberPolicyFlagged?: boolean;
+  hasScheduledInput?: boolean;
   hasScheduledPlanExecution?: boolean;
   status: 'idle' | 'running' | 'waiting_approval' | 'done' | 'err' | 'aborting';
   assistantState?:
@@ -594,6 +609,7 @@ export interface WebSessionSummary {
   contextWindowTokens?: number | null;
   contextWindowSource: WebSessionContextWindowSource;
   workTiming?: WebSessionWorkTiming;
+  tokenSpeed?: WebSessionTokenSpeed | null;
   goal?: WebSessionGoal | null;
   searchMatchSources?: Array<'title' | 'body'>;
 }

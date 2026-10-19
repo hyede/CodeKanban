@@ -299,6 +299,7 @@ const (
 )
 
 type SessionSummary struct {
+	TokenSpeed                        *TokenSpeed                `json:"tokenSpeed,omitempty"`
 	ID                                string                     `json:"id"`
 	Revision                          string                     `json:"revision"`
 	ProjectID                         string                     `json:"projectId"`
@@ -310,6 +311,7 @@ type SessionSummary struct {
 	Title                             string                     `json:"title"`
 	Model                             string                     `json:"model"`
 	ReasoningEffort                   ReasoningEffort            `json:"reasoningEffort"`
+	CodexFastMode                     bool                       `json:"codexFastMode"`
 	WorkflowMode                      WorkflowMode               `json:"workflowMode"`
 	PermissionLevel                   PermissionLevel            `json:"permissionLevel"`
 	ActiveCallTimeoutEnabled          bool                       `json:"activeCallTimeoutEnabled"`
@@ -327,6 +329,7 @@ type SessionSummary struct {
 	NativeLeafID                      *string                    `json:"nativeLeafId,omitempty"`
 	SourceRevision                    *string                    `json:"sourceRevision,omitempty"`
 	CyberPolicyFlagged                bool                       `json:"cyberPolicyFlagged"`
+	HasScheduledInput                 *bool                      `json:"hasScheduledInput,omitempty"`
 	HasScheduledPlanExecution         bool                       `json:"hasScheduledPlanExecution,omitempty"`
 	Status                            Status                     `json:"status"`
 	AssistantState                    AssistantState             `json:"assistantState,omitempty"`
@@ -582,6 +585,7 @@ type SessionSnapshot struct {
 }
 
 type SessionSnapshotResponse struct {
+	TokenSpeed       *TokenSpeed           `json:"tokenSpeed,omitempty"`
 	Revision         string                `json:"revision"`
 	HistoryEpoch     string                `json:"historyEpoch"`
 	EventCursor      string                `json:"eventCursor"`
@@ -614,6 +618,7 @@ func NewSessionHydrationTarget(session SessionSummary) SessionHydrationTarget {
 
 func NewSessionSnapshotResponse(snapshot SessionSnapshot) SessionSnapshotResponse {
 	return SessionSnapshotResponse{
+		TokenSpeed:       snapshot.Session.TokenSpeed,
 		Revision:         snapshot.Revision,
 		HistoryEpoch:     snapshot.HistoryEpoch,
 		EventCursor:      snapshot.EventCursor,
@@ -762,6 +767,7 @@ type CreateParams struct {
 	Backend                           SessionBackend
 	Model                             string
 	ReasoningEffort                   ReasoningEffort
+	CodexFastMode                     bool
 	WorkflowMode                      WorkflowMode
 	PermissionLevel                   PermissionLevel
 	ActiveCallTimeoutEnabled          *bool

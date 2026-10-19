@@ -2134,6 +2134,7 @@
                 </span>
               </div>
 
+              <WebSessionTokenSpeed v-if="isMobileComposerCollapsed" :speed="currentTokenSpeed" />
               <button
                 v-if="isMobileComposerCollapsed && contextUsageIndicator"
                 type="button"
@@ -2214,7 +2215,7 @@
                   </n-dropdown>
                   <n-select
                     :show="showModelSelector"
-                    v-model:value="selectedModel"
+                    v-model:value="selectedModelOption"
                     placement="top-start"
                     @scroll="clearModelOptionPopovers"
                     @update:show="handleModelSelectorShowChange"
@@ -2227,46 +2228,45 @@
                     :virtual-scroll="selectedAgent === 'pi'"
                     size="small"
                     :options="modelOptions"
+                    :fallback-option="modelFallbackOption"
                   >
-                    <template v-if="selectedAgent === 'pi' || selectedAgent === 'devin'" #header>
+                    <template v-if="hasModelSearch" #header>
                       <div class="pi-model-search-header">
                         <n-input
-                          v-if="selectedAgent === 'pi'"
-                          ref="piModelSearchInputRef"
-                          v-model:value="piModelSearchQuery"
+                          ref="modelSearchInputRef"
+                          v-model:value="modelSearchQuery"
                           @update:value="clearModelOptionPopovers"
                           clearable
                           :bordered="false"
                           size="small"
-                          :placeholder="t('webSession.modelSearchPlaceholder')"
-                          :aria-label="t('webSession.modelSearchPlaceholder')"
-                          @focus="handlePiModelSearchFocus"
-                          @blur="handlePiModelSearchBlur"
-                          @compositionstart="handlePiModelSearchCompositionStart"
-                          @compositionend="handlePiModelSearchCompositionEnd"
-                          @keydown.esc.stop="handlePiModelSearchEscape"
+                          :placeholder="modelSearchPlaceholder"
+                          :aria-label="modelSearchPlaceholder"
+                          @focus="handleModelSearchFocus"
+                          @blur="handleModelSearchBlur"
+                          @compositionstart="handleModelSearchCompositionStart"
+                          @compositionend="handleModelSearchCompositionEnd"
+                          @keydown.esc.stop="handleModelSearchEscape"
                         >
                           <template #prefix>
                             <n-icon size="15" aria-hidden="true"><SearchOutline /></n-icon>
                           </template>
                         </n-input>
-                        <n-input
-                          v-else
-                          ref="devinModelSearchInputRef"
-                          v-model:value="devinModelSearchQuery"
-                          @update:value="clearModelOptionPopovers"
-                          clearable
-                          :bordered="false"
-                          size="small"
-                          :placeholder="t('webSession.modelSearchPlaceholder')"
-                          :aria-label="t('webSession.modelSearchPlaceholder')"
-                          @focus="handleDevinModelSearchFocus"
-                          @blur="handleDevinModelSearchBlur"
+                        <n-button
+                          class="model-reload-button"
+                          quaternary
+                          size="tiny"
+                          :loading="modelReloading"
+                          :disabled="modelReloading"
+                          :title="t('webSession.reloadModels')"
+                          :aria-label="t('webSession.reloadModels')"
+                          :aria-busy="modelReloading"
+                          @mousedown.prevent.stop
+                          @click.stop="loadCodexRuntimeConfig(true)"
                         >
-                          <template #prefix>
-                            <n-icon size="15" aria-hidden="true"><SearchOutline /></n-icon>
+                          <template #icon>
+                            <n-icon size="15"><RefreshOutline /></n-icon>
                           </template>
-                        </n-input>
+                        </n-button>
                       </div>
                     </template>
                   </n-select>
@@ -2384,6 +2384,23 @@
                     :menu-props="reasoningSelectMenuProps"
                     :options="reasoningEffortOptions"
                   />
+                  <div v-if="selectedAgent === 'codex'" class="composer-fast-mode-switch">
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <n-switch
+                          v-model:value="selectedCodexFastMode"
+                          size="small"
+                          :loading="codexFastModeUpdating"
+                          :disabled="codexFastModeUpdating"
+                          :aria-label="t('webSession.codexFastMode')"
+                        >
+                          <template #checked>Fast</template>
+                          <template #unchecked>Fast</template>
+                        </n-switch>
+                      </template>
+                      {{ t('webSession.codexFastModeHint') }}
+                    </n-tooltip>
+                  </div>
                   <div class="composer-mode-row">
                     <n-button-group class="composer-mode-switch">
                       <n-button
@@ -3330,6 +3347,7 @@
                 </div>
 
                 <div class="composer-footer-right">
+                  <WebSessionTokenSpeed :speed="currentTokenSpeed" />
                   <n-dropdown
                     trigger="manual"
                     placement="top-end"
@@ -3800,15 +3818,16 @@ import {
   replaceTextSelection,
 } from '@/components/web-session/webSessionCodexSkills';
 import {
+  parseWebSessionPiSlashCommand,
+  type ParsedWebSessionPiSlashCommand,
+  type WebSessionPiSlashCommand,
+} from '@/components/web-session/webSessionPiCommands';
+import {
   CLAUDE_RUNTIME_OPTIONS,
   CLAUDE_MODEL_OPTIONS,
   resolveCCRModelOptions,
-  CODEX_ADDITIONAL_MODEL_OPTIONS,
-  CODEX_MODEL_OPTIONS,
-  CODEX_PRIMARY_MODEL_OPTIONS,
   DEVIN_MODEL_OPTIONS,
   CUSTOM_MODEL_VALUE,
-  MORE_MODELS_VALUE,
   defaultModelForAgent as resolveDefaultModelForAgent,
   defaultPermissionLevelForAgent as resolveDefaultPermissionLevelForAgent,
   defaultReasoningEffortForAgent as resolveDefaultReasoningEffortForAgent,
@@ -3817,6 +3836,8 @@ import {
   rememberCustomModel,
   rememberPiFrequentModel,
   removeCustomModel,
+  resolveCodexModelMenuOptions,
+  resolveCodexModelOption,
   resolveCodexReasoningEfforts,
   resolveDevinModelOptions,
   resolveDevinModelForReasoning,
@@ -3839,6 +3860,12 @@ import {
   type WebSessionClaudeRuntimeOption,
   type WebSessionModelOptionGroup,
 } from '@/components/web-session/webSessionModelOptions';
+import {
+  codexModelSelectionValue,
+  parseCodexModelSelection,
+  rememberCodexModelSelection,
+  resolveCodexModelOptionGroups,
+} from '@/components/web-session/webSessionCodexModelPicker';
 import {
   buildTimelineRawModeKey,
   pruneActiveTimelineRawBlockKey,
@@ -3953,6 +3980,7 @@ import {
   formatWebSessionSidebarTime,
   formatWebSessionTimestamp,
 } from '@/components/web-session/webSessionTimeFormat';
+import WebSessionTokenSpeed from '@/components/web-session/WebSessionTokenSpeed.vue';
 import {
   formatElapsedDuration,
   resolveWebSessionLiveTimeCopy,
@@ -4428,7 +4456,11 @@ const activeAttachmentPreview = ref<{
 } | null>(null);
 const runtimeConfig = ref<WebSessionRuntimeConfig | null>(null);
 const codexRuntimeConfig = runtimeConfig;
+const codexModelMenuOptions = computed(() =>
+  resolveCodexModelMenuOptions(runtimeConfig.value?.models ?? [])
+);
 const codexRuntimeConfigReady = ref(false);
+const modelReloading = ref(false);
 let runtimeConfigRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let runtimeConfigRetryDelayMs = 500;
 let runtimeConfigLoadGeneration = 0;
@@ -4568,6 +4600,8 @@ const draftReasoningEffort = ref<WebSessionReasoningEffort>(
   defaultReasoningEffortForAgent('codex')
 );
 const draftWorkflowMode = ref<'default' | 'plan'>('default');
+const draftCodexFastMode = ref(false);
+const codexFastModeUpdating = ref(false);
 const draftPermissionLevel = ref<'default' | 'elevated' | 'yolo'>(
   defaultPermissionLevelForAgent('codex')
 );
@@ -6079,6 +6113,11 @@ const liveState = computed(() =>
     ? webSessionStore.getLiveState(currentRealSession.value.id)
     : ({ phase: 'idle', running: false, updatedAt: Date.now() } as WebSessionLiveState)
 );
+// Conversation search reads the filtered timeline during setup, including cached
+// approval requests. Initialize its dependencies before registering that search.
+const pendingApproval = computed(() =>
+  currentRealSession.value ? webSessionStore.getPendingApproval(currentRealSession.value.id) : null
+);
 
 function shouldRenderToolBlockInTimeline(block: WebSessionBlock) {
   if (block.kind !== 'tool' || !block.tool) {
@@ -6259,9 +6298,6 @@ const streamingMarkdownTargets = computed(() =>
     }
     return targets;
   })
-);
-const pendingApproval = computed(() =>
-  currentRealSession.value ? webSessionStore.getPendingApproval(currentRealSession.value.id) : null
 );
 const approvalSubmitting = ref(false);
 const canApproveWithYolo = computed(
@@ -7867,6 +7903,10 @@ const mobileComposerPendingSummary = computed(() => {
     })
   );
 });
+
+const currentTokenSpeed = computed(() =>
+  currentRealSession.value ? webSessionStore.getTokenSpeed(currentRealSession.value.id) : null
+);
 
 type ContextUsageIndicator = {
   state: 'idle' | 'active' | 'warning' | 'unavailable';
@@ -9785,6 +9825,7 @@ function normalizeDraftSession(
         ? session.reasoningEffort
         : defaultReasoningEffortForAgent(agent),
     workflowMode: session.workflowMode === 'plan' ? 'plan' : 'default',
+    codexFastMode: agent === 'codex' && session.codexFastMode === true,
     permissionLevel:
       session.permissionLevel === 'default' ||
       session.permissionLevel === 'elevated' ||
@@ -10258,6 +10299,7 @@ function createDraftSession(forceAgent?: WebSessionAgent, options?: { title?: st
     title: options?.title || buildDraftTitle(nextAgent),
     model: defaultModelForAgent(nextAgent),
     reasoningEffort: defaultReasoningEffortForAgent(nextAgent),
+    codexFastMode: nextAgent === 'codex' && source?.codexFastMode === true,
     workflowMode: source?.workflowMode || draftWorkflowMode.value,
     permissionLevel: defaultPermissionLevelForAgent(nextAgent),
     activeCallTimeoutEnabled: resolveInheritedActiveCallTimeoutEnabled(source, nextAgent),
@@ -10440,19 +10482,20 @@ async function activateTabById(
     setComposerTarget(props.projectId, session.id, 'ready');
     return true;
   } else {
+    const projectId = props.projectId;
     replaceDraftSessionState(draftSessions.value, '');
     activeArchivedPreviewId.value = '';
     rememberTabVisit(session.id);
     let activated = true;
     if (options?.connectReal === false) {
       realSessionSnapshotLoadController.cancel();
-      webSessionStore.setActiveSession(props.projectId, session.id);
+      webSessionStore.setActiveSession(projectId, session.id);
+      setComposerTarget(projectId, session.id, 'ready');
     } else {
-      activated = await connectVisibleRealSession(props.projectId, session.id, sessionChanged);
+      activated = await connectVisibleRealSession(projectId, session.id, sessionChanged);
     }
     if (activated) {
       void acknowledgeVisibleSessionView(session.id);
-      setComposerTarget(props.projectId, session.id, 'ready');
     }
     return activated;
   }
@@ -10559,12 +10602,19 @@ async function connectVisibleRealSession(
   if (!projectId || !sessionId) {
     return false;
   }
+  const session = webSessionStore.getSessions(projectId).find(item => item.id === sessionId);
+  if (projectId !== props.projectId || session?.projectId !== projectId) {
+    return false;
+  }
   const sessionChanged =
     forceCatchUp ||
     currentSession.value?.projectId !== projectId ||
     currentSession.value?.id !== sessionId;
   activeArchivedPreviewId.value = '';
   webSessionStore.setActiveSession(projectId, sessionId);
+  // Drafts are already restored locally; timeline hydration must not keep the
+  // composer read-only when it is slow, fails, or is canceled.
+  setComposerTarget(projectId, sessionId, 'ready');
   return realSessionSnapshotLoadController.run(`${projectId}:${sessionId}`, async snapshotLoad => {
     const session = webSessionStore.getSessions(projectId).find(item => item.id === sessionId);
     const hydrationState = webSessionStore.getHistoryMeta(sessionId).hydrationState;
@@ -11375,17 +11425,24 @@ const agentOptions: Array<{ label: string; value: WebSessionAgent }> = [
   { label: 'Pi', value: 'pi' },
   { label: 'Devin', value: 'devin' },
 ];
-const showAdditionalCodexModels = ref(false);
 const showModelSelector = ref(false);
 const showReasoningSelector = ref(false);
-const keepAdditionalCodexModelsForNextOpen = ref(false);
-const piModelSearchQuery = ref('');
-const devinModelSearchQuery = ref('');
-const piModelSearchInputRef = ref<InstanceType<typeof NInput> | null>(null);
-const devinModelSearchInputRef = ref<InstanceType<typeof NInput> | null>(null);
-const piModelSearchFocused = ref(false);
-const piModelSearchComposing = ref(false);
-const devinModelSearchFocused = ref(false);
+const hasModelSearch = computed(() => ['codex', 'pi', 'devin'].includes(selectedAgent.value));
+const modelSearchPlaceholder = computed(() =>
+  t(
+    selectedAgent.value === 'codex'
+      ? 'webSession.modelEffortSearchPlaceholder'
+      : 'webSession.modelSearchPlaceholder'
+  )
+);
+const modelSearchQuery = ref('');
+const modelSearchInputRef = ref<InstanceType<typeof NInput> | null>(null);
+const modelSearchFocused = ref(false);
+const modelSearchComposing = ref(false);
+const codexRecentModelValues = useStorage<string[]>(
+  'codekanban-web-session-codex-recent-models',
+  []
+);
 const piFrequentModelValues = useStorage<string[]>('codekanban-web-session-pi-frequent-models', []);
 const devinFrequentModelValues = useStorage<string[]>(
   'codekanban-web-session-devin-frequent-models',
@@ -11409,7 +11466,7 @@ const MODEL_SELECT_CHAR_WIDTH = 7;
 const modelMenuHovered = ref(false);
 const modelOptionPopoverValues = ref<Set<string>>(new Set());
 const modelSelectMenuProps = computed(() => {
-  const piCatalogOpen = selectedAgent.value === 'pi' || selectedAgent.value === 'devin';
+  const piCatalogOpen = hasModelSearch.value;
   return {
     class: piCatalogOpen
       ? 'web-session-model-select-menu is-pi-model-catalog'
@@ -11568,11 +11625,17 @@ function getKnownModelLabel(value?: string | null) {
     [
       ...CLAUDE_MODEL_OPTIONS,
       ...resolveCCRModelOptions(runtimeConfig.value?.ccrModels ?? []),
-      ...CODEX_MODEL_OPTIONS,
+      ...codexModelMenuOptions.value.primary,
+      ...codexModelMenuOptions.value.additional,
       ...resolveDevinModelOptions(runtimeConfig.value?.devinModels ?? []),
       ...resolvePiModelOptions(runtimeConfig.value?.piModels ?? []),
-    ].find(option => option.value === normalizedModel)?.label ?? normalizedModel
+    ].find(option => option.value === normalizedModel)?.label ??
+    resolveCodexModelOption(normalizedModel).label
   );
+}
+
+function modelFallbackOption(value: string | number) {
+  return { value, label: getKnownModelLabel(String(value)) };
 }
 
 function renderModelOption(info: {
@@ -11918,60 +11981,50 @@ function withCurrentReasoningEffortOption(
   ];
 }
 
-function piModelMenuInteractionState() {
+function modelMenuInteractionState() {
   return {
-    catalogOpen: selectedAgent.value === 'pi' || selectedAgent.value === 'devin',
-    searchFocused: piModelSearchFocused.value || devinModelSearchFocused.value,
-    searchComposing: piModelSearchComposing.value,
+    catalogOpen: hasModelSearch.value,
+    searchFocused: modelSearchFocused.value,
+    searchComposing: modelSearchComposing.value,
   };
 }
 
-function resetPiModelSearchInteraction() {
-  piModelSearchFocused.value = false;
-  piModelSearchComposing.value = false;
-  devinModelSearchFocused.value = false;
+function resetModelSearchInteraction() {
+  modelSearchFocused.value = false;
+  modelSearchComposing.value = false;
 }
 
-function handleDevinModelSearchFocus() {
-  devinModelSearchFocused.value = true;
-  clearComposerSelectorHoverCloseTimer('model');
-}
-
-function handleDevinModelSearchBlur() {
-  devinModelSearchFocused.value = false;
-}
-
-function refocusPiModelSearch() {
-  if (selectedAgent.value === 'pi' && showModelSelector.value) {
-    nextTick(() => piModelSearchInputRef.value?.focus());
+function refocusModelSearch() {
+  if (hasModelSearch.value && showModelSelector.value) {
+    nextTick(() => modelSearchInputRef.value?.focus());
   }
 }
 
-function handlePiModelSearchFocus() {
-  piModelSearchFocused.value = true;
+function handleModelSearchFocus() {
+  modelSearchFocused.value = true;
   clearComposerSelectorHoverCloseTimer('model');
 }
 
-function handlePiModelSearchBlur() {
-  if (!piModelSearchComposing.value) {
-    piModelSearchFocused.value = false;
+function handleModelSearchBlur() {
+  if (!modelSearchComposing.value) {
+    modelSearchFocused.value = false;
   }
 }
 
-function handlePiModelSearchCompositionStart() {
-  piModelSearchFocused.value = true;
-  piModelSearchComposing.value = true;
+function handleModelSearchCompositionStart() {
+  modelSearchFocused.value = true;
+  modelSearchComposing.value = true;
   clearComposerSelectorHoverCloseTimer('model');
 }
 
-function handlePiModelSearchCompositionEnd() {
-  piModelSearchComposing.value = false;
-  piModelSearchFocused.value = true;
-  refocusPiModelSearch();
+function handleModelSearchCompositionEnd() {
+  modelSearchComposing.value = false;
+  modelSearchFocused.value = true;
+  refocusModelSearch();
 }
 
-function handlePiModelSearchEscape(event: KeyboardEvent) {
-  if (event.isComposing || piModelSearchComposing.value) {
+function handleModelSearchEscape(event: KeyboardEvent) {
+  if (event.isComposing || modelSearchComposing.value) {
     return;
   }
   handleModelSelectorShowChange(false);
@@ -11983,7 +12036,11 @@ function removeRecentModel(model: string) {
     return;
   }
   const recentModels =
-    selectedAgent.value === 'pi' ? piFrequentModelValues : devinFrequentModelValues;
+    selectedAgent.value === 'codex'
+      ? codexRecentModelValues
+      : selectedAgent.value === 'pi'
+        ? piFrequentModelValues
+        : devinFrequentModelValues;
   recentModels.value = recentModels.value.filter(item => item !== value);
   clearModelOptionPopovers();
 }
@@ -12014,24 +12071,19 @@ function scrollModelMenuToRecent() {
 function handleModelSelectorShowChange(show: boolean) {
   if (
     show === showModelSelector.value ||
-    (!show && shouldSuppressPiModelMenuClose('show-change', piModelMenuInteractionState()))
+    (!show && shouldSuppressPiModelMenuClose('show-change', modelMenuInteractionState()))
   ) {
     return;
   }
-  if (show && selectedAgent.value === 'codex' && !keepAdditionalCodexModelsForNextOpen.value) {
-    showAdditionalCodexModels.value = false;
-  }
-  resetPiModelSearchInteraction();
-  piModelSearchQuery.value = '';
-  devinModelSearchQuery.value = '';
+  resetModelSearchInteraction();
+  modelSearchQuery.value = '';
   clearModelOptionPopovers();
   showModelSelector.value = show;
   if (show) {
-    keepAdditionalCodexModelsForNextOpen.value = false;
-    if (selectedAgent.value === 'pi' || selectedAgent.value === 'devin') {
+    if (hasModelSearch.value) {
       nextTick(() => window.setTimeout(scrollModelMenuToRecent, 40));
     }
-    refocusPiModelSearch();
+    refocusModelSearch();
   } else {
     modelMenuHovered.value = false;
   }
@@ -12077,7 +12129,7 @@ function handleComposerSelectorPointerLeave(selector: ComposerHoverSelector) {
   }
   if (
     selector === 'model' &&
-    shouldSuppressPiModelMenuClose('pointer-leave', piModelMenuInteractionState())
+    shouldSuppressPiModelMenuClose('pointer-leave', modelMenuInteractionState())
   ) {
     return;
   }
@@ -12109,7 +12161,7 @@ const piModelOptionGroups = computed(() =>
   )
 );
 const filteredPiModelOptionGroups = computed(() =>
-  filterPiModelOptionGroups(piModelOptionGroups.value, piModelSearchQuery.value)
+  filterPiModelOptionGroups(piModelOptionGroups.value, modelSearchQuery.value)
 );
 const piPrimaryModelOptions = computed(() =>
   resolvePiPrimaryModelOptions(runtimeConfig.value?.piModels ?? [], piFrequentModelValues.value)
@@ -12230,7 +12282,7 @@ const fusionFast = computed({
   set: value => applyFusionSelection({ fast: value }),
 });
 const filteredDevinModelOptionGroups = computed(() =>
-  filterDevinModelOptionGroups(devinModelOptionGroups.value, devinModelSearchQuery.value)
+  filterDevinModelOptionGroups(devinModelOptionGroups.value, modelSearchQuery.value)
 );
 
 function customModelsForAgent(agent: WebSessionCustomModelAgent) {
@@ -12254,7 +12306,9 @@ function builtinModelValuesForAgent(agent: WebSessionAgent) {
     return values;
   }
   if (agent === 'codex') {
-    return CODEX_MODEL_OPTIONS.map(option => option.value);
+    return [...codexModelMenuOptions.value.primary, ...codexModelMenuOptions.value.additional].map(
+      option => option.value
+    );
   }
   if (agent === 'devin') {
     return [
@@ -12267,7 +12321,17 @@ function builtinModelValuesForAgent(agent: WebSessionAgent) {
   return resolvePiModelOptions(runtimeConfig.value?.piModels ?? []).map(option => option.value);
 }
 
-function recordUsedModel(session?: Pick<WebSessionSummary, 'agent' | 'model'> | null) {
+function recordUsedModel(
+  session?: Pick<WebSessionSummary, 'agent' | 'model' | 'reasoningEffort'> | null
+) {
+  if (session?.agent === 'codex') {
+    codexRecentModelValues.value = rememberCodexModelSelection(
+      codexRecentModelValues.value,
+      session.model,
+      session.reasoningEffort
+    );
+    return;
+  }
   if (session?.agent !== 'devin' && session?.agent !== 'pi') {
     return;
   }
@@ -12318,12 +12382,12 @@ const modelOptions = computed(() => {
       );
       const specialOptions = devinSpecialModelOptions.value
         .filter(option =>
-          devinModelSearchQuery.value.trim()
+          modelSearchQuery.value.trim()
             ? [option.label, option.value, option.description, option.modelDescription]
                 .filter(Boolean)
                 .join(' ')
                 .toLowerCase()
-                .includes(devinModelSearchQuery.value.trim().toLowerCase())
+                .includes(modelSearchQuery.value.trim().toLowerCase())
             : true
         )
         .map(option =>
@@ -12345,31 +12409,24 @@ const modelOptions = computed(() => {
     ];
   }
   if (selectedAgent.value === 'pi') {
-    return piModelSearchQuery.value.trim()
+    return modelSearchQuery.value.trim()
       ? filteredPiModelOptionGroups.value
       : withCurrentPiModelOption(filteredPiModelOptionGroups.value, activeModel);
   }
-  if (!showAdditionalCodexModels.value) {
-    return [
-      ...withCurrentModelOption(
-        [...CODEX_PRIMARY_MODEL_OPTIONS, ...customModelOptions.value],
-        activeModel
-      ),
-      { label: t('webSession.customModel'), value: CUSTOM_MODEL_VALUE },
-      { label: t('webSession.moreModels'), value: MORE_MODELS_VALUE },
-    ];
-  }
-  const primaryOptions = withCurrentModelOption(
-    [...CODEX_PRIMARY_MODEL_OPTIONS, ...customModelOptions.value],
-    activeModel
-  );
-  const additionalOptions = CODEX_ADDITIONAL_MODEL_OPTIONS.filter(
-    option => !primaryOptions.some(primary => primary.value === option.value)
-  );
   return [
-    ...primaryOptions,
+    ...resolveCodexModelOptionGroups({
+      models: runtimeConfig.value?.models ?? [],
+      customModels: customModelsForAgent('codex'),
+      recentValues: codexRecentModelValues.value,
+      currentModel: activeModel,
+      query: modelSearchQuery.value,
+      labels: {
+        recent: t('webSession.recentlyUsedModels'),
+        all: t('webSession.allModels'),
+      },
+      effortLabel: reasoningEffortLabel,
+    }),
     { label: t('webSession.customModel'), value: CUSTOM_MODEL_VALUE },
-    ...additionalOptions,
   ];
 });
 
@@ -12426,6 +12483,7 @@ const selectedAgent = computed({
     }
     draftModel.value = nextModel;
     draftReasoningEffort.value = nextReasoningEffort;
+    draftCodexFastMode.value = false;
     draftPermissionLevel.value = nextPermissionLevel;
     if (isDraftSession(currentSession.value)) {
       updateActiveDraftSession(current => ({
@@ -12439,6 +12497,7 @@ const selectedAgent = computed({
             : 'claude',
         model: nextModel,
         reasoningEffort: nextReasoningEffort,
+        codexFastMode: false,
         permissionLevel: nextPermissionLevel,
         updatedAt: new Date().toISOString(),
       }));
@@ -12455,15 +12514,13 @@ const selectedAgent = computed({
 const selectedModel = computed({
   get: () => currentSession.value?.model ?? draftModel.value,
   set: value => {
-    const next = normalizeDevinModelOptionValue(String(value));
-    if (next === MORE_MODELS_VALUE) {
-      showAdditionalCodexModels.value = true;
-      keepAdditionalCodexModelsForNextOpen.value = true;
-      nextTick(() => {
-        handleModelSelectorShowChange(true);
-      });
-      return;
-    }
+    const selection =
+      selectedAgent.value === 'codex' ? parseCodexModelSelection(String(value)) : null;
+    const next =
+      selection?.model ??
+      (selectedAgent.value === 'devin'
+        ? normalizeDevinModelOptionValue(String(value))
+        : String(value));
     if (next === CUSTOM_MODEL_VALUE) {
       openCustomModelDialog();
       return;
@@ -12481,8 +12538,14 @@ const selectedModel = computed({
             'default'
           )
         : selectedAgent.value === 'codex'
-          ? reasoningEffortForModel(next, currentEffort)
-          : currentEffort;
+          ? reasoningEffortForModel(next, selection?.reasoningEffort ?? currentEffort)
+          : selectedAgent.value === 'pi'
+            ? resolvePiReasoningEfforts(runtimeConfig.value?.piModels ?? [], next).includes(
+                currentEffort
+              )
+              ? currentEffort
+              : 'default'
+            : currentEffort;
     draftModel.value = next;
     draftReasoningEffort.value = nextEffort;
     if (isDraftSession(currentSession.value)) {
@@ -12508,6 +12571,29 @@ const selectedModel = computed({
           message.error(error instanceof Error ? error.message : t('common.error'));
         });
     }
+  },
+});
+
+// Keep wire/session model IDs separate from menu values that include reasoning effort.
+const selectedModelOption = computed({
+  get: () => {
+    if (selectedAgent.value === 'codex') {
+      const value = codexModelSelectionValue(
+        selectedModel.value,
+        currentSession.value?.reasoningEffort ?? draftReasoningEffort.value
+      );
+      if (
+        modelOptions.value.some(
+          option => 'children' in option && option.children.some(child => child.value === value)
+        )
+      ) {
+        return value;
+      }
+    }
+    return selectedModel.value;
+  },
+  set: (value: string) => {
+    selectedModel.value = value;
   },
 });
 
@@ -12581,6 +12667,38 @@ const selectedReasoningEffort = computed<WebSessionReasoningEffort>({
           message.error(error instanceof Error ? error.message : t('common.error'));
         });
     }
+  },
+});
+
+const selectedCodexFastMode = computed<boolean>({
+  get: () => currentSession.value?.codexFastMode ?? draftCodexFastMode.value,
+  set: enabled => {
+    if (selectedAgent.value !== 'codex' || codexFastModeUpdating.value) return;
+    if (isDraftSession(currentSession.value)) {
+      draftCodexFastMode.value = enabled;
+      updateActiveDraftSession(current => ({
+        ...current,
+        codexFastMode: enabled,
+        updatedAt: new Date().toISOString(),
+      }));
+      return;
+    }
+    const sessionId = currentRealSession.value?.id;
+    if (!sessionId) {
+      draftCodexFastMode.value = enabled;
+      return;
+    }
+    const noticeKey = getRuntimeSwitchNoticeKey();
+    codexFastModeUpdating.value = true;
+    void webSessionStore
+      .updateCodexFastMode(sessionId, enabled)
+      .then(() => showRuntimeSwitchNotice(noticeKey))
+      .catch(error => {
+        message.error(error instanceof Error ? error.message : t('common.error'));
+      })
+      .finally(() => {
+        codexFastModeUpdating.value = false;
+      });
   },
 });
 
@@ -14000,6 +14118,7 @@ async function handleCreateSession(
             ? selectedReasoningEffort.value
             : defaultReasoningEffortForAgent(agent)),
         workflowMode: source?.workflowMode || draftWorkflowMode.value,
+        codexFastMode: agent === 'codex' && (source?.codexFastMode ?? draftCodexFastMode.value),
         permissionLevel:
           (source?.permissionLevel === 'default' && agent === 'claude'
             ? 'elevated'
@@ -14049,6 +14168,7 @@ async function handleCreateSession(
       draftReasoningEffort.value =
         session.reasoningEffort || defaultReasoningEffortForAgent(session.agent);
       draftWorkflowMode.value = session.workflowMode;
+      draftCodexFastMode.value = session.codexFastMode === true;
       draftPermissionLevel.value = session.permissionLevel;
       await activateTabById(session.id, { connectReal: false });
       scrollToBottom(true);
@@ -14089,6 +14209,7 @@ async function handleStartDraftSession(forceAgent?: WebSessionAgent) {
   draftModel.value = draft.model || defaultModelForAgent(draft.agent);
   draftReasoningEffort.value = draft.reasoningEffort || defaultReasoningEffortForAgent(draft.agent);
   draftWorkflowMode.value = draft.workflowMode;
+  draftCodexFastMode.value = draft.codexFastMode === true;
   draftPermissionLevel.value = draft.permissionLevel;
   closeMobileSessionSelector();
   contextMenuSession.value = null;
@@ -14909,6 +15030,124 @@ async function continueErroredSession(session: WebSessionSummary) {
   }
 }
 
+function piSlashCommandErrorMessage(
+  command: Extract<ParsedWebSessionPiSlashCommand, { kind: 'error' }>
+) {
+  if (command.reason === 'invalid_level') {
+    return t('webSession.piThinkingLevelInvalid');
+  }
+  if (command.reason === 'invalid_model') {
+    return t('webSession.piModelInvalid');
+  }
+  if (command.reason === 'unexpected_argument') {
+    return t('webSession.piSlashCommandNoArguments', {
+      command: `/${command.command}`,
+    });
+  }
+  return t('webSession.piSlashCommandArgumentRequired', {
+    command: `/${command.command}`,
+  });
+}
+
+function piModelInfo(model: string) {
+  const normalized = model.trim().toLowerCase();
+  return (runtimeConfig.value?.piModels ?? []).find(
+    item => `${item.provider}/${item.id}`.trim().toLowerCase() === normalized
+  );
+}
+
+function assertPiThinkingLevelSupported(model: string, level: WebSessionReasoningEffort) {
+  const info = piModelInfo(model);
+  if (!info) {
+    return;
+  }
+  const supported = resolvePiReasoningEfforts(runtimeConfig.value?.piModels ?? [], model);
+  if (!supported.includes(level)) {
+    throw new Error(
+      t('webSession.piThinkingLevelUnsupported', {
+        level: level === 'none' ? 'off' : level,
+        model,
+      })
+    );
+  }
+}
+
+async function executePiSlashCommand(
+  command: WebSessionPiSlashCommand,
+  initialSession: SessionTab | null,
+  realSession: WebSessionSummary | null
+) {
+  if (command.kind === 'tree') {
+    if (!realSession || isDraftSession(initialSession)) {
+      throw new Error(t('webSession.piTreeRequiresSession'));
+    }
+    if (!canOpenPiTree.value) {
+      throw new Error(t('webSession.piTreeUnavailable'));
+    }
+    showPiTreeDrawer.value = true;
+    return;
+  }
+
+  if (command.kind === 'compact') {
+    if (!realSession || isDraftSession(initialSession)) {
+      throw new Error(t('webSession.piCompactRequiresSession'));
+    }
+    if (!runtimeCapabilityFor('pi').supportsCompaction) {
+      throw new Error(t('webSession.piCompactUnavailable'));
+    }
+    await webSessionStore.compactSession(realSession.id, command.customInstructions);
+    return;
+  }
+
+  if (command.kind === 'model') {
+    if (!realSession || isDraftSession(initialSession)) {
+      selectedModel.value = command.model;
+      message.success(t('webSession.piCommandModelChanged', { model: command.model }));
+      return;
+    }
+    const currentEffort = realSession.reasoningEffort;
+    const catalogEntry = piModelInfo(command.model);
+    const supportedEffort = catalogEntry
+      ? resolvePiReasoningEfforts(runtimeConfig.value?.piModels ?? [], command.model)
+      : null;
+    const nextEffort = supportedEffort?.includes(currentEffort) ? currentEffort : 'default';
+    await webSessionStore.updateModel(realSession.id, command.model);
+    if (nextEffort !== currentEffort) {
+      await webSessionStore.updateReasoningEffort(realSession.id, nextEffort);
+    }
+    message.success(t('webSession.piCommandModelChanged', { model: command.model }));
+    return;
+  }
+
+  if (command.kind === 'thinking') {
+    const model = realSession?.model ?? selectedModel.value;
+    assertPiThinkingLevelSupported(model, command.level);
+    if (!realSession || isDraftSession(initialSession)) {
+      selectedReasoningEffort.value = command.level;
+    } else {
+      await webSessionStore.updateReasoningEffort(realSession.id, command.level);
+    }
+    message.success(
+      t('webSession.piCommandThinkingChanged', {
+        level: command.level === 'none' ? 'off' : command.level,
+      })
+    );
+    return;
+  }
+
+  if (!realSession || isDraftSession(initialSession)) {
+    updateActiveDraftSession(current => ({
+      ...current,
+      title: command.title,
+      updatedAt: new Date().toISOString(),
+    }));
+    message.success(t('webSession.piCommandNameChanged'));
+    return;
+  }
+  await webSessionStore.renameSession(realSession.projectId, realSession.id, command.title);
+  message.success(t('webSession.piCommandNameChanged'));
+}
+
 async function handleSubmit() {
   const submitProjectId = props.projectId;
   const initialSubmitOwnerId = currentDraftSessionId.value;
@@ -14929,9 +15168,15 @@ async function handleSubmit() {
   }
   const submitAgent = initialRealSession?.agent ?? selectedAgent.value;
   const submitKind = resolveComposerSubmitKind();
-  const isPiCompactCommand = submitAgent === 'pi' && draftText.trim() === '/compact';
-  const shouldStageOutgoingMessage = !goalCommand && !isPiCompactCommand;
-  if (submitKind === 'execute_send' && !goalCommand) {
+  const parsedPiSlashCommand =
+    submitAgent === 'pi' ? parseWebSessionPiSlashCommand(draftText) : null;
+  if (parsedPiSlashCommand?.kind === 'error') {
+    message.error(piSlashCommandErrorMessage(parsedPiSlashCommand));
+    return;
+  }
+  const isPiSlashCommand = Boolean(parsedPiSlashCommand);
+  const shouldStageOutgoingMessage = !goalCommand && !isPiSlashCommand;
+  if (submitKind === 'execute_send' && !goalCommand && !isPiSlashCommand) {
     if (!ensureSendConflictConfirmed(sendConfirmationSignature.value)) {
       return;
     }
@@ -14964,19 +15209,17 @@ async function handleSubmit() {
     if (submitAgent === 'pi' && !(await ensurePiProjectTrust())) {
       return;
     }
-    if (isPiCompactCommand) {
-      if (!initialRealSession || isDraftSession(initialSession)) {
-        throw new Error(t('webSession.piCompactRequiresSession'));
-      }
+    if (parsedPiSlashCommand) {
       if (attachments.length > 0) {
-        throw new Error(t('webSession.compactAttachmentsUnsupported'));
+        throw new Error(
+          parsedPiSlashCommand.kind === 'compact'
+            ? t('webSession.compactAttachmentsUnsupported')
+            : t('webSession.piSlashCommandAttachmentsUnsupported')
+        );
       }
-      if (!runtimeCapabilityFor('pi').supportsCompaction) {
-        throw new Error(t('webSession.piCompactUnavailable'));
-      }
-      await webSessionStore.compactSession(initialRealSession.id);
+      await executePiSlashCommand(parsedPiSlashCommand, initialSession, initialRealSession);
       submissionSucceeded = true;
-      recordSubmittedPrompt(draftText, initialRealSession.projectId || submitProjectId);
+      recordSubmittedPrompt(draftText, initialRealSession?.projectId || submitProjectId);
       return;
     }
     let session = initialRealSession;
@@ -17077,12 +17320,9 @@ function hasScheduledPlanExecution(
 }
 
 function shouldHighlightScheduledInputSession(
-  session: Pick<WebSessionSummary, 'id'> | null | undefined
+  session: Pick<WebSessionSummary, 'id' | 'hasScheduledInput'> | null | undefined
 ) {
-  return Boolean(
-    session &&
-      webSessionStore.getScheduledInputs(session.id).some(item => item.status === 'scheduled')
-  );
+  return Boolean(session && webSessionStore.hasScheduledInput(session));
 }
 
 function createTabProps(session: (typeof sessions.value)[number]): HTMLAttributes {
@@ -17592,8 +17832,12 @@ function handleTabDragEnd(event: SortableEvent) {
 }
 
 async function loadCodexRuntimeConfig(force = false) {
+  if (modelReloading.value) {
+    return;
+  }
   const generation = ++runtimeConfigLoadGeneration;
   if (force) {
+    modelReloading.value = true;
     clearRuntimeConfigRetry();
     runtimeConfigRetryDelayMs = 500;
   }
@@ -17613,9 +17857,14 @@ async function loadCodexRuntimeConfig(force = false) {
     if (generation !== runtimeConfigLoadGeneration) {
       return;
     }
-    codexRuntimeConfig.value = null;
     console.warn('[Web Session] Failed to load runtime config', error);
+    if (force) {
+      message.error(t('webSession.reloadModelsFailed'));
+    }
   } finally {
+    if (force) {
+      modelReloading.value = false;
+    }
     if (generation === runtimeConfigLoadGeneration) {
       codexRuntimeConfigReady.value = true;
     }
@@ -17979,6 +18228,7 @@ watch(
     draftReasoningEffort.value =
       session.reasoningEffort || defaultReasoningEffortForAgent(session.agent);
     draftWorkflowMode.value = session.workflowMode;
+    draftCodexFastMode.value = session.codexFastMode === true;
     draftPermissionLevel.value = session.permissionLevel;
     if (timelineSearchOpen.value && normalizedTimelineSearchQuery.value) {
       scheduleTimelineSearchRequest();
@@ -18239,10 +18489,19 @@ watch(currentDraftSessionId, () => {
 });
 
 watch(
-  () => currentSession.value?.id,
-  (sessionId, previousSessionId) => {
-    if (sessionId && !isProjectSessionInitializing.value) {
+  [() => currentSession.value?.id, isProjectSessionInitializing],
+  ([sessionId, initializing], [previousSessionId]) => {
+    if (
+      sessionId &&
+      !initializing &&
+      currentSession.value?.projectId === props.projectId &&
+      (!pendingRouteActivationSessionId.value ||
+        pendingRouteActivationSessionId.value === sessionId)
+    ) {
       setComposerTarget(props.projectId, sessionId, 'ready');
+    }
+    if (sessionId === previousSessionId) {
+      return;
     }
     showPiTreeDrawer.value = false;
     showQuickInputPopover.value = false;
@@ -18412,7 +18671,7 @@ onBeforeUnmount(() => {
   clearRuntimeConfigRetry();
   clearComposerSelectorHoverCloseTimer('model');
   clearComposerSelectorHoverCloseTimer('reasoning');
-  resetPiModelSearchInteraction();
+  resetModelSearchInteraction();
   if (!pendingTimelinePositionRestore.value) {
     captureTimelinePosition(props.projectId, currentSession.value?.id ?? '', true);
   }

@@ -716,7 +716,7 @@ func (m *Manager) runCodexAppServerSession(
 	}
 
 	rolloutStartedAt := time.Now()
-	turnResponse, err := client.request(ctx, "turn/start", codexTurnStartParams(session, threadID, text, attachments))
+	turnResponse, err := client.request(ctx, "turn/start", m.codexTurnStartParams(session, threadID, text, attachments))
 	if err != nil {
 		run.resolveBootstrap(err)
 		m.waitAndFailCodexAppServer(session, run, client, waitCh, stderrDone, stderrBuffer, err)
@@ -861,7 +861,7 @@ drainLoop:
 					turnResponse, continueErr := client.request(
 						ctx,
 						"turn/start",
-						codexTurnStartParams(session, threadID, incompleteTurnContinuationPrompt, nil),
+						m.codexTurnStartParams(session, threadID, incompleteTurnContinuationPrompt, nil),
 					)
 					if continueErr != nil {
 						run.lastErrorCode = codexIncompleteTurnErrorCode
@@ -1243,6 +1243,9 @@ func (m *Manager) handleCodexAppServerMessage(
 	}
 	isRootEvent := rootScope.contains(message.Params)
 	method := strings.TrimSpace(message.Method)
+	if isRootEvent {
+		m.observeCodexTokenSpeed(session, run, method, message.Params)
+	}
 	if isRootEvent && method != "" && run.releaseUserInputResponsePending() {
 		defer m.triggerPendingProcessing(session.ID)
 	}
@@ -2605,7 +2608,7 @@ func shouldContinueIncompleteCodexTurn(session tables.WebSessionTable, run *acti
 
 func usesCodexIncompleteTurnGuard(model string) bool {
 	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra":
+	case "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra":
 		return true
 	default:
 		return false
@@ -3024,6 +3027,7 @@ func codexThreadStartParams(session tables.WebSessionTable, supportsMultiAgentV2
 		"sandbox":        codexSandboxMode(effectivePermissionLevel(session)),
 		"approvalPolicy": codexApprovalPolicy(effectivePermissionLevel(session)),
 		"config":         codexSessionThreadConfig(session, supportsMultiAgentV2),
+		"serviceTier":    codexServiceTier(session),
 	}
 	if supportsMultiAgentV2 {
 		params["historyMode"] = "paginated"
@@ -3049,6 +3053,7 @@ func codexThreadResumeParams(
 		"sandbox":        codexSandboxMode(effectivePermissionLevel(session)),
 		"approvalPolicy": codexApprovalPolicy(effectivePermissionLevel(session)),
 		"config":         codexSessionThreadConfig(session, supportsMultiAgentV2),
+		"serviceTier":    codexServiceTier(session),
 	}
 	if !supportsMultiAgentV2 {
 		params["persistExtendedHistory"] = true
@@ -3068,7 +3073,7 @@ func codexThreadConfig(supportsMultiAgentV2 bool) map[string]any {
 	return config
 }
 
-func codexTurnStartParams(
+func (m *Manager) codexTurnStartParams(
 	session tables.WebSessionTable,
 	threadID string,
 	text string,
@@ -3077,7 +3082,8 @@ func codexTurnStartParams(
 	return map[string]any{
 		"threadId":          strings.TrimSpace(threadID),
 		"input":             codexUserInputs(text, attachments),
-		"collaborationMode": codexCollaborationMode(session),
+		"collaborationMode": m.codexCollaborationMode(session),
+		"serviceTier":       codexServiceTier(session),
 	}
 }
 
@@ -3097,12 +3103,12 @@ func codexSandboxMode(level PermissionLevel) string {
 	}
 }
 
-func codexCollaborationMode(session tables.WebSessionTable) map[string]any {
+func (m *Manager) codexCollaborationMode(session tables.WebSessionTable) map[string]any {
 	settings := map[string]any{
 		"model":                  strings.TrimSpace(session.Model),
 		"developer_instructions": nil,
 	}
-	if effort := normalizeCodexReasoningEffort(session.Model, ReasoningEffort(session.ReasoningEffort)); effort != ReasoningEffortDefault {
+	if effort := m.normalizeCodexReasoningEffort(session.Model, ReasoningEffort(session.ReasoningEffort)); effort != ReasoningEffortDefault {
 		settings["reasoning_effort"] = string(effort)
 	} else {
 		settings["reasoning_effort"] = nil
