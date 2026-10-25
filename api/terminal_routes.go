@@ -486,6 +486,14 @@ func (c *terminalController) serveWebsocket(w http.ResponseWriter, r *http.Reque
 			scrollback = session.ScrollbackSince(initialSnapshot.CapturedAt)
 		}
 	}
+	// Live-mode scrollback is an authoritative full replay. Mark its boundary
+	// so reconnecting clients replace their current buffer rather than append
+	// the same history again. Snapshot mode already has a replacement boundary.
+	if renderState.Mode() == terminalRenderModeLive && len(scrollback) > 0 {
+		if err := send(wsMessage{Type: "replay-start"}); err != nil {
+			return
+		}
+	}
 	for _, chunk := range scrollback {
 		if len(chunk) == 0 {
 			continue

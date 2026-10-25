@@ -252,4 +252,49 @@ describe('terminal auto restore', () => {
     store.setSessionRenderMode('project-1', 'fallback-1', null);
     store.releaseProjectConnections('project-1');
   });
+
+  it('drops stale buffered output when a full scrollback replay starts', async () => {
+    listSendMock.mockResolvedValue({
+      items: [makeTerminalSession({ id: 'replay-1', title: 'Replay' })],
+    });
+
+    const store = useTerminalStore();
+    await store.loadSessions('project-1');
+    store.retainProjectConnections('project-1');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const terminalSocket = findTerminalSocket('replay-1');
+    expect(terminalSocket).toBeTruthy();
+
+    terminalSocket?.onmessage?.({
+      data: JSON.stringify({ type: 'data', data: 'stale-buffered-output' }),
+    });
+    terminalSocket?.onmessage?.({
+      data: JSON.stringify({ type: 'replay-start' }),
+    });
+    terminalSocket?.onmessage?.({
+      data: JSON.stringify({ type: 'data', data: 'fresh-scrollback' }),
+    });
+    terminalSocket?.onmessage?.({
+      data: JSON.stringify({ type: 'replay-complete' }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const replayedTypes: string[] = [];
+    const replayedData: string[] = [];
+    store.emitter.on('replay-1', payload => {
+      replayedTypes.push(payload.type);
+      if (payload.data) replayedData.push(payload.data);
+    });
+
+    const result = store.replayBufferedMessages('replay-1');
+
+    expect(result.count).toBe(3);
+    expect(replayedTypes).toEqual(['replay-start', 'data', 'replay-complete']);
+    expect(replayedData).toEqual(['fresh-scrollback']);
+
+    store.releaseProjectConnections('project-1');
+  });
 });

@@ -1013,6 +1013,18 @@ function handleMessage(payload: ServerMessage) {
     return;
   }
 
+  if (payload.type === 'replay-start') {
+    // The server is about to send an authoritative full scrollback replay.
+    // Queue the reset with terminal writes so output from the old websocket is
+    // processed before replacement and replay chunks cannot overtake the reset.
+    clearPendingTerminalMessages();
+    setRestorePhase('replaying', 'replay-start');
+    void enqueueTerminalTask('replay-start', () => {
+      terminal?.reset();
+    });
+    return;
+  }
+
   if (payload.type === 'ready') {
     // The mount-time request can run before the websocket reaches OPEN. Retry
     // once the server confirms the connection so Unix terminals receive the

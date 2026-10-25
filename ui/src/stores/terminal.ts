@@ -86,6 +86,7 @@ export type ServerMessage = {
     | 'error'
     | 'metadata'
     | 'snapshot'
+    | 'replay-start'
     | 'replay-complete'
     | 'render-mode';
   data?: string;
@@ -1860,13 +1861,21 @@ export const useTerminalStore = defineStore('terminal', () => {
             // Update tab metadata in realtime
             updateTabMetadata(tab.id, payload.metadata);
           }
+          // A full scrollback replay replaces the previous terminal contents.
+          // Discard messages buffered before this boundary so a remounted
+          // viewport cannot render both the stale stream and the replay.
+          if (payload.type === 'replay-start') {
+            messageBuffers.delete(tab.id);
+          }
           // Check if there are any listeners for this session
           // If not, buffer the message for later replay when component remounts
           if (emitter.listenerCount(tab.id) > 0) {
             emitter.emit(tab.id, payload);
           } else if (
+            payload.type === 'replay-start' ||
             payload.type === 'data' ||
             payload.type === 'mode-prefix' ||
+            payload.type === 'replay-complete' ||
             payload.type === 'exit' ||
             payload.type === 'error'
           ) {
